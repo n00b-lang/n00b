@@ -62,8 +62,6 @@ reported 'N00B-M0008: `builtin.containers.list` is a source module of package `b
 reported 'N00B-N0004: `counter` is not exported'
 reported 'N00B-M0020: `beta.read` belongs to package `beta`'
 
-# The modules of `cyclic` import each other; explaining a hidden or missing
-# member must not loop through that cycle.
 if "$compiler" check cyclic_hidden_consumer.n >"$tmp/cyclic.log" 2>&1; then
     echo 'the cyclic package consumer checked' >&2
     exit 1
@@ -76,8 +74,6 @@ grep -Fq 'N00B-N0004: `hidden` is not exported to this package by module `cyclic
     exit 1
 }
 
-# looped_consumer: `looped` exports a whole module that is in an import
-# cycle with the manifest; its constants are exported all the same.
 for consumer in nested_loop_consumer nested_round_consumer looped_consumer; do
     "$compiler" build --output "$tmp/$consumer" "$consumer.n" \
         >"$tmp/$consumer.log" 2>&1 && "$tmp/$consumer" || {

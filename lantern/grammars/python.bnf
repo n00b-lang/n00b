@@ -1,41 +1,5 @@
 @lexer("python.lex")
 
-# Python 3.13 Grammar
-#
-# Syntactic grammar for Python 3.12/3.13 in BNF notation.
-# Converted from the CPython PEG grammar (Grammar/python.gram).
-#
-# Lexer-provided tokens:
-#   %IDENTIFIER     - identifiers (names)
-#   %INTEGER        - integer literals (decimal, hex, octal, binary)
-#   %FLOAT          - floating-point literals (including imaginary: 1j, 2.5j)
-#   %STRING         - string literals (all quote styles, raw, byte strings)
-#   %FSTRING_START  - f-string opening (f", f', f""", f''')
-#   %FSTRING_MIDDLE - f-string literal text segments between replacements
-#   %FSTRING_END    - f-string closing quote(s)
-#   %NEWLINE        - logical newline (not inside brackets/parens/braces)
-#   %INDENT         - increase in indentation level
-#   %DEDENT         - decrease in indentation level
-#   %ENDMARKER      - end of input
-#   %TYPE_COMMENT   - type: comments (PEP 484)
-#
-# Keywords are written as %"keyword".
-# Operators/punctuation are written as %"op".
-#
-# Notation:
-#   <rule> ::= ...       production rule
-#   |                    alternative (continuation lines indented with |)
-#   ( ... )              grouping
-#   ?                    optional (zero or one)
-#   +                    one or more
-#   *                    zero or more
-#   ""                   empty string
-#   # ...                comment
-
-# ============================================================================
-# Starting rules
-# ============================================================================
-
 <file> @hardline @nospace($1) ::= <statements>? %ENDMARKER
 
 <interactive> ::= <statement-newline>
@@ -43,10 +7,6 @@
 <eval-input> ::= <expressions> %NEWLINE* %ENDMARKER
 
 <func-type-input> ::= %"(" <type-expressions>? %")" %"->" <expression> %NEWLINE* %ENDMARKER
-
-# ============================================================================
-# General statements
-# ============================================================================
 
 <statements> @hardline ::= <statement>+
 
@@ -85,18 +45,6 @@
                   | <while-stmt>
                   | <match-stmt>
 
-# ============================================================================
-# Simple statements
-# ============================================================================
-
-# Assignment statement
-#
-# Covers:
-#   name: type = value           (annotated assignment)
-#   (target): type = value       (parenthesized annotated)
-#   target.attr: type = value    (subscript/attribute annotated)
-#   target = target = value      (chained assignment)
-#   target += value              (augmented assignment)
 <assignment> ::= %IDENTIFIER %":" <expression> (%"=" <annotated-rhs>)?
                | (%"(" <single-target> %")" | <single-subscript-attribute-target>) %":" <expression> (%"=" <annotated-rhs>)?
                | (<star-targets> %"=")+ <annotated-rhs> %TYPE_COMMENT?
@@ -119,30 +67,20 @@
               | %"**="
               | %"//="
 
-# Return
 <return-stmt> ::= %"return" <star-expressions>?
 
-# Raise
 <raise-stmt> ::= %"raise" <expression> (%"from" <expression>)?
                | %"raise"
 
-# Global / nonlocal
 <global-stmt> ::= %"global" %IDENTIFIER (%"," %IDENTIFIER)*
 
 <nonlocal-stmt> ::= %"nonlocal" %IDENTIFIER (%"," %IDENTIFIER)*
 
-# Del
 <del-stmt> ::= %"del" <del-targets>
 
-# Yield (as statement)
 <yield-stmt> ::= <yield-expr>
 
-# Assert
 <assert-stmt> ::= %"assert" <expression> (%"," <expression>)?
-
-# ============================================================================
-# Import statements
-# ============================================================================
 
 <import-stmt> ::= <import-name>
                 | <import-from>
@@ -170,37 +108,21 @@
 <dotted-name> ::= <dotted-name> %"." %IDENTIFIER
                 | %IDENTIFIER
 
-# ============================================================================
-# Compound statement building blocks
-# ============================================================================
-
 <block> @hardline @nospace($0) @nospace($1) @nospace($3) @indent($2) ::= %NEWLINE %INDENT <statements> %DEDENT
           | <simple-stmts>
 
 <decorators> ::= (%"@" <named-expression> %NEWLINE)+
-
-# ============================================================================
-# Class definition
-# ============================================================================
 
 <class-def> ::= <decorators> <class-def-raw>
               | <class-def-raw>
 
 <class-def-raw> ::= %"class" %IDENTIFIER <type-params>? (%"(" <arguments>? %")")? %":" <block>
 
-# ============================================================================
-# Function definition
-# ============================================================================
-
 <function-def> ::= <decorators> <function-def-raw>
                 | <function-def-raw>
 
 <function-def-raw> @nospace($2) @nospace($3) @nospace($4) @nospace($5) @nospace($7) @nospace($8) @nospace($9) ::= %"def" %IDENTIFIER <type-params>? %"(" <params>? %")" (%"->" <expression>)? %":" <func-type-comment>? <block>
                      | %"async" %"def" %IDENTIFIER <type-params>? %"(" <params>? %")" (%"->" <expression>)? %":" <func-type-comment>? <block>
-
-# ============================================================================
-# Function parameters
-# ============================================================================
 
 <params> ::= <parameters>
 
@@ -210,14 +132,12 @@
                | <param-with-default>+ <star-etc>?
                | <star-etc>
 
-# Positional-only parameters (before /)
 <slash-no-default> ::= <param-no-default>+ %"/" %","
                      | <param-no-default>+ %"/"
 
 <slash-with-default> ::= <param-no-default>* <param-with-default>+ %"/" %","
                        | <param-no-default>* <param-with-default>+ %"/"
 
-# Keyword-only parameters (after *) and **kwargs
 <star-etc> ::= %"*" <param-no-default> <param-maybe-default>* <kwds>?
              | %"*" <param-no-default-star-annotation> <param-maybe-default>* <kwds>?
              | %"*" %"," <param-maybe-default>+ <kwds>?
@@ -225,7 +145,6 @@
 
 <kwds> ::= %"**" <param-no-default>
 
-# Parameter variations with/without defaults
 <param-no-default> ::= <param> %"," %TYPE_COMMENT?
                      | <param> %TYPE_COMMENT?
 
@@ -248,10 +167,6 @@
 
 <default> ::= %"=" <expression>
 
-# ============================================================================
-# If statement
-# ============================================================================
-
 <if-stmt> @nospace($2) @nospace($3) ::= %"if" <named-expression> %":" <block> <elif-stmt>
             | %"if" <named-expression> %":" <block> <else-block>?
 
@@ -260,22 +175,10 @@
 
 <else-block> ::= %"else" %":" <block>
 
-# ============================================================================
-# While statement
-# ============================================================================
-
 <while-stmt> ::= %"while" <named-expression> %":" <block> <else-block>?
-
-# ============================================================================
-# For statement
-# ============================================================================
 
 <for-stmt> ::= %"for" <star-targets> %"in" <star-expressions> %":" %TYPE_COMMENT? <block> <else-block>?
              | %"async" %"for" <star-targets> %"in" <star-expressions> %":" %TYPE_COMMENT? <block> <else-block>?
-
-# ============================================================================
-# With statement
-# ============================================================================
 
 <with-stmt> ::= %"with" %"(" <with-item> (%"," <with-item>)* %","? %")" %":" %TYPE_COMMENT? <block>
               | %"with" <with-item> (%"," <with-item>)* %":" %TYPE_COMMENT? <block>
@@ -284,10 +187,6 @@
 
 <with-item> ::= <expression> %"as" <star-target>
               | <expression>
-
-# ============================================================================
-# Try statement
-# ============================================================================
 
 <try-stmt> ::= %"try" %":" <block> <finally-block>
              | %"try" %":" <block> <except-block>+ <else-block>? <finally-block>?
@@ -302,12 +201,6 @@
 
 <finally-block> ::= %"finally" %":" <block>
 
-# ============================================================================
-# Match statement (PEP 634)
-# ============================================================================
-
-# Note: "match" and "case" are soft keywords in Python 3.10+.
-# They are only keywords in the context of match/case statements.
 <match-stmt> ::= %"match" <subject-expr> %":" %NEWLINE %INDENT <case-block>+ %DEDENT
 
 <subject-expr> ::= <star-named-expression> %"," <star-named-expressions>?
@@ -316,10 +209,6 @@
 <case-block> ::= %"case" <patterns> <guard>? %":" <block>
 
 <guard> ::= %"if" <named-expression>
-
-# ============================================================================
-# Patterns
-# ============================================================================
 
 <patterns> ::= <open-sequence-pattern>
              | <pattern>
@@ -340,7 +229,6 @@
                    | <mapping-pattern>
                    | <class-pattern>
 
-# Literal patterns
 <literal-pattern> ::= <signed-number>
                     | <complex-number>
                     | <strings>
@@ -371,16 +259,12 @@
 
 <imaginary-number> ::= %FLOAT
 
-# Capture pattern: a simple name (but not "_")
 <capture-pattern> ::= <pattern-capture-target>
 
-# Pattern capture target is a NAME that is not "_" and not followed by '.', '(', or '='
 <pattern-capture-target> ::= %IDENTIFIER
 
-# Wildcard pattern
 <wildcard-pattern> ::= %"_"
 
-# Value pattern: a dotted name (attribute access)
 <value-pattern> ::= <attr>
 
 <attr> ::= <name-or-attr> %"." %IDENTIFIER
@@ -388,10 +272,8 @@
 <name-or-attr> ::= <attr>
                  | %IDENTIFIER
 
-# Group pattern
 <group-pattern> ::= %"(" <pattern> %")"
 
-# Sequence patterns
 <sequence-pattern> ::= %"[" <maybe-sequence-pattern>? %"]"
                      | %"(" <open-sequence-pattern>? %")"
 
@@ -405,7 +287,6 @@
 <star-pattern> ::= %"*" <pattern-capture-target>
                 | %"*" <wildcard-pattern>
 
-# Mapping patterns
 <mapping-pattern> ::= %"{" %"}"
                     | %"{" <double-star-pattern> %","? %"}"
                     | %"{" <items-pattern> %"," <double-star-pattern> %","? %"}"
@@ -417,7 +298,6 @@
 
 <double-star-pattern> ::= %"**" <pattern-capture-target>
 
-# Class patterns
 <class-pattern> ::= <name-or-attr> %"(" %")"
                   | <name-or-attr> %"(" <positional-patterns> %","? %")"
                   | <name-or-attr> %"(" <keyword-patterns> %","? %")"
@@ -429,16 +309,7 @@
 
 <keyword-pattern> ::= %IDENTIFIER %"=" <pattern>
 
-# ============================================================================
-# Type alias statement (PEP 695)
-# ============================================================================
-
-# Note: "type" is a soft keyword in Python 3.12+
 <type-alias> ::= %"type" %IDENTIFIER <type-params>? %"=" <expression>
-
-# ============================================================================
-# Type parameters (PEP 695)
-# ============================================================================
 
 <type-params> ::= %"[" <type-param-seq> %"]"
 
@@ -454,10 +325,6 @@
 
 <type-param-starred-default> ::= %"=" <star-expression>
 
-# ============================================================================
-# Expressions
-# ============================================================================
-
 <expressions> ::= <expression> (%"," <expression>)+ %","?
                 | <expression> %","
                 | <expression>
@@ -466,16 +333,8 @@
                | <disjunction>
                | <lambdef>
 
-# ============================================================================
-# Yield expressions
-# ============================================================================
-
 <yield-expr> ::= %"yield" %"from" <expression>
                | %"yield" <star-expressions>?
-
-# ============================================================================
-# Star expressions
-# ============================================================================
 
 <star-expressions> ::= <star-expression> (%"," <star-expression>)+ %","?
                      | <star-expression> %","
@@ -489,18 +348,10 @@
 <star-named-expression> ::= %"*" <bitwise-or>
                           | <named-expression>
 
-# ============================================================================
-# Assignment expression (walrus operator :=)
-# ============================================================================
-
 <assignment-expression> ::= %IDENTIFIER %":=" <expression>
 
 <named-expression> ::= <assignment-expression>
                      | <expression>
-
-# ============================================================================
-# Boolean operators
-# ============================================================================
 
 <disjunction> ::= <conjunction> (%"or" <conjunction>)+
                 | <conjunction>
@@ -510,10 +361,6 @@
 
 <inversion> ::= %"not" <inversion>
               | <comparison>
-
-# ============================================================================
-# Comparison operators
-# ============================================================================
 
 <comparison> ::= <bitwise-or> <compare-op-bitwise-or-pair>+
                | <bitwise-or>
@@ -549,10 +396,6 @@
 
 <is-bitwise-or> ::= %"is" <bitwise-or>
 
-# ============================================================================
-# Bitwise operators
-# ============================================================================
-
 <bitwise-or> ::= <bitwise-or> %"|" <bitwise-xor>
                | <bitwise-xor>
 
@@ -565,10 +408,6 @@
 <shift-expr> ::= <shift-expr> %"<<" <sum>
                | <shift-expr> %">>" <sum>
                | <sum>
-
-# ============================================================================
-# Arithmetic operators
-# ============================================================================
 
 <sum> ::= <sum> %"+" <term>
          | <sum> %"-" <term>
@@ -589,10 +428,6 @@
 <power> ::= <await-primary> %"**" <factor>
            | <await-primary>
 
-# ============================================================================
-# Await and primary expressions
-# ============================================================================
-
 <await-primary> ::= %"await" <primary>
                   | <primary>
 
@@ -602,19 +437,11 @@
             | <primary> %"[" <slices> %"]"
             | <atom>
 
-# ============================================================================
-# Slices
-# ============================================================================
-
 <slices> ::= <slice>
            | (<slice> | <starred-expression>) (%"," (<slice> | <starred-expression>))* %","?
 
 <slice> ::= <expression>? %":" <expression>? (%":" <expression>?)?
           | <named-expression>
-
-# ============================================================================
-# Atoms
-# ============================================================================
 
 <atom> ::= %IDENTIFIER
           | %"True"
@@ -635,10 +462,6 @@
           | %"..."
 
 <group> ::= %"(" (<yield-expr> | <named-expression>) %")"
-
-# ============================================================================
-# Lambda
-# ============================================================================
 
 <lambdef> ::= %"lambda" <lambda-params>? %":" <expression>
 
@@ -673,10 +496,6 @@
 
 <lambda-param> ::= %IDENTIFIER
 
-# ============================================================================
-# F-strings (PEP 498)
-# ============================================================================
-
 <fstring> ::= %FSTRING_START <fstring-middle>* %FSTRING_END
 
 <fstring-middle> ::= <fstring-replacement-field>
@@ -691,28 +510,16 @@
 <fstring-format-spec> ::= %FSTRING_MIDDLE
                         | <fstring-replacement-field>
 
-# ============================================================================
-# String literals
-# ============================================================================
-
 <string> ::= %STRING
 
 <strings> ::= (<fstring> | <string>)+
 
-# ============================================================================
-# Collection displays
-# ============================================================================
-
-# List display
 <list> ::= %"[" <star-named-expressions>? %"]"
 
-# Tuple display
 <tuple> ::= %"(" (<star-named-expression> %"," <star-named-expressions>?)? %")"
 
-# Set display
 <set> ::= %"{" <star-named-expressions> %"}"
 
-# Dict display
 <dict> ::= %"{" <double-starred-kvpairs>? %"}"
 
 <double-starred-kvpairs> ::= <double-starred-kvpair> (%"," <double-starred-kvpair>)* %","?
@@ -721,10 +528,6 @@
                           | <kvpair>
 
 <kvpair> ::= <expression> %":" <expression>
-
-# ============================================================================
-# Comprehensions and generator expressions
-# ============================================================================
 
 <for-if-clauses> ::= <for-if-clause>+
 
@@ -738,10 +541,6 @@
 <genexp> ::= %"(" (<assignment-expression> | <expression>) <for-if-clauses> %")"
 
 <dictcomp> ::= %"{" <kvpair> <for-if-clauses> %"}"
-
-# ============================================================================
-# Function call arguments
-# ============================================================================
 
 <arguments> ::= <args> %","?
 
@@ -759,10 +558,6 @@
 
 <kwarg-or-double-starred> ::= %IDENTIFIER %"=" <expression>
                             | %"**" <expression>
-
-# ============================================================================
-# Assignment targets
-# ============================================================================
 
 <star-targets> ::= <star-target>
                  | <star-target> (%"," <star-target>)* %","?
@@ -791,16 +586,11 @@
 <single-subscript-attribute-target> ::= <t-primary> %"." %IDENTIFIER
                                       | <t-primary> %"[" <slices> %"]"
 
-# t-primary is a left-recursive chain for attribute/subscript/call targets
 <t-primary> ::= <t-primary> %"." %IDENTIFIER
               | <t-primary> %"[" <slices> %"]"
               | <t-primary> <genexp>
               | <t-primary> %"(" <arguments>? %")"
               | <atom>
-
-# ============================================================================
-# Delete targets
-# ============================================================================
 
 <del-targets> ::= <del-target> (%"," <del-target>)* %","?
 
@@ -812,10 +602,6 @@
                | %"(" <del-target> %")"
                | %"(" <del-targets>? %")"
                | %"[" <del-targets>? %"]"
-
-# ============================================================================
-# Typing elements (PEP 484 func_type)
-# ============================================================================
 
 <type-expressions> ::= <expression> (%"," <expression>)* %"," %"*" <expression> %"," %"**" <expression>
                      | <expression> (%"," <expression>)* %"," %"*" <expression>

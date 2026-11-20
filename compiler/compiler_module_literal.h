@@ -38,8 +38,6 @@ typedef struct {
     n00bb_native_type_t  *result;
     bool                  pure;
     uint32_t              effects;
-    // Parameters (the first 16) whose pointer the callee only reads, and
-    // those whose pointer it only writes without reading what was there.
     uint16_t              read_only;
     uint16_t              write_only;
 } n00bb_native_declaration_t;
@@ -50,12 +48,6 @@ typedef enum {
     N00BB_NATIVE_EXTENT_UNTIL,
 } n00bb_native_extent_t;
 
-// What an FFI contract says about one field of a `layout(c)` record it
-// generated, that n00b source has no way to say: how far the C data a
-// foreign pointer field points to reaches (`count_field` items, or up to
-// an item equal to `sentinel`), and, when `tag_field` is set, that the
-// field is an arm of a C union, live while `tag_field` holds `tag`. The
-// arms of a record's union share its storage.
 typedef struct {
     core_string_t         record;
     core_string_t         field;
@@ -95,8 +87,6 @@ typedef bool (*n00bb_module_generator_fn)(void *context, core_translation_unit_t
                                           n00bb_native_declarations_t *natives,
                                           n00bb_line_origins_t *origins);
 
-// Appends the files the literal that generated `module` reads, one per
-// line, so a cached build can tell when it would generate something else.
 typedef void (*n00bb_module_generator_inputs_fn)(void *context,
                                                  core_string_t module,
                                                  core_buffer_t *out);

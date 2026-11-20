@@ -27,8 +27,6 @@ typedef struct {
     uint32_t alignment_bytes;
 } n00bb_abi_packed_tables_t;
 
-/* Rows are already in ABI layout. Pointer-bearing fields must be zeroed
- * and supplied as object relocations by the caller. */
 bool n00bb_abi_pack_tables(const core_target_desc_t *target,
                            uint64_t artifact_capabilities,
                            const n00bb_abi_table_rows_t *tables,
@@ -36,9 +34,6 @@ bool n00bb_abi_pack_tables(const core_target_desc_t *target,
                            n00bb_abi_packed_tables_t *out);
 void n00bb_abi_packed_tables_release(n00bb_abi_packed_tables_t *packed);
 
-/* `extra_sections` follow the metadata section, which is section 1 in
- * `symbols` and `relocations`. The object and packed tables have separate
- * ownership. */
 bool n00bb_abi_write_object(
     const core_target_desc_t *target,
     const n00bb_abi_packed_tables_t *packed,
@@ -47,7 +42,6 @@ bool n00bb_abi_write_object(
     const core_object_emit_absolute64_t *relocations,
     size_t relocation_count, uint8_t **out_image, size_t *out_size);
 
-/* Emits one finalized TU. The caller owns outputs. */
 typedef struct {
     core_string_t symbol;
     uint64_t *type_hashes;

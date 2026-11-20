@@ -29,8 +29,6 @@ typedef struct {
     size_t byte_length;
 } n00bb_abi_patch_section_t;
 
-/* Supply only fixed-record output tables; omit streams and link-only tables.
- * All local rows, including reserved row zero, need an assigned remap. */
 typedef struct {
     uint32_t kind;
     const core_index_remap_t *remap;
@@ -56,10 +54,6 @@ void n00bb_abi_index_patch_decode(
     const uint8_t in[N00BB_ABI_INDEX_PATCH_BYTES],
     n00bb_abi_index_patch_t *patch);
 
-/* Applies serialized local-index patches only after all records validate.
- * On failure, section bytes are unchanged and failed_patch receives an input
- * record ordinal when one is available. Remaps and sections must stay stable
- * for the duration of this call. */
 n00bb_abi_patch_status_t n00bb_abi_index_patches_apply(
     const uint8_t *patch_bytes, size_t patch_byte_count,
     const n00bb_abi_patch_section_t *sections, size_t section_count,

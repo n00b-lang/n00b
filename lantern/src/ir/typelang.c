@@ -1318,8 +1318,6 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
         return nullptr;
     }
 
-    // Stored summaries name the same types over and over; a closed type
-    // parses to the same type every time, so it's parsed once.
     th_type *known = th_text_type(types, spec);
     if (known) {
         return known;

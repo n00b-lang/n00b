@@ -114,8 +114,6 @@ n00bb_custom_reference_address(ir_lower_context_t *context,
                                ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    // A read; a write through it makes the hook writable where it is
-    // recovered as a place (see writable_hook).
     (void)grammar;
     (void)referent;
     (void)lower;
@@ -196,10 +194,6 @@ n00bb_from_reference_address(ir_value_t *value)
 }
 
 
-// The address the referent of `node`, a `reference.__value`, is reached at:
-// the reference itself, for a `Ref`, or what its type's `__ref_address`
-// hook returns. Reached for reading; a write makes the hook writable where
-// the place is recovered (see writable_hook).
 ir_value_t *
 n00bb_referent_address(ir_lower_context_t *context, parse_grammar_t *grammar,
                        parse_tree_t *node, ir_span_t span)
@@ -209,8 +203,6 @@ n00bb_referent_address(ir_lower_context_t *context, parse_grammar_t *grammar,
                                       : nullptr;
     ir_value_t *pointer = receiver ? ir_lower_node_value(context, receiver)
                                    : nullptr;
-    // A global holding the reference is read for it: a bare global names
-    // the global's own storage.
     if (pointer && pointer->kind == IR_VAL_GLOBAL) {
         ir_instr_t *read = ir_lower_emit_instruction(context, IR_OP_COPY,
                                                      span);
@@ -250,8 +242,6 @@ emit_address(ir_lower_context_t *context, ir_op_t op, th_type *referent,
 static bool
 element_read(ir_lower_context_t *context, const ir_instr_t *read);
 
-// Remembers that `value` reads the field named at `node`, so that writing
-// the place it was read from is recorded on that field use.
 void
 n00bb_note_field_read(ir_lower_context_t *context, ir_value_t *value,
                       parse_tree_t *node)
@@ -273,10 +263,6 @@ field_read_node(n00bb_lower_context_t *lower, const ir_value_t *value)
         : nullptr;
 }
 
-// Records that the place `target` names (a value read from it, or its
-// address) is written, on each field use that place was formed from: a
-// write to `a.b.c` writes `c`, and `b` and `a` through it. `reads` when the
-// write also reads the old value (`+=`).
 void
 n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
                          bool reads)
@@ -300,9 +286,6 @@ n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
         case IR_OP_INDEX: case IR_OP_SEQUENCE_GET: case IR_OP_NOMINAL_CAST:
             break;
         case IR_OP_DISPATCH: {
-            // A reference made from the address, or an element of a sequence
-            // kept in the place. Writing an element of any other container
-            // (a list) reads the place to find the container.
             ir_value_t *source = step->n_operands > 1
                 ? ir_operand_value(&step->operands[1]) : nullptr;
             th_type *held = source ? th_resolve(source->type) : nullptr;
@@ -323,9 +306,6 @@ n00bb_note_place_written(ir_lower_context_t *context, ir_value_t *target,
     }
 }
 
-// Erases the read that produced `value` once nothing else uses it, and the
-// reads it was made from, so that an operand used only as a place is never
-// read.
 static void
 drop_read(ir_lower_context_t *context, ir_value_t *value, ir_value_t *place)
 {
@@ -345,9 +325,6 @@ drop_read(ir_lower_context_t *context, ir_value_t *value, ir_value_t *place)
     }
 }
 
-// An element read through `__read` of one index. It names stored elements
-// when the container is a sequence or an indexable reference; any other
-// container computes the element in its `__read`.
 static bool
 element_read(ir_lower_context_t *context, const ir_instr_t *read)
 {
@@ -371,10 +348,6 @@ n00bb_accessed_element(const ir_value_t *value, ir_value_t **container,
     return true;
 }
 
-// Whether a place may be written: one in a `let` or `const`, or in a
-// parameter passed by value, may not. A field or element is writable when the
-// place holding it is; storage reached through a reference or an object
-// handle is the referent's, which may be written.
 bool
 n00bb_place_writable(const ir_value_t *place)
 {
@@ -401,9 +374,6 @@ n00bb_place_writable(const ir_value_t *place)
     return true;
 }
 
-// Whether `place` is a whole variable: the address of a local, parameter or
-// global, or the storage a local is kept in. Sets `local` or `storage` to
-// the variable.
 bool
 n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage)
 {
@@ -422,8 +392,6 @@ n00bb_place_root(ir_value_t *place, ir_local_t **local, ir_value_t **storage)
     return true;
 }
 
-// The declared shape of the array a place holds: the variable's own, for a
-// whole variable, or the one recorded on the place.
 ir_shape_t *
 n00bb_place_shape(ir_value_t *place)
 {
@@ -437,11 +405,6 @@ n00bb_place_shape(ir_value_t *place)
     return shape ? shape : ir_value_shape(place);
 }
 
-// A place about to be written that is reached through a custom reference's
-// read-only `__ref_address` is reached through the writable hook instead:
-// the hook is changed where it was called, so every use of the address
-// sees the writable one. Reports and returns false when the reference type
-// has no writable hook.
 static bool
 writable_hook(ir_lower_context_t *context, ir_value_t *place, ir_span_t span)
 {
@@ -501,9 +464,6 @@ static ir_value_t *
 place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
          core_list_t(n00bb_element_writeback_t) *writebacks);
 
-// A copy of an element a container reaches through `__read`, to write part
-// of it: `element` was read from `container` at `index`. Returns the copy's
-// address, and records that it is stored back afterwards.
 static ir_value_t *
 element_copy(ir_lower_context_t *context, ir_value_t *element,
              ir_value_t *container, ir_value_t *index, ir_span_t span,
@@ -528,18 +488,12 @@ element_copy(ir_lower_context_t *context, ir_value_t *element,
                         back.element, (core_string_t){0}, span);
 }
 
-// Where the fields or elements of `value` are kept. A reference, or an object
-// (a handle to its fields), already says where; any other value holds them
-// itself, so they are wherever the value is kept: its place, when `writing`,
-// or the address it was just loaded from, when only reading.
 static ir_value_t *
 storage_of(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
            core_list_t(n00bb_element_writeback_t) *writebacks, bool writing)
 {
     th_ctx *types = ir_module_types(context->module);
     th_type *held = value ? th_resolve(value->type) : nullptr;
-    // A value loaded before its type is solved has the type of what its
-    // address refers to.
     ir_value_t *from = held && th_kind_of(held) == TH_VAR
             && value->kind == IR_VAL_INSTR && value->def
             && value->def->op == IR_OP_LOAD && value->def->n_operands == 1
@@ -551,8 +505,6 @@ storage_of(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
     }
     th_type *referent = held && th_kind_of(held) == TH_INDIRECTION
         ? th_resolve(th_ind_referent(held)) : nullptr;
-    // A reference to an object refers to the handle, so the fields are
-    // where the handle it holds refers to.
     if (referent && n00bb_reference_definition(types, referent)) {
         ir_value_t *handle = n00bb_emit_indirect_read(context, value,
                                                       referent, span);
@@ -562,8 +514,6 @@ storage_of(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
     if (held && n00bb_reference_definition(types, held))
         return n00bb_reference_view(context, value, span);
     if (writing) return place_in(context, value, span, writebacks);
-    // Read through a reference, the value's fields are read where it refers
-    // to; a variable's own value is read whole.
     ir_value_t *loaded = value && value->kind == IR_VAL_INSTR && value->def
             && value->def->op == IR_OP_LOAD && value->def->n_operands == 1
         ? ir_operand_value(&value->def->operands[0]) : nullptr;
@@ -575,10 +525,6 @@ storage_of(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
         ? loaded : nullptr;
 }
 
-// The address of field `name` of `base` when the field is read from
-// storage rather than out of a value: through a reference or object handle,
-// or at the address `base` was just loaded from (which is then not loaded
-// whole). Returns null when `base` is a value that holds the field itself.
 ir_value_t *
 n00bb_field_storage(ir_lower_context_t *context, ir_value_t *base,
                     core_string_t name, th_type *type, ir_span_t span)
@@ -599,11 +545,6 @@ n00bb_field_storage(ir_lower_context_t *context, ir_value_t *base,
     return field;
 }
 
-// The address `value` was read from, when an expression names storage: a
-// variable, a field of storage, or an element reached through an address.
-// The operand was lowered as a value; a place is recovered from how that
-// value was read, so it does not matter how the expression was written.
-// Returns null for a temporary value, which has no address.
 static ir_value_t *
 place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
          core_list_t(n00bb_element_writeback_t) *writebacks)
@@ -649,10 +590,6 @@ place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
         uint32_t first = read->op == IR_OP_DISPATCH ? 1 : 0;
         ir_value_t *source = ir_operand_value(&read->operands[first]);
         ir_value_t *offset = ir_operand_value(&read->operands[first + 1]);
-        // A sequence keeps its elements in its own storage, and an indexable
-        // reference in the storage it refers to. A container whose type is
-        // not known yet is taken to be a sequence, unless the caller writes
-        // elements back through `__write` instead.
         n00bb_lower_context_t *lower = context->user;
         th_type *held = source ? th_resolve(source->type) : nullptr;
         uint8_t attrs = 0;
@@ -685,8 +622,6 @@ place_in(ir_lower_context_t *context, ir_value_t *value, ir_span_t span,
     return place;
 }
 
-// The place `value` was read from (see place_in). One about to be written,
-// when `writing`, is reached through a writable reference hook.
 ir_value_t *
 n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,
                ir_span_t span)
@@ -713,8 +648,6 @@ n00bb_emit_writebacks(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context->user;
     th_type *nil = th_name(ir_module_types(context->module),
                            CORE_STRING_STATIC("nil"));
-    // Innermost first: an element copied out of another copy is stored back
-    // into that copy before it is stored back in turn.
     for (size_t i = writebacks->len; i > 0; i--) {
         n00bb_element_writeback_t *back = &writebacks->data[i - 1];
         ir_value_t *container = back->container_place
@@ -737,22 +670,13 @@ n00bb_emit_writebacks(ir_lower_context_t *context,
     return true;
 }
 
-// Erases a slice bound computed only for a read that was dropped: constants,
-// the `+ 1` of an included end, and the container length of an absent one.
-// Stores `value` to the place `target` was read from. An element a
-// container reaches through `__read` is stored with `__write` instead, and
-// the read is dropped unless something else uses it. Returns false when
-// `target` names no place, or, when `checked`, no writable one.
 bool
 n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                ir_value_t *value, bool checked, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    // The fields this writes, read as well when the old value is still used.
     n00bb_note_place_written(context, target,
         target && ir_value_has_uses(context->function, target));
-    // A local or global read whole is written as itself, rather than
-    // through an address that would make it live in memory.
     ir_instr_t *read = target && target->kind == IR_VAL_INSTR ? target->def
                                                               : nullptr;
     ir_local_t *local = read && read->op == IR_OP_COPY && read->n_operands == 1
@@ -773,7 +697,6 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
         return store && ir_instr_operand_value(store, global)
             && ir_instr_operand_value(store, value);
     }
-    // Assigning a variant's arm selects that arm: the variant is replaced.
     if (read && read->op == IR_OP_EXTRACT && read->n_operands == 2
         && read->operands[1].kind == IR_OPD_NAME
         && ir_annot_get(&read->annots, N00BB_VARIANT_ARM_KEY)) {
@@ -796,7 +719,6 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
             && ir_instr_operand_value(make, value)
             && n00bb_store_to(context, holder, make->dest, checked, span);
     }
-    // A flag field is a read-only slice of its flagset.
     ir_value_t *mask = read && read->op == IR_OP_BITSET_INTERSECTION
             && read->n_operands == 2
         ? ir_operand_value(&read->operands[1]) : nullptr;
@@ -813,9 +735,6 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
         core_free(owner.data);
         return false;
     }
-    // A slice is written through `__write_slice` with the bounds it was
-    // read with (`__slice(container, start?, end?, inclusive)`, see
-    // n00bb_lower_slice_read); the read is dropped.
     ir_annot_t *slice = read && read->op == IR_OP_DISPATCH
             && read->n_operands == 5
         ? ir_annot_get(&read->annots, N00BB_SLICE_TARGET_KEY) : nullptr;
@@ -859,8 +778,6 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                 || th_kind_of(th_resolve(th_ind_referent(held)))
                     == TH_SEQUENCE)));
         if (!stored) {
-            // The container is written back to as well, so it is read from
-            // its own place when it has one.
             core_list_t(n00bb_element_writeback_t) writebacks =
                 core_list_new(n00bb_element_writeback_t);
             bool erase = !ir_value_has_uses(context->function, target);
@@ -893,7 +810,6 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
     lower->write_back_open_index = true;
     ir_value_t *place = place_in(context, target, span, &writebacks);
     lower->write_back_open_index = saved;
-    // An atomic value is updated whole, never one field or element at a time.
     for (ir_value_t *at = place; at && at->kind == IR_VAL_INSTR && at->def
          && (at->def->op == IR_OP_FIELD || at->def->op == IR_OP_INDEX)
          && at->def->n_operands;) {

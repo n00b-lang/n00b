@@ -210,7 +210,6 @@ core_snapshot_inventory_skip(core_snapshot_inventory_t *inventory,
 {
     if (!inventory || !directory.data || !core_os_is_absolute(directory))
         return false;
-    // Roots are compared as given, and the driver gives real paths.
     core_string_t real = core_os_real_path(directory);
     core_list_push(inventory->skipped,
                    real.data ? real : core_string_dup(directory));
@@ -839,8 +838,6 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
         }));
         ok = scan_tree(refresh, root_index, group, recursive, &directories);
     }
-    // A group with no sources is cached too, or every refresh walks it
-    // again (build output under the current directory, say).
     if (ok)
         (void)write_package_cache(refresh, root_index, group, group_path,
                                   &directories, first_entry);

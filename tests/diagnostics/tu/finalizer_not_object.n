@@ -1,5 +1,3 @@
-// Only an object can have a finalizer: a value type is copied on assignment,
-// and each copy would be finalized.
 record Guard {
     id: int
 }

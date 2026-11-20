@@ -1,10 +1,6 @@
 import sys.locks
 import sys.threads
 
-# `modify` and `out` parameters refer to the caller's place: a write through
-# one is a write to that place, seen at once, and seen even when the callee
-# then fails.
-
 record Counter {
     count: uint
     other: uint
@@ -15,8 +11,6 @@ var lock: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
                              nesting = 0, collector = false)
 var finished: Atomic[u64] = 0
 
-# Two threads bump a global record passed `modify`, under a lock the callee
-# takes. Copying the record in and out around the call would lose updates.
 func bump(modify c: Counter) {
     sys.locks.mutex_lock(ref lock)
     c.count += 1
@@ -45,7 +39,6 @@ func race_check() {
     require total == 400000
 }
 
-# A write made before the callee fails stays made.
 func set_then_fail(modify value: int, out written: int) -> nil fail: string {
     value = 7
     written = 9
@@ -64,8 +57,6 @@ func failure_check() {
     require failed and value == 7 and written == 9
 }
 
-# An element a container reaches through accessors has no address; it is
-# passed through a temporary that is written back on success and failure.
 func add_one(modify value: int) {
     value += 1
 }
@@ -101,8 +92,6 @@ func element_check() {
     require cells[2] == 2 and cells[3] == 10
 }
 
-# A `modify` parameter passed on to another `modify` parameter passes the
-# same place.
 func add_two(modify value: int) {
     add_one(value)
     add_one(value)
@@ -124,7 +113,6 @@ func passing_check() {
     require first == 42 and second == 43
 }
 
-# Fields, globals and packed bits are places too.
 record Pair {
     left: int
     right: int
@@ -151,7 +139,6 @@ func place_check() {
     require bits[3] and bits[9] and !bits[4]
 }
 
-# A generic callee works on the caller's place through a boxed reference.
 func replace(modify target: 'T, value: 'T) {
     target = value
 }

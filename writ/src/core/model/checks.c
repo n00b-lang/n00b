@@ -734,15 +734,10 @@ union_tags(writ_model_t *model)
     }
 }
 
-// A `syscall` argument or result fills one register: an integer no wider
-// than a pointer, or a plain pointer with no shape, mode or ownership
-// (dsl.md §7.7).
 static bool
 syscall_register(const writ_model_t *model, const writ_slot_rec_t *slot)
 {
     const writ_type_rec_t *type = writ_type(model, slot->type);
-    // A pointer's mode only says what the kernel does through it; the
-    // pointer itself still goes in a register.
     bool pointer = type->key.kind == WRIT_TYPE_POINTER;
     bool mode = slot->mode == WRIT_MODE_IN
                 || (pointer && (slot->mode == WRIT_MODE_OUT || slot->mode == WRIT_MODE_INOUT));
@@ -751,7 +746,6 @@ syscall_register(const writ_model_t *model, const writ_slot_rec_t *slot)
     if (!plain) {
         return false;
     }
-    // Both architectures with a kernel entry are 64-bit.
     if (type->key.kind == WRIT_TYPE_INT) {
         return type->size <= 8;
     }

@@ -105,14 +105,6 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         if (effects & IR_SUMMARY_MAY_TRAP)
             ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
     }
-    // Foreign code writes through the references it is given. A raw
-    // pointer (a reference to a scalar, such as Ref[byte]) is a buffer the
-    // C side or the kernel may write past the first element of, so it is a
-    // deep write. A reference to an n00b value is the generated shim's
-    // argument slot: the contract's modes say what the shim writes, and it
-    // never writes through an `in` argument's storage. A raw binding's
-    // contract can narrow that: an explicit `in` pointer is only read, and
-    // an explicit `out` pointer is only filled.
     uint16_t read_only = 0, write_only = 0;
     if (foreign) n00bb_axiom_foreign_access(function, &read_only, &write_only);
     uint32_t written = 0;
@@ -128,16 +120,12 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         th_type *type = formal && formal->type ? th_resolve(formal->type)
                                                : nullptr;
         if (foreign && writes && type && th_kind_of(type) == TH_INDIRECTION) {
-            // Scalars such as byte are named builtin types, not bare
-            // bit integers, so they count as raw by their scalar.
             th_type *referent = th_ind_referent(type);
             const th_builtin_type_t *builtin = referent
                 ? th_builtin_of(referent) : nullptr;
             bool raw = referent
                 && (th_kind_of(th_resolve(referent)) == TH_BITINT
                     || (builtin && builtin->scalar));
-            // An `out` pointer is filled by the call, so whatever it points
-            // at is set afterwards.
             bool fills = p < 16 && (write_only & (1u << p));
             ir_summary_add_path(summary, &(ir_spath_t){
                 .root = IR_SPLACE_PARAM, .param = p,
@@ -149,8 +137,6 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
     }
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
-    // What it returns or writes comes from the sources its declared effects
-    // observe, such as the environment or the system's randomness.
     native_flows(summary, function, effects, UINT32_MAX, written);
     return summary;
 }
@@ -560,7 +546,6 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_type_specializes"),
             th_name(types, CORE_STRING_STATIC("i32")), bytes_args, 2)
-        // The same test on `typespec` descriptors, which are type indexes.
         && register_native_signature(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_typespec_specializes"),
             builtin_native_name(
@@ -946,8 +931,6 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     fence->type = fence_signature;
     fence->error_type = nil_type;
     fence->callable_contract = fence_contract;
-    // Single processor instructions: a full memory fence, the spin-wait
-    // hint, and a read of the stack pointer.
     static const struct {
         core_string_t name;
         bool          address;
@@ -1487,10 +1470,6 @@ register_builtin_unary_operators(th_env *environment, th_ctx *types)
     return true;
 }
 
-// `i:N` and `u:N` are integers, so they implement `Integer` through its
-// `from_bits`; `bits:N` is not. The library writes `from_bits` for each
-// named integer type, which can't cover every width; these have no body, as
-// dispatch turns a call into a wrapping cast (see bitint_operator).
 static bool
 register_bit_integer_from_bits(th_env *environment, th_ctx *types)
 {
@@ -1498,7 +1477,6 @@ register_bit_integer_from_bits(th_env *environment, th_ctx *types)
     for (uint64_t width = 1; width <= 128; width++) {
         for (int is_signed = 0; is_signed <= 1; is_signed++) {
             th_type *self = th_bitint(types, width, is_signed);
-            // The modes `trait Integer` declares `from_bits` with.
             th_param parameters[] = {
                 {.mode = TH_IN, .type = self},
                 {.mode = TH_IN, .type = bits},
@@ -1556,8 +1534,6 @@ register_builtin_comparison_operators(th_env *environment, th_ctx *types)
         || !th_env_register_type_shape(environment,
             CORE_STRING_STATIC("Comparison"),
             TH_ENV_TYPE_SHAPE_ENUM, shape)) return false;
-    // The traits themselves are declared in lib/builtin/compare.n; the
-    // built-in scalar types' implementations are registered here.
     for (size_t o = 0; o < sizeof(operators) / sizeof(operators[0]); o++) {
         th_type *result = th_name(types, operators[o].result);
         size_t ordered_count = sizeof(numeric_types) / sizeof(numeric_types[0]);
@@ -1805,8 +1781,6 @@ register_builtin_traits(th_env *environment, th_ctx *types)
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"),
             TH_ENV_PUBLIC, address_signature)) return false;
 
-    // A slice's bounds as written: either may be left out (nil), and `to`
-    // includes the end (`inclusive`), as for `__write_slice`.
     th_type *slice_receiver = th_var(types);
     th_type *slice_bound = th_option(types,
         th_name(types, CORE_STRING_STATIC("int")));

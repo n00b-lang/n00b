@@ -107,7 +107,6 @@ n00bb_written_call_record(parse_grammar_t *grammar, parse_tree_t *call,
         .keywords = core_list_new(n00bb_call_argument_t),
     };
     collect_arguments(grammar, call_args, &site->positional, &site->keywords);
-    // The values belong to lowering; typing reports from the rest.
     for (size_t i = 0; i < site->positional.len; i++)
         site->positional.data[i].expression = nullptr;
     for (size_t i = 0; i < site->keywords.len; i++)

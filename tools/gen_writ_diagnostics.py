@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-gen_writ_diagnostics.py - Map writ's diagnostic codes into n00b's registry.
-
-Reads writ/include/writ/diag_codes.def and writes compiler/diagnostics/writ.def, which
-gives every writ code that can reach a n00b user its own N00B-F1xxx code.
-
-Usage:
-    python3 tools/gen_writ_diagnostics.py WRIT_DEF OUTPUT [--check]
-"""
 
 import re
 import sys

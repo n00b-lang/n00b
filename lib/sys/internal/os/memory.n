@@ -1,5 +1,3 @@
-# The machine's physical memory.
-
 when target_os() == "linux" {
     [-
     library kernel
@@ -15,7 +13,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # Linux's struct sysinfo.
     private record Linux_Sysinfo layout(c) {
         uptime:      i64
         load_1:      u64
@@ -65,7 +62,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # Windows' MEMORYSTATUSEX.
     private record Windows_Memory_Status layout(c) {
         length:                     u32
         load:                       u32
@@ -79,8 +75,6 @@ when target_os() == "linux" {
     }
 }
 
-# The machine's physical memory in bytes, or the largest uint if it can't
-# be found.
 func physical_memory() -> uint {
     let unknown: uint = ~cast[uint](0)
     when target_os() == "linux" {

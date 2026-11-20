@@ -1,4 +1,4 @@
-enforce off
+enforce on
 lantern/tests/samples/*
 lantern/tests/format/*
 tests/programs/formatter/*

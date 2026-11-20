@@ -50,7 +50,6 @@ typedef struct ir_lower_skip_frame_t {
     parse_tree_t *owner;
     parse_tree_t *reference;
     struct ir_lower_skip_frame_t *next;
-    // The walk is inside `reference`.
     bool open;
 } ir_lower_skip_frame_t;
 
@@ -73,12 +72,10 @@ typedef struct {
     core_dict_t values;
     core_dict_t pruned_nodes;
     core_dict_t custom_assignments;
-    // Assignment targets read before the rest of their assignment runs.
     core_dict_t snapshots;
     core_dict_t handled_assignments;
     core_dict_t suppressed_emits;
     ir_lower_skip_frame_t *skip_values;
-    // How many skipped references enclose the walk.
     size_t suppressed_depth;
     parse_tree_t *active_node;
     bool active_entering;
@@ -509,7 +506,6 @@ ir_lower_local_address(ir_lower_context_t *context, ir_local_t *local)
     return binding ? binding->address : nullptr;
 }
 
-// Whether `symbol` was bound after `checkpoint` was taken.
 bool
 ir_lower_bound_since(ir_lower_context_t *context,
                      const parse_sym_entry_t *symbol, void *checkpoint)
@@ -522,7 +518,6 @@ ir_lower_bound_since(ir_lower_context_t *context,
     return false;
 }
 
-// The symbol bound to `local`, or to `value` as its value or storage address.
 parse_sym_entry_t *
 ir_lower_binding_symbol(ir_lower_context_t *context, const ir_local_t *local,
                         const ir_value_t *value)
@@ -668,7 +663,6 @@ lower_find_annotation(parse_visit_t *visit, parse_annot_kind_t kind)
 
 
 
-// Whether `node` is the receiver of a member access (`x` in `x.name`).
 static bool
 member_receiver(parse_tree_t *node)
 {
@@ -714,8 +708,6 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                                                  &folded))
             return n00bb_emit_untyped_const(context, folded, span);
         parse_sym_entry_t *named = symbol ? canonical_symbol(symbol) : nullptr;
-        // A function's name can't be a value without `ref`, so when a type
-        // has the same name (`string`), the name means the type.
         if (named && named->kind == PARSE_SYM_FUNCTION
             && builtin_type_name(named->name)
             && !member_receiver(visit->node))
@@ -737,7 +729,6 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
                 : lower_internal(context, span,
                                  "could not emit an enum or flagset member");
         }
-        // A type named where a value goes is its `typespec` descriptor.
         n00bb_node_facts_t *facts = visit ? n00bb_node_facts(visit->node)
                                           : nullptr;
         if (facts && facts->type_literal)
@@ -810,7 +801,6 @@ lower_builtin_action(ir_lower_context_t *context, const n00bb_emit_t *emit,
         }
         else if (core_string_eq(kind, CORE_STRING_STATIC("int"))) {
             ir_lit_t value;
-            // An integer spelling that doesn't parse is one past 128 bits.
             if (!n00bb_parse_switch_integer(text, &value))
                 return lower_report(context, N00B_DIAG_INTEGER_LITERAL_TOO_LARGE,
                     span, N00B_TEXT_INTEGER_LITERAL_TOO_LARGE,
@@ -882,10 +872,6 @@ lower_tree_track_assignment(ir_lower_tree_state_t *state,
 {
     if (annotation->kind != PARSE_ANNOT_ASSIGNS) return true;
     if (entering) {
-        // A declaration's target names a variable that does not exist
-        // yet, so it is not read. Any other target is read like any
-        // expression, before the value assigned is computed; the write goes
-        // to where it was read from.
         if (!lower_tree_declares(visit)) {
             parse_tree_t *read = parse_tree_resolve_child_ref(
                 visit->grammar, visit->node, annotation->name_ref);
@@ -998,7 +984,6 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
     if (state->failed || !state->context->reachable
         || !state->context->diagnostics)
         return true;
-    // A discarded `f()!` discards the call's successful value.
     parse_tree_t *expression = parse_tree_core(
         parse_tree_resolve_child_ref(visit->grammar, visit->node,
                                      visit->annot->value_ref));
@@ -1070,8 +1055,6 @@ span_of_tree(ir_lower_context_t *context, parse_tree_t *node)
                         parse_token_endline(last), parse_token_endcol(last));
 }
 
-// Whether the assignment at `visit` declares the variable it assigns: a
-// declaration, or an assignment name resolution found introduces its name.
 static bool
 lower_tree_declares(parse_visit_t *visit)
 {
@@ -1089,9 +1072,6 @@ ir_lower_symbol_defined_at(const parse_sym_entry_t *symbol,
     return lower_symbol_defines_at(symbol, node);
 }
 
-// The variable whose storage is at `address`: a variable kept in memory, or
-// a parameter passed by reference. A reference held as a variable's value
-// is not its storage.
 static parse_sym_entry_t *
 lower_storage_symbol(ir_lower_context_t *context, const ir_value_t *address)
 {
@@ -1103,9 +1083,6 @@ lower_storage_symbol(ir_lower_context_t *context, const ir_value_t *address)
     return nullptr;
 }
 
-// The variable a value was read from whole: a local, the storage a variable
-// is bound to (its own, or a by-reference parameter's), or a global. Returns
-// its symbol, or null for any other value.
 parse_sym_entry_t *
 ir_lower_read_variable(ir_lower_context_t *context, const ir_value_t *value)
 {
@@ -1113,7 +1090,6 @@ ir_lower_read_variable(ir_lower_context_t *context, const ir_value_t *value)
         ? value->def : nullptr;
     const ir_value_t *source = read && read->n_operands
         ? ir_operand_value(&read->operands[0]) : nullptr;
-    // A variable narrowed by `has_type` is still that variable.
     if (read && read->op == IR_OP_TYPE_NARROW && source)
         return ir_lower_read_variable(context, source);
     if (read && read->op == IR_OP_COPY && read->n_operands == 1) {
@@ -1213,8 +1189,6 @@ lower_write_binding_value(ir_lower_context_t *context,
         return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                              "assignment destination is not writable storage");
     }
-    // A write ends a `has_type` narrowing: the variable reads as its own
-    // type again.
     if (binding->value && binding->value->def
         && binding->value->def->op == IR_OP_TYPE_NARROW
         && (binding->local || binding->address))
@@ -1244,8 +1218,6 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
     parse_tree_t *source = parse_tree_resolve_child_ref(
         visit->grammar, visit->node, annotation->value_ref);
     (void)target;
-    // Only a declaration reaches here: other assignments are lowered where
-    // their target was read (n00bb_check_assignment).
     parse_sym_entry_t *symbol = parse_tree_sym(visit->node);
     bool initializes = core_string_eq(
         parse_tree_nt_name(visit->grammar, visit->node),
@@ -1281,9 +1253,6 @@ lower_tree_recover(ir_lower_tree_state_t *state, parse_visit_t *visit,
 
 static bool lower_tree_node_value(parse_visit_t *visit);
 
-// A global used as a value is read where the value is used, so an assignment
-// target that is a global is read (copied) as soon as it is lowered, before
-// the assigned value can change it.
 static bool
 lower_tree_node_lowered(parse_visit_t *visit)
 {
@@ -1301,9 +1270,6 @@ lower_tree_node_lowered(parse_visit_t *visit)
         && ir_lower_set_node_value(state->context, visit->node, read->dest);
 }
 
-// Entering a reference that is not lowered as a value (the part of a call
-// that names the function, an assignment's target) suppresses the values
-// inside it until the walk leaves it.
 static bool
 lower_tree_node_enter(parse_visit_t *visit)
 {

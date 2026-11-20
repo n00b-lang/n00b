@@ -441,7 +441,6 @@ func render_tokens(g: langtools.grammar.Grammar, source: string,
     return join(out, "\n") + "\n"
 }
 
-// The spec a lex spec extends, from its `extends:` line.
 func base_of(spec: string) -> string? {
     for line in text.split(spec, "\n") {
         if byte_len(line) > 8 and byte_slice(line, 0, 8) == "extends:" {
@@ -451,8 +450,6 @@ func base_of(spec: string) -> string? {
     return nil
 }
 
-// Loads a spec file, first loading the spec it extends from the same
-// directory.
 func load_spec(path: string, spec: string) -> langtools.lex.Spec
     fail: List[langtools.Diagnostic] {
     var bases: Dict[string, langtools.lex.Spec] =
@@ -550,7 +547,6 @@ NUMBER { like: integer   digits: decimal }
     }
 }
 
-// The first problem a spec and source produce, or "ok".
 func lex_codes(spec: string, source: string) -> string {
     try {
         let lx: langtools.lex.Lexer = lex_lexer(spec)!

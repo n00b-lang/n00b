@@ -8,7 +8,6 @@ func open_read(path: string) -> i32 fail: internal.errno.Errno {
     return internal.os.open.open(path, internal.os.open.Access.read_only)!
 }
 
-# The size of the file `fd` refers to. Leaves its offset at the start.
 func size(fd: i32) -> uint fail: internal.errno.Errno {
     let end: uint = internal.os.seek.seek(fd, 0, internal.os.seek.Whence.end)!
     _ = internal.os.seek.seek(fd, 0, internal.os.seek.Whence.start)!
@@ -35,7 +34,6 @@ func read_file(path: string) -> Array[u8] fail: internal.errno.Errno {
         while done < length {
             let got: uint = read_into(fd, data, done, length - done)!
             if got == 0 {
-                # The file shrank while it was read.
                 fail internal.errno.Errno.EIO
             }
             done += got

@@ -621,10 +621,6 @@ func leave_blocking_runtime() {
     }
 }
 
-# Called on each entry from C (builtin.ffi.__ffi_enter) with an address
-# above the n00b frames the entry makes. When that raises the thread's
-# known stack top (internal.os.thread.thread_stack_entry), the attached
-# mutator's follows, so the collector scans every frame.
 func note_stack_entry(address: uint) {
     if !internal.threads.thread_stack_entry(address) {
         return

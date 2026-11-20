@@ -1,6 +1,3 @@
-// The built-in `typical` language that specs extend: C-like comments,
-// strings, characters, numbers and identifiers. Blocks for token classes a
-// grammar doesn't declare are dropped when a spec is compiled.
 func text() -> string {
     return [-
 source {

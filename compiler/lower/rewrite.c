@@ -569,7 +569,6 @@ n00bb_rewrite_sinks(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     }
 }
 
-// The declared array shape of field `name` of `type`'s record, if any.
 static ir_shape_t *
 declared_field_shape(n00bb_rewrite_t *rewrite, th_type *type,
                      core_string_t name)
@@ -596,8 +595,6 @@ n00bb_rewrite_object_field(n00bb_rewrite_t *rewrite, ir_instr_t *in)
             th_ind(ir_module_types(context->module), 0, member))
         && ir_instr_operand_value(address, base)
         && ir_instr_operand_name(address, in->operands[1].name);
-    // An array field keeps its declared shape, which says how one held
-    // inline is laid out (a multi-dimensional one is rows of its elements).
     ir_shape_t *shape = ir_value_shape(in->dest);
     if (!shape && addressed)
         shape = declared_field_shape(rewrite,
@@ -628,8 +625,6 @@ n00bb_rewrite_object_field_address(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     if (!view || !n00bb_rewrite_splice(rewrite, in)) return false;
     in->operands[0].value = view;
     ir_instr_use_added(in, 0);
-    // As for a field read (n00bb_rewrite_object_field): an array field held
-    // inline is laid out by its declared shape.
     ir_shape_t *shape = in->dest && !ir_value_shape(in->dest)
         && in->operands[1].kind == IR_OPD_NAME
         ? declared_field_shape(rewrite, object, in->operands[1].name)
@@ -852,14 +847,11 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                         core_string_t method, ir_value_t *left,
                         ir_value_t *right)
 {
-    // `from_bits` takes its `u128` as is; widening it would be wrong.
     if (right && core_string_eq(method, CORE_STRING_STATIC("from_bits")))
         return n00bb_emit_primitive(&rewrite->context, method,
                                     in->dest->type, left, right, in->span);
     const n00bb_binary_operator_t *binary = right
         ? n00bb_binary_operator_method(method) : nullptr;
-    // An integer operand of a float operation (typing chose the float's
-    // type for it) converts to that float, rounding to nearest.
     ir_class_t left_class = ir_machine_of(rewrite->context.module,
                                           left->type).class;
     ir_class_t right_class = right ? ir_machine_of(rewrite->context.module,
@@ -889,8 +881,6 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
     }
     else if (right && is_integer_type(left->type)
              && is_integer_type(right->type)) {
-        // Operands of different integer types run at the type holding
-        // both (n00bb_integer_promotion): neither is ever narrowed.
         th_type *promoted = n00bb_integer_promotion(
             ir_module_types(rewrite->context.module), left->type,
             right->type);
@@ -900,8 +890,6 @@ n00bb_rewrite_primitive(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             right = n00bb_widen_integer_operand(&rewrite->context, right,
                                                 promoted, in->span);
             if (!left || !right) return nullptr;
-            // Arithmetic runs at the promoted type; a smaller declared
-            // destination gets a checked conversion of the result.
             if (binary && is_integer_type(in->dest->type)
                 && !ir_type_eq(rewrite->context.module, in->dest->type,
                                promoted)) {
@@ -962,8 +950,6 @@ n00bb_element_address(ir_lower_context_t *context, ir_value_t *base,
         ? address->dest : nullptr;
 }
 
-// Whether every use of `value` is as an operand of a call: an address a
-// reference type lends is valid only for the call it is passed to.
 static bool
 n00bb_only_call_operand(const ir_func_t *function, const ir_value_t *value)
 {
@@ -1040,9 +1026,6 @@ n00bb_rewrite_payload_writeback(n00bb_rewrite_t *rewrite, ir_span_t span)
         && ir_instr_operand_value(store, some->dest);
 }
 
-// The place a by-reference operand names, recovered from how its value was
-// read (see n00bb_place_of). An option's payload has no place of its own, so
-// it is copied out and stored back afterwards.
 static ir_value_t *
 n00bb_rewrite_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
                     ir_span_t span)
@@ -1053,9 +1036,6 @@ n00bb_rewrite_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
     return n00bb_place_of(&rewrite->context, value, rewrite->writing, span);
 }
 
-// The address a by-reference operand passes for a value that is no place
-// the caller writes back: a temporary holding the value. Writes through it
-// are not seen by the caller.
 static ir_value_t *
 n00bb_rewrite_temporary_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
                               ir_span_t span)
@@ -1200,9 +1180,6 @@ settled_value(ir_instr_t *before, ir_op_t op, th_type *type)
         ? instruction->dest : nullptr;
 }
 
-// The outcome always holds `ok`, so its reads become: the tag is `ok`'s,
-// the `ok` payload is the value, and the `error` payload (read only where
-// the tag is not `ok`) is `nil`.
 bool
 n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
                                 th_type *failure)
@@ -1210,8 +1187,6 @@ n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
     th_ctx *types = ir_module_types(function->owner);
     if (!call->dest || (failure && !th_is_nil(th_resolve(failure))))
         return true;
-    // An outcome whose failure settled on `nil` is already its value's type
-    // once types are interned again; its reads are still there.
     bool shaped = ir_type_is_call_outcome(call->dest->type);
     if (!shaped && !ir_annot_get(&call->annots, N00BB_MAY_FAIL_KEY))
         return true;
@@ -1230,7 +1205,6 @@ n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
                     && in->operands[1].kind == IR_OPD_NAME);
             if (ok) core_list_push(uses, in);
         }
-    // An outcome used some other way keeps its shape.
     if (!ok || (!shaped && !uses.len)) {
         core_list_free(uses);
         return true;
@@ -1322,9 +1296,6 @@ n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function)
     return ok;
 }
 
-// A plain value given for an option parameter is made that option, as a
-// direct call's arguments are where they're typed. (A call typed against a
-// trait's or a generic's signature reaches its target as given.)
 static bool
 option_arguments_to(ir_instr_t *call, ir_func_t *target)
 {
@@ -1383,7 +1354,6 @@ n00bb_bind_caller_variables(th_ctx *types, th_type *site, th_type *bound)
         || th_kind_of(bound) != TH_FUNCTION || th_is_closed(types, site)
         || !th_is_closed(types, bound))
         return;
-    // Part by part: the failures may differ (a target that can't fail).
     (void)th_match(th_func_ret(site), th_func_ret(bound));
     size_t count = th_func_nparams(site) < th_func_nparams(bound)
         ? th_func_nparams(site) : th_func_nparams(bound);
@@ -1404,15 +1374,10 @@ n00bb_rewrite_function_address(n00bb_rewrite_t *rewrite,
         : nullptr;
     *function = unit ? link_ir_function_for_symbol(analysis, symbol)
                      : nullptr;
-    // The function's own module, which isn't the symbol's unit's for a
-    // module literal's generated functions: their names are declared into
-    // the module that holds the literal.
     return *function ? ir_func_address((*function)->owner, *function)
                      : nullptr;
 }
 
-// A string literal typed `Array[byte]`: the string constant, copied in one
-// block by builtin.string.core.__byte_array.
 static bool
 n00bb_rewrite_byte_literal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                            const uint8_t *bytes, size_t length)
@@ -1535,7 +1500,6 @@ n00bb_rewrite_callback_setup(n00bb_rewrite_t *rewrite, ir_instr_t *in)
     return true;
 }
 
-// A variant from `new` with no `__init` holds no arm yet.
 static ir_value_t *
 n00bb_emit_unset_variant(n00bb_rewrite_t *rewrite, ir_value_t *storage,
                          th_type *variant, ir_span_t span)
@@ -1564,7 +1528,6 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                                                         &function);
     if (!callee) return false;
     ir_lower_context_t *context = &rewrite->context;
-    // An overloaded call may pass no positional arguments.
     bool positional = in->n_operands > 1
         && in->operands[1].kind != IR_OPD_NAMED_ARG;
     ir_value_t *receiver = positional
@@ -1608,17 +1571,12 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                : !current && !ir_instr_set_call_signature(in,
                                                           target->signature))
         return false;
-    // The call's result was typed from a copy of the callee's signature.
-    // A callee with no written return type learns it from its body, which
-    // may be typed after this call, so the copy can still hold a variable.
-    // The final signature has the answer.
     if (!n00bb_bind_call_target(rewrite->context.function, in, function,
                                 true))
         return false;
     th_type *settled = ir_instr_call_signature(in);
     th_type *body_ret = th_kind_of(th_resolve(function->type)) == TH_FUNCTION
         ? th_resolve(th_func_ret(function->type)) : nullptr;
-    // A cached callee was typed by an earlier build: its kept body has it.
     ir_func_t *cached = body_ret && !th_is_closed(types, body_ret)
         ? n00bb_cached_body(function) : nullptr;
     if (cached && cached != function
@@ -1645,10 +1603,6 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             && th_mode_is_input_only(mode) && ir_instr_operand_missing(in);
         if (!padded) return false;
     }
-    // Each `out` or `modify` operand passes the address of the place its
-    // value was read from. The receiver of a call whose result is not
-    // written back may be no place at all; it is passed through a
-    // temporary.
     bool written = true;
     for (uint32_t p = 0; written && th_kind_of(signature) == TH_FUNCTION
          && p < th_func_nparams(signature) && p + 1 < in->n_operands; p++) {
@@ -1740,9 +1694,6 @@ n00bb_rewrite_assign_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             : value;
         ok = arguments[o] != nullptr;
     }
-    // The dispatch yields the updated receiver, which the assignment stores
-    // back. A `modify` receiver is passed as the address of a temporary
-    // holding it, and the update is read from there after the call.
     ir_value_t *receiver = nullptr;
     for (uint32_t o = 0; ok && o < count && o < th_func_nparams(signature);
          o++) {
@@ -1879,8 +1830,6 @@ n00bb_rewrite_trait_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         return core_diagnostics_failed(
             core_translation_unit_diagnostics(rewrite->unit));
     if (!ir_instr_set_call_signature(in, signature)) return false;
-    // `out` and `modify` operands pass the address of their place: the
-    // receiver's was found above, before the method was selected from it.
     for (uint32_t o = 1; o < in->n_operands
          && o <= th_func_nparams(resolved); o++) {
         const th_param *formal = th_func_param(resolved, o - 1);
@@ -2255,7 +2204,6 @@ n00bb_rewrite_equal_by_cmp(n00bb_rewrite_t *rewrite, ir_instr_t *in,
         && n00bb_rewrite_dispatch(rewrite, compare);
 }
 
-// `==` on a distinct type compares the values as the type it was made from.
 static bool
 n00bb_rewrite_distinct_equal(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                              ir_value_t *left, ir_value_t *right)
@@ -2289,7 +2237,6 @@ static bool
 n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
 {
     core_string_t method = in->operands[0].name;
-    // An overloaded call goes to the function typing chose for it.
     n00bb_dispatch_target_t chosen = {0};
     if (n00bb_overload_target(rewrite->dispatch, in, &chosen))
         return n00bb_rewrite_method_call(rewrite, in, &chosen);
@@ -2387,8 +2334,6 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
                   || target.kind == N00BB_TARGET_FUNCTION))
         return n00bb_rewrite_method_call(rewrite, in, &target);
     if (target.kind == N00BB_TARGET_ZEROED && in->n_operands > 2) {
-        // Typing turns away positional arguments to `new` on a type with no
-        // `__init`; named ones reach here, and would be dropped.
         core_string_t type = n00bb_print_type(
             ir_module_types(rewrite->context.module),
             th_ind_referent(ir_operand_value(&in->operands[1])->type));
@@ -2405,8 +2350,6 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
         ir_instr_uses_changed(in);
     }
     if (target.kind == N00BB_TARGET_ZEROED) {
-        // Zeroed storage needs no call, but an object still needs the record
-        // its handle refers to.
         ir_value_t *storage = ir_operand_value(&in->operands[1]);
         th_type *built = in->operands[1].kind == IR_OPD_FRESH
             ? th_ind_referent(storage->type) : nullptr;
@@ -2421,8 +2364,6 @@ n00bb_rewrite_dispatch(n00bb_rewrite_t *rewrite, ir_instr_t *in)
                          : variant ? n00bb_emit_unset_variant(rewrite, storage,
                                                               built, in->span)
                                    : storage;
-        // Marks the zeroed value, so that fields with no zero value are
-        // checked to be set before it is used.
         return made && made->def
             && ir_annot_set(ir_module_ctx(rewrite->context.module),
                             &made->def->annots,
@@ -2748,9 +2689,6 @@ n00bb_record_literal_buildable(n00bb_rewrite_t *rewrite, ir_instr_t *in)
                               N00BB_ARGS(ARG_TEXT(owner->module.identifier)));
         return false;
     }
-    // Within the package that defines a type, a field tuple may build it,
-    // bypassing its constructor, unless a field is private to another
-    // module (checked above). Outside the package, its constructor is used.
     if (!constructed || n00bb_same_package(owner, rewrite->unit)) return true;
     n00bb_report(diagnostics, rewrite->unit,
                  N00B_DIAG_RECORD_HAS_CONSTRUCTOR,
@@ -3317,8 +3255,6 @@ static bool
 n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
 {
     bool erased = rewrite->abandoned.len > 0;
-    // A read can be abandoned more than once (the same read of a `modify`
-    // parameter feeding several element accesses); it is erased once.
     core_dict_t gone;
     core_dict_init(&gone, nullptr, nullptr);
     while (erased) {
@@ -3352,8 +3288,6 @@ n00bb_erase_abandoned_reads(n00bb_rewrite_t *rewrite)
     return true;
 }
 
-// Whether `function` makes an object: converts a fresh allocation of an
-// object's fields to the object.
 static bool
 n00bb_makes_object(const ir_func_t *function)
 {

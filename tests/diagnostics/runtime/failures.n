@@ -123,12 +123,9 @@ func run(selected: string) {
     } elif selected == "litfail" {
         uncaught(2)
     } elif selected == "ragged" {
-        // A ragged dimension no `Array` was assigned to is zero-sized.
         var rows: Array[int][2][]
         require rows[1][0] == 0
     } elif selected == "slice" {
-        // Slice bounds past the end stop there, but the start may not come
-        // after the end. (Neither is known until this runs.)
         let items: Array[int] = [1, 2, 3]
         require slice_from(items, 9, 9) == 0
         require slice_from(items, 2, 1) == 0

@@ -1,4 +1,3 @@
-# JSON grammar
 @lexer("json.lex")
 
 <json>    ::= <ws> <value> <ws>

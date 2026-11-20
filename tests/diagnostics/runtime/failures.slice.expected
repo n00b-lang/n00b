@@ -1,6 +1,6 @@
 panic: range 2..1 starts after its end, for an array of length 3
-  --> tests/diagnostics/runtime/failures.n:176:12
+  --> tests/diagnostics/runtime/failures.n:173:12
 backtrace:
-  at slice_start (lib/builtin/containers/slice.n:58:9)
-  at slice_from (tests/diagnostics/runtime/failures.n:176:12)
-  at run (tests/diagnostics/runtime/failures.n:134:17)
+  at slice_start (lib/builtin/containers/slice.n:51:9)
+  at slice_from (tests/diagnostics/runtime/failures.n:173:12)
+  at run (tests/diagnostics/runtime/failures.n:131:17)

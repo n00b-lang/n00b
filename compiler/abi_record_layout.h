@@ -32,8 +32,6 @@ typedef struct {
     uint64_t alignment_bits;
 } n00bb_record_layout_t;
 
-/* The caller supplies each field's packed extent and alignment. Placements
- * remain indexed by input field; sorting changes physical order only. */
 bool n00bb_abi_place_record(const n00bb_record_field_t *fields, size_t count,
                             n00bb_record_policy_t policy,
                             bool structural_record,

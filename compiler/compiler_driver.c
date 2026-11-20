@@ -1028,8 +1028,6 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
             ? parse_token_value(token) : core_option_none(core_string_t);
         if (!core_option_is_set(value)) return false;
         core_string_t spelling = core_option_get(value);
-        // `typespec` names a type, so where a value goes `typespec[T]` is
-        // the type literal, not an index.
         return core_string_eq(spelling, CORE_STRING_STATIC("null"))
             || core_string_eq(spelling, CORE_STRING_STATIC("None"))
             || core_string_eq(spelling, CORE_STRING_STATIC("typespec"));
@@ -1484,8 +1482,6 @@ record_import_alias(core_translation_unit_t *importer, core_string_t name,
     return true;
 }
 
-// Keeps where module literal `name` is, so a cached build can generate its
-// module again without compiling the module it's in.
 static bool
 note_literal_alias(core_translation_unit_t *importer, core_string_t name,
                    core_string_t modifier, n00bb_literal_origin_t origin,
@@ -2189,9 +2185,6 @@ restore_interface_import_aliases(import_driver_t *driver,
     return at == size;
 }
 
-// The shims and native libraries a program links, chosen from the C
-// symbols its code calls. Strings are copies: a later choice replaces the
-// FFI's own lists.
 typedef struct {
     core_list_t(core_buffer_t) bitcode;
     core_list_t(core_string_t) archives;
@@ -2224,7 +2217,6 @@ native_selection_release(native_selection_t *selection)
     *selection = (native_selection_t){0};
 }
 
-// Compiles the shims of the FFI's current choice and copies its libraries.
 static bool
 fill_native_selection(n00bb_ffi_t *ffi, core_string_t triple,
                       core_string_t executable,
@@ -2283,8 +2275,6 @@ typedef struct {
     bool libc;
 } runtime_selection_t;
 
-// Chooses the shims and libraries for the runtime program, from the C
-// symbols its runtime code calls.
 static bool
 select_runtime_natives(void *context, const core_string_t *symbols,
                        size_t count, n00bb_native_inputs_t *out)
@@ -2293,9 +2283,6 @@ select_runtime_natives(void *context, const core_string_t *symbols,
     n00bb_ffi_select(runtime->ffi, symbols, count);
     bool ok = fill_native_selection(runtime->ffi, runtime->triple,
         runtime->executable, runtime->diagnostics, runtime->selection);
-    // Linking the C library is the whole program's choice, made with its
-    // compile-time code: the runtime it was built for needs the C library
-    // whether or not runtime code calls a literal that asked for it.
     bool libc = false;
     for (size_t i = 0; i < runtime->selection->libraries.len; i++)
         libc |= core_string_eq(runtime->selection->libraries.data[i],
@@ -2330,7 +2317,6 @@ static bool generate_module_literal(import_driver_t *driver,
                                     n00bb_literal_origin_t origin,
                                     core_buffer_t *identifier);
 
-// Reads the next of a cached module's module literals.
 static bool
 read_cached_literal(const uint8_t *data, size_t size, size_t *at,
                     cached_literal_t *out)
@@ -2367,9 +2353,6 @@ cached_literals(import_driver_t *driver, core_translation_unit_t *unit,
     return data;
 }
 
-// A cached module's module literals generate their modules again, from its
-// source, which the cache checked is unchanged: the generated module may be
-// compiled, and either way its natives and C shims are needed.
 static bool
 restore_interface_literals(import_driver_t *driver,
                            core_translation_unit_t *unit)
@@ -2414,7 +2397,6 @@ restore_interface_literals(import_driver_t *driver,
     return ok;
 }
 
-// Marks the aliases a cached module's module literals made.
 static bool
 restore_interface_literal_aliases(import_driver_t *driver,
                                   core_translation_unit_t *unit)
@@ -2547,8 +2529,6 @@ module_literal_identifier(core_buffer_t *out, core_string_t importer,
         (int)name.u8_bytes, name.data);
 }
 
-// Prints the module generated for the literal at `site`, written MODULE:LINE
-// with LINE the line its `[-` is on.
 static bool
 show_module_literal(n00bb_resolver_t *resolver, core_string_t modifier,
                     core_string_t site)
@@ -2574,9 +2554,6 @@ show_module_literal(n00bb_resolver_t *resolver, core_string_t modifier,
     return found;
 }
 
-// Generates the module for module literal `name` in `importer` and makes it
-// available to import, naming it in `identifier`. When the cache has that
-// module, its natives' facts are noted here, since it won't be compiled.
 static bool
 generate_module_literal(import_driver_t *driver,
                         core_translation_unit_t *importer,
@@ -3310,7 +3287,6 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
             else core_buffer_append(&result, printed + gap_start, gap_len);
         }
         else if (comma && !printed_lines && !has_comment) {
-            /* A separator belongs to the preceding item. */
         }
         else if (channel_break && !printed_lines && !has_comment)
             core_buffer_append(&result, printed + gap_start, gap_len);
@@ -4633,7 +4609,6 @@ check_each_input(int argc, char **argv, core_string_t argv0,
     char *compiler = core_string_to_cstr(compiler_path);
     core_free(compiler_path.data);
     if (!compiler) return 1;
-    // Each input is checked by its own compiler, at most `jobs` at a time.
     int64_t jobs = n00bb_setting_int(N00BB_KEY_BUILD_JOBS);
     int32_t limit = jobs > 128 ? 128 : jobs > 0 ? (int32_t)jobs : 1;
     core_process_t *running = core_alloc_array(core_process_t,
@@ -4875,7 +4850,6 @@ trait_implementation(void *context, th_ctx *types, th_type *receiver,
     return nullptr;
 }
 
-// Prints each module holding a function to emit, once.
 static void
 dump_final_ir(const n00bb_link_analysis_t *analysis)
 {
@@ -4966,9 +4940,6 @@ optimize_range_checks(n00bb_link_analysis_t *analysis)
             || (i >= emitted
                 && !ir_summary_known(analysis->summaries, function)))
             continue;
-        // A folded branch can leave the only writes of a value that decides
-        // another branch in blocks no path reaches (a `with` manager's exit
-        // reason, say), so folding goes on once those blocks are gone.
         for (;;) {
             size_t scope = ir_analysis_scope_begin();
             uint32_t folded = ir_abcd_fold(function);
@@ -5709,10 +5680,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && n00bb_cache_snapshot(cache, link, link_analysis, false);
     if (check_snapshot && !defer_analysis)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
-    // The modules that checked clean in a broken program are as good as
-    // in a clean check: store them, or every check of a broken program
-    // redoes them. As for a clean check, the IR is taken before
-    // specializing, which binds library calls to this program's instances.
     bool failed_check = !located && check_command && cache && link_analysis
         && link_analysis->lowered_with_errors && specialize;
     bool failed_snapshot = failed_check
@@ -5757,7 +5724,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         located = (!specializing || analyzed_late
                    || n00bb_recompute_summaries(link_analysis))
             && check_post_specialization(link_analysis);
-    // `check` reports what `build` would about `main`'s signature.
     if (located && check_command && link_analysis)
         located = n00bb_check_start_signature(link, link_analysis,
                                               cli_diagnostics);
@@ -5815,8 +5781,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                     : link_analysis->cached_functions.data[i - emitted];
                 if (!function->n_blocks && function->name.data)
                     core_list_push(externs, function->name);
-                // A cached function's body is kept apart: the natives it
-                // calls are reached through it.
                 ir_func_t *body = n00bb_cached_body(function);
                 for (uint32_t b = 0; body && b < body->n_blocks; b++) {
                     ir_block_t *block = body->blocks[b];

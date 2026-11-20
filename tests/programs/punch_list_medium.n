@@ -1,8 +1,3 @@
-# Regression checks for the medium punch-list fixes; run by
-# tests/punch_list_medium.sh, which expects exactly `ok` on stderr.
-
-# Assigning a present value to an option variable proves it present where
-# only such assignments reach (#7).
 func assigned() -> int {
     var x: int? = nil
     x = 9
@@ -23,7 +18,6 @@ require assigned_on_both_paths(true) == 2
 require assigned_on_both_paths(false) == 3
 require assigned_from_parameter(4) == 8
 
-# An inferred option is narrowed by a `nil` test like an annotated one (#32).
 func inferred_option() -> int {
     let d = {"a": 1}
     let w = d["a"]
@@ -42,7 +36,6 @@ func inferred_option_var() -> int {
 }
 require inferred_option() == 2 and inferred_option_var() == 2
 
-# A string literal converts to `Array[byte]`, holding its UTF-8 bytes (#4).
 let greeting: Array[byte] = "hi"
 const hex_digits: Array[byte][16] = "0123456789abcdef"
 func byte_count(x: Array[byte]) -> uint {
@@ -56,8 +49,6 @@ require len(greeting) == 2 and greeting[1] == 0x69
 require byte_count("abc") == 3 and hex_digits[15] == 0x66
 require accented() == 3
 
-# A `P` passed where a `View[P]` is wanted is viewed in place, as `ref p`
-# would be (#8): variables, fields and temporaries alike.
 record Style {
     weight: int
 }
@@ -84,8 +75,6 @@ require style_weight(plain_style) == 1 and style_weight(ref plain_style) == 1
 require viewed_local() == 9 and viewed_field() == 4
 require style_weight(make_style(7)) == 7
 
-# A value casts to a trait its type implements (#5); the cast checks the
-# implementation and keeps the value.
 trait Scales {
     func scale(self: 'S, by: int) -> int
 }
@@ -104,7 +93,6 @@ func cast_in_function() -> int {
 }
 require module_scales.scale(2) == 6 and cast_in_function() == 10
 
-# `+=`, `-=`, `&=` and `|=` on an atomic are one atomic update (#17).
 var atomic_total: Atomic[int] = 0
 var atomic_flags: Atomic[u8] = 0
 func atomic_updates() -> int {
@@ -121,8 +109,6 @@ func atomic_bits() -> u8 {
 }
 require atomic_updates() == 13 and atomic_bits() == 2
 
-# Chained operators in a generic function specialize to primitive
-# operations, `i:N` and `u:N` included (#41).
 func chained(a: 'T, b: 'T) -> 'T {
     return ((a * b + a - b) / b) % a
 }
@@ -137,7 +123,6 @@ require chained(chain_i, chain_j) == cast[i:10](2)
 require chained(chain_u, chain_v) == 1
 require flipped_sum(cast[u:10](1), cast[u:10](2)) == cast[u:10](1020)
 
-# Every trait in `'T: A + B` lends its methods (#26).
 trait Named {
     func name(self: 'N) -> string
 }
@@ -158,8 +143,6 @@ func describe(x: 'T) -> int where 'T: Named + Sized {
 }
 require describe(cast[Labeled]((v = 2))) == 5
 
-# With a `__cmp` and no `__equal`, `==` follows `__cmp`; an `__equal` wins
-# over it (#26).
 record By_Value {
     v: int
     tag: int
@@ -189,8 +172,6 @@ let tag_two: By_Tag = (v = 1, tag = 2)
 let tag_three: By_Tag = (v = 5, tag = 1)
 require !(tag_one == tag_two) and tag_one == tag_three and tag_one < tag_three
 
-# With no `fail:` clause, a function's failure type is inferred from its
-# body, mutual recursion included (#9).
 func parsed(x: int) -> int {
     if x < 0 {
         fail "negative"
@@ -228,10 +209,6 @@ require or_minus_one(3) == 3 and or_minus_one(-1) == -1
 require untyped_or_minus_one(3) == 3 and untyped_or_minus_one(-1) == -1
 require counted_or_minus_one(4) == 0 and counted_or_minus_one(3) == -1
 
-# Type testing (#16): `typecase` on an option tests whether it holds a
-# value; a type named where a value goes is its `typespec`; `typeof`
-# results compare, at module level too; `has_type` tests a value's type
-# and narrows it in the `if` it guards.
 func option_kind(x: int?) -> int {
     typecase x {
         case nil { return 0 }
@@ -269,9 +246,6 @@ require plus_one(cast[Any] declared_int) == 4 and plus_one(cast[Any] "a") == 0
 require describe_any(cast[Any] "hi") == "hi!"
 require describe_any(cast[Any] declared_int) == "number"
 
-# `typespec[T]` writes any type as a value; `has_type` also takes a
-# `typespec` held in a variable, a trait included, and checks it at run
-# time; assigning a narrowed variable ends its narrowing.
 let maybe_int: int? = 3
 let some_names: List[string] = ["a"]
 require typeof(maybe_int) == typespec[int?]
@@ -298,7 +272,6 @@ func reassigned(start: Any) -> string {
 }
 require reassigned(cast[Any] declared_int) == "changed"
 
-# A declared union return takes any of its members, literals included.
 func int_or_string(flag: bool) -> int | string {
     if flag {
         return 3
@@ -314,9 +287,6 @@ func union_kind(flag: bool) -> string {
 }
 require union_kind(true) == "int" and union_kind(false) == "three"
 
-# A module variable comptime sets starts with that value at run time, its
-# declaration's initializer included, unless the runtime initializer
-# writes it again (#13).
 var comptime_counter: int = 0
 if comptime() {
     comptime_counter = 42
@@ -336,11 +306,6 @@ if !comptime() {
     require comptime_values() == 4200 + 10 + 1
 }
 
-# A trait method declared `fail: 'F` may be implemented by a method that
-# can fail and by one that cannot; a generic caller works with either.
-# Keyword parameters, generic ones included, pass through a trait call,
-# given or omitted. A result typed by the trait (`'V`) takes the bound
-# method's type.
 trait Opener {
     func opened(self: 'T) -> 'V fail: 'F
     func closed(self: 'T, value: 'V, note: 'E? = nil) -> int fail: 'G
@@ -375,7 +340,6 @@ func opened_only(o: 'O) -> int fail: string where 'O: Opener {
     let v = o.opened()!
     return 0
 }
-// A plain value is passed where the trait's parameter is an option.
 func closed_plainly(o: 'O) -> int fail: string where 'O: Opener {
     let note: int? = 4
     return o.closed(o.opened()!, note = note)!
@@ -392,13 +356,6 @@ if !comptime() {
     require (try { -> closed_plainly(calm)! } fail (e) { -> -1 }) == 20
 }
 
-# `with` uses a manager's `Context_Manager` methods: `__enter` runs before the
-# block and what it returns is bound; `__exit` runs on every way out of the
-# block, given that value and, when the block failed, the failure as
-# `failure`. An `__exit` that returns a `bool` drops the failure by returning
-# `true`; one that returns nothing never drops one. Either hook may fail.
-# Managers are entered left to right and left in reverse. The manager's
-# type need not be known until typing.
 var with_log: string = ""
 
 record Tag {
@@ -515,14 +472,10 @@ func with_loop() -> int {
     }
     return total
 }
-// A `with` outside a `try` may fail, like a `!`: with no `fail:`, the
-// function fails as its managers do. (`with_bound`, whose managers can't
-// fail, is called plainly.)
 func gated_value(open: bool) -> int {
     with gate("g", open) { return 1 }
     return 0
 }
-// Inside a `try`, the managers' failures are the `try`'s to handle.
 func gated_or(open: bool) -> int {
     try {
         with gate("t", open) { return 1 }
@@ -530,7 +483,6 @@ func gated_or(open: bool) -> int {
     return 0
 }
 
-// A loop over a container calls `__cleanup` once on every way out.
 record Countdown {
     from: int
 }
@@ -613,13 +565,10 @@ func switch_break(x: int) -> int {
     }
     return seen
 }
-// A `with` used as a value is its body's value, once `__exit` has run.
 func with_value() -> int {
     let v = with t = tag_named("v") { -> t.byte_len() * 10 }
     return v
 }
-// A function with a `with` may fail as its managers do; these can't, so a
-// call to it is a plain value, bound and used like any other.
 func with_value_bound() -> int {
     let v = with_value()
     return v + 1
@@ -638,8 +587,6 @@ func with_value_looped() -> int {
     }
     return total
 }
-// When its body fails it has no value, and the failure goes on, after
-// `__exit` has run.
 func with_value_failing() -> int fail: string {
     return with tag_named("f") { -> risky(quiet_four())! }
 }
@@ -651,7 +598,6 @@ func risky(self: Quiet_Four) -> int fail: string {
     if self.n > 3 { fail "four" }
     return self.n
 }
-// A `break` leaves the innermost loop or `switch`, here the loop.
 func loop_in_switch(x: int) -> int {
     var n = 0
     switch x {

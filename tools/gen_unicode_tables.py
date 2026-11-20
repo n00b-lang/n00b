@@ -1,33 +1,4 @@
 #!/usr/bin/env python3
-"""
-gen_unicode_tables.py — Download Unicode Character Database files and
-generate optimized two-stage lookup tables as n00b source for the unicode
-package.
-
-Each standard is pinned separately because they can publish on their own
-schedules. As of Unicode 18.0.0 the UCD, UCA, security, IDNA and emoji
-data are synchronized and colocated under Public/18.0.0/, so every pin
-defaults to 18.0.0. Mixing pins across major versions is not supported
-and will produce tables that disagree with each other.
-
-Usage:
-    python3 tools/gen_unicode_tables.py [--ucd-version 18.0.0]
-                                [--uca-version 18.0.0]
-                                [--security-version 18.0.0]
-                                [--idna-version 18.0.0]
-                                [--cache-dir .unicode_cache]
-                                [--allow-downloads] [--strict|--no-strict]
-                                [--check-inputs]
-
-Table data lives in little-endian .bin blobs next to the modules, baked in
-with the 'embed literal. A numeric table of u8/u16/u32/u64 elements is the
-packed element array, embedded as <table>_values with that element type; a
-table of fixed-width rows is the row-major packed u32 array. A string table
-is (count + 1) u32 byte offsets from the blob start followed by the UTF-8
-bytes, so string i spans offsets i to i + 1; it is embedded as
-<table>_bytes and decoded through internal.blob. Each table has an accessor
-named after it.
-"""
 
 import argparse
 import hashlib
@@ -39,10 +10,6 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 TABLE_PROLOGUE = ""
 
@@ -56,13 +23,12 @@ N00B_TYPES = {"uint8_t": "u8", "uint16_t": "u16", "uint32_t": "u32",
               "uint64_t": "u64", "int8_t": "i8"}
 
 
-BLOCK_SIZE = 256  # Stage-2 block size (codepoints per block)
-MAX_CP = 0x110000  # U+0000..U+10FFFF
-NUM_BLOCKS = MAX_CP // BLOCK_SIZE  # 4352 stage-1 entries
+BLOCK_SIZE = 256
+MAX_CP = 0x110000
+NUM_BLOCKS = MAX_CP // BLOCK_SIZE
 
 UNICODE_BASE = "https://www.unicode.org/Public/{version}/ucd"
 
-# Files to download relative to the UCD base
 UNICODE_FILES = [
     "UnicodeData.txt",
     "PropList.txt",
@@ -86,7 +52,6 @@ UNICODE_FILES = [
     "extracted/DerivedBidiClass.txt",
 ]
 
-# Test data files
 TEST_FILES = [
     "NormalizationTest.txt",
     "auxiliary/GraphemeBreakTest.txt",
@@ -96,9 +61,7 @@ TEST_FILES = [
     "BidiCharacterTest.txt",
 ]
 
-# Additional files with special URL patterns
 SPECIAL_FILES = {
-    # version-specific subdirs
     "allkeys.txt":       ("uca", "https://www.unicode.org/Public/{version}/uca/allkeys.txt"),
     "CollationTest.zip": ("uca", "https://www.unicode.org/Public/{version}/uca/CollationTest.zip"),
     "confusables.txt":   ("security", "https://www.unicode.org/Public/{version}/security/confusables.txt"),
@@ -312,10 +275,6 @@ EXPECTED_TEST_DATA_FILES = ([f.split("/")[-1] for f in TEST_FILES]
 REQUIRED_TEST_DATA_FILES = EXPECTED_TEST_DATA_FILES
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def fail(message):
     raise SystemExit(f"ERROR: {message}")
 
@@ -357,7 +316,6 @@ def verify_sha256(key, data):
 
 
 def download_file(url, dest, allow_downloads, key):
-    """Ensure file exists locally, optionally downloading when missing."""
     if dest.exists() and not dest.is_file():
         fail(f"Unicode cache path is not a file: {dest}")
     if dest.exists() and dest.stat().st_size > 0:
@@ -395,7 +353,6 @@ def download_file(url, dest, allow_downloads, key):
 
 
 def copy_cached_file(src, dest):
-    """Populate generated test data from the required cache."""
     if dest.exists() and not dest.is_file():
         fail(f"Unicode test data path is not a file: {dest}")
     if dest.exists() and dest.stat().st_size > 0:
@@ -438,7 +395,6 @@ def validate_generated_outputs(out_dir, conformance_dir, conformance_program,
 
 
 def download_all(versions, cache, test_data_dir, allow_downloads):
-    """Populate cache/test data and report missing files."""
     version = versions["ucd"]
     base    = UNICODE_BASE.format(version=version)
 
@@ -482,10 +438,6 @@ def download_all(versions, cache, test_data_dir, allow_downloads):
 
 
 def parse_semicolon_file(path, fields=None):
-    """Parse a standard UCD semicolon-delimited file.
-    Yields (codepoint_or_range, [field_values]).
-    codepoint_or_range is (start, end) tuple.
-    """
     if not is_nonempty_file(path):
         return
     with open(path, "r", encoding="utf-8") as f:
@@ -539,7 +491,6 @@ def property_value_aliases(cache_dir, prop):
 
 
 def parse_unicode_data(path):
-    """Parse UnicodeData.txt which has a special format with ranges."""
     entries = {}
     if not is_nonempty_file(path):
         return entries
@@ -555,12 +506,10 @@ def parse_unicode_data(path):
 
             if name.endswith(", First>"):
                 prev_range_start = cp
-                # Store the field data for range fill
                 entries[cp] = parts
                 continue
             elif name.endswith(", Last>"):
                 if prev_range_start is not None:
-                    # Fill in the range with the same properties
                     template = entries[prev_range_start]
                     for c in range(prev_range_start, cp + 1):
                         entries[c] = template[:]
@@ -572,10 +521,6 @@ def parse_unicode_data(path):
 
     return entries
 
-
-# ---------------------------------------------------------------------------
-# Enum definitions — must match the C enums exactly
-# ---------------------------------------------------------------------------
 
 GC_VALUES = [
     "Lu", "Ll", "Lt", "Lm", "Lo",
@@ -601,10 +546,10 @@ BIDI_CLASS_MAP = {v: i for i, v in enumerate(BIDI_CLASS_VALUES)}
 EAW_VALUES = ["N", "Na", "H", "W", "F", "A"]
 EAW_MAP = {v: i for i, v in enumerate(EAW_VALUES)}
 
-SCRIPT_VALUES = []  # Populated from Scripts.txt
+SCRIPT_VALUES = []
 SCRIPT_MAP = {}
 
-BLOCK_VALUES = []  # Populated from Blocks.txt
+BLOCK_VALUES = []
 BLOCK_MAP = {}
 
 LINE_BREAK_VALUES = [
@@ -649,7 +594,6 @@ SENTENCE_BREAK_MAP = {v: i for i, v in enumerate(SENTENCE_BREAK_VALUES)}
 JOINING_TYPE_VALUES = ["U", "C", "D", "L", "R", "T"]
 JOINING_TYPE_MAP = {v: i for i, v in enumerate(JOINING_TYPE_VALUES)}
 
-# Binary properties — packed into uint64_t bitmask per codepoint
 BINARY_PROPERTIES = [
     "White_Space", "Alphabetic", "Noncharacter_Code_Point",
     "Default_Ignorable_Code_Point", "Deprecated", "Logical_Order_Exception",
@@ -671,14 +615,6 @@ BINARY_PROPERTIES = [
     "Extended_Pictographic",
 ]
 BINARY_PROP_MAP = {v: i for i, v in enumerate(BINARY_PROPERTIES)}
-
-# Quick_Check values: Yes=0, Maybe=1, No=2
-# Pack NFC_QC (2 bits) | NFD_QC (2 bits) | NFKC_QC (2 bits) | NFKD_QC (2 bits)
-# into one uint8_t
-
-# ---------------------------------------------------------------------------
-# Table blobs
-# ---------------------------------------------------------------------------
 
 def embed_const(name, elem, source):
     return (f"const {name}: Array[{elem}] = "
@@ -719,12 +655,7 @@ def emit_strings(f, bin_path, name, strings):
             f"}}\n\n")
 
 
-# ---------------------------------------------------------------------------
-# Two-stage table builder
-# ---------------------------------------------------------------------------
-
 class TwoStageTable:
-    """Build a two-stage lookup table for per-codepoint data."""
 
     def __init__(self, name, c_type, default_value=0):
         self.name = name
@@ -741,13 +672,11 @@ class TwoStageTable:
             self.data[cp] = value
 
     def build(self):
-        """Return (stage1, stage2_flat, unique_blocks_count)."""
         blocks = []
         for i in range(NUM_BLOCKS):
             block = tuple(self.data[i * BLOCK_SIZE:(i + 1) * BLOCK_SIZE])
             blocks.append(block)
 
-        # Deduplicate blocks
         unique = {}
         stage1 = []
         for block in blocks:
@@ -755,7 +684,6 @@ class TwoStageTable:
                 unique[block] = len(unique)
             stage1.append(unique[block])
 
-        # Flatten stage2
         index_to_block = {v: k for k, v in unique.items()}
         stage2 = []
         for i in range(len(unique)):
@@ -764,7 +692,6 @@ class TwoStageTable:
         return stage1, stage2, len(unique)
 
     def generate_n00b(self, out_path):
-        """Write the n00b source file."""
         stage1, stage2, n_unique = self.build()
         print(f"  {self.name}: {n_unique} unique blocks, "
               f"stage1={NUM_BLOCKS * 2}B, "
@@ -794,30 +721,22 @@ class TwoStageTable:
         return sizes.get(self.c_type, 1)
 
 
-# ---------------------------------------------------------------------------
-# Sparse mapping builder
-# ---------------------------------------------------------------------------
-
 class SparseMapping:
-    """Build a sorted array for sparse codepoint→data mappings."""
 
     def __init__(self, name):
         self.name = name
-        self.entries = {}  # cp → data (list of uint32_t or codepoints)
+        self.entries = {}
 
     def add(self, cp, data):
         self.entries[cp] = data
 
     def generate_n00b(self, out_path, append=False):
-        """Write sorted mapping + data array."""
         sorted_cps = sorted(self.entries.keys())
-        # Build data array
         data_array = []
         offsets = {}
         for cp in sorted_cps:
             offsets[cp] = len(data_array)
             vals = self.entries[cp]
-            # Store length first, then values
             data_array.append(len(vals))
             data_array.extend(vals)
 
@@ -840,12 +759,7 @@ class SparseMapping:
               f"{len(data_array)} data words")
 
 
-# ---------------------------------------------------------------------------
-# Generators for each property
-# ---------------------------------------------------------------------------
-
 def gen_categories(cache_dir, out_dir):
-    """Generate General_Category two-stage table from UnicodeData.txt."""
     print("Generating categories.n ...")
     table = TwoStageTable("gc", "uint8_t", GC_MAP["Cn"])
 
@@ -859,7 +773,6 @@ def gen_categories(cache_dir, out_dir):
 
 
 def gen_combining(cache_dir, out_dir):
-    """Generate Canonical_Combining_Class table from UnicodeData.txt."""
     print("Generating combining.n ...")
     table = TwoStageTable("ccc", "uint8_t", 0)
 
@@ -872,7 +785,6 @@ def gen_combining(cache_dir, out_dir):
 
 
 def gen_bidi_class(cache_dir, out_dir):
-    """Generate Bidi_Class table from DerivedBidiClass.txt."""
     print("Generating bidi_class.n ...")
     table = TwoStageTable("bidi", "uint8_t", BIDI_CLASS_MAP["L"])
 
@@ -889,24 +801,21 @@ def gen_bidi_class(cache_dir, out_dir):
 
 
 def gen_bidi_brackets(cache_dir, out_dir):
-    """Generate BidiBrackets tables."""
     print("Generating bidi_brackets.n ...")
 
     brackets = SparseMapping("bidi_bracket")
     for (start, end), fields in parse_semicolon_file(cache_dir / "BidiBrackets.txt"):
         if len(fields) >= 2:
             paired = int(fields[0], 16)
-            bracket_type = 1 if fields[1] == "o" else 2  # 1=open, 2=close
+            bracket_type = 1 if fields[1] == "o" else 2
             brackets.add(start, [paired, bracket_type])
 
     brackets.generate_n00b(out_dir / "bidi_brackets.n")
 
 
 def gen_scripts(cache_dir, out_dir):
-    """Generate Script two-stage table from Scripts.txt."""
     print("Generating scripts.n ...")
 
-    # First pass: collect all script names
     path = cache_dir / "Scripts.txt"
     entries = parse_missing_defaults(path) + list(parse_semicolon_file(path))
     scripts = set()
@@ -916,7 +825,6 @@ def gen_scripts(cache_dir, out_dir):
 
     global SCRIPT_VALUES, SCRIPT_MAP
     SCRIPT_VALUES = sorted(scripts)
-    # Put "Unknown" (or "Common") first
     if "Common" in SCRIPT_VALUES:
         SCRIPT_VALUES.remove("Common")
         SCRIPT_VALUES.insert(0, "Common")
@@ -992,10 +900,8 @@ def gen_scripts(cache_dir, out_dir):
 
 
 def gen_script_extensions(cache_dir, out_dir):
-    """Generate Script_Extensions sparse table from ScriptExtensions.txt."""
     print("Generating script_extensions.n ...")
 
-    # Build abbreviation → full-name map from PropertyValueAliases.txt
     abbrev_map = {}
     pva_path = cache_dir / "PropertyValueAliases.txt"
     require_nonempty_file(pva_path, "Unicode input file")
@@ -1006,11 +912,10 @@ def gen_script_extensions(cache_dir, out_dir):
                 continue
             parts = [p.strip() for p in line.split(";")]
             if len(parts) >= 3 and parts[0] == "sc":
-                abbr = parts[1]  # 4-letter abbreviation
-                full = parts[2]  # Full name
+                abbr = parts[1]
+                full = parts[2]
                 abbrev_map[abbr] = full
 
-    # Parse ScriptExtensions.txt
     scext = SparseMapping("script_ext")
     path = cache_dir / "ScriptExtensions.txt"
     require_nonempty_file(path, "Unicode input file")
@@ -1025,7 +930,6 @@ def gen_script_extensions(cache_dir, out_dir):
             cp_field = parts[0]
             abbrs = parts[1].split()
 
-            # Map abbreviations to script indices
             indices = []
             for abbr in abbrs:
                 full = abbrev_map.get(abbr, abbr)
@@ -1044,7 +948,6 @@ def gen_script_extensions(cache_dir, out_dir):
             else:
                 scext.add(int(cp_field, 16), indices)
 
-    # Find Common and Inherited indices
     common_idx = SCRIPT_MAP.get("Common", 0)
     inherited_idx = SCRIPT_MAP.get("Inherited", 0)
 
@@ -1060,7 +963,6 @@ def gen_script_extensions(cache_dir, out_dir):
 
 
 def gen_blocks(cache_dir, out_dir):
-    """Generate Block ranges from Blocks.txt."""
     print("Generating blocks.n ...")
 
     global BLOCK_VALUES, BLOCK_MAP
@@ -1090,7 +992,6 @@ def gen_blocks(cache_dir, out_dir):
 
 
 def gen_eaw(cache_dir, out_dir):
-    """Generate East_Asian_Width table."""
     print("Generating eaw.n ...")
     table = TwoStageTable("eaw", "uint8_t", EAW_MAP["N"])
 
@@ -1105,7 +1006,6 @@ def gen_eaw(cache_dir, out_dir):
 
 
 def gen_linebreak(cache_dir, out_dir):
-    """Generate Line_Break property table."""
     print("Generating linebreak.n ...")
     table = TwoStageTable("lb", "uint8_t", LINE_BREAK_MAP["XX"])
 
@@ -1130,7 +1030,6 @@ def gen_linebreak(cache_dir, out_dir):
 
 
 def gen_grapheme(cache_dir, out_dir):
-    """Generate Grapheme_Cluster_Break table."""
     print("Generating grapheme.n ...")
     table = TwoStageTable("gcb", "uint8_t", GRAPHEME_BREAK_MAP["Other"])
 
@@ -1152,7 +1051,6 @@ def gen_grapheme(cache_dir, out_dir):
 
 
 def gen_wordbreak(cache_dir, out_dir):
-    """Generate Word_Break table."""
     print("Generating wordbreak.n ...")
     table = TwoStageTable("wb", "uint8_t", WORD_BREAK_MAP["Other"])
 
@@ -1165,7 +1063,6 @@ def gen_wordbreak(cache_dir, out_dir):
 
 
 def gen_sentbreak(cache_dir, out_dir):
-    """Generate Sentence_Break table."""
     print("Generating sentbreak.n ...")
     table = TwoStageTable("sb", "uint8_t", SENTENCE_BREAK_MAP["Other"])
 
@@ -1178,14 +1075,9 @@ def gen_sentbreak(cache_dir, out_dir):
 
 
 def gen_joining(cache_dir, out_dir):
-    """Generate Joining_Type table from ArabicShaping.txt."""
     print("Generating joining.n ...")
     table = TwoStageTable("jt", "uint8_t", JOINING_TYPE_MAP["U"])
 
-    # UAX #44 derives the Joining_Type default rather than listing it:
-    # Mn, Me and Cf default to Transparent, everything else to Non_Joining.
-    # ArabicShaping.txt lists only the exceptions, so seed T first and let
-    # the explicit entries below overwrite it.
     ud = parse_unicode_data(cache_dir / "UnicodeData.txt")
     derived_t = 0
 
@@ -1198,7 +1090,6 @@ def gen_joining(cache_dir, out_dir):
 
     print(f"  joining: {derived_t} codepoints default to T from Mn/Me/Cf")
 
-    # ArabicShaping.txt has format: cp ; name ; joining_type ; joining_group
     path = cache_dir / "ArabicShaping.txt"
     require_nonempty_file(path, "Unicode input file")
     with open(path, "r") as f:
@@ -1224,7 +1115,6 @@ def gen_joining(cache_dir, out_dir):
 
 
 def gen_age(cache_dir, out_dir):
-    """Generate Age ranges from DerivedAge.txt."""
     print("Generating age.n ...")
 
     ages = set()
@@ -1236,7 +1126,7 @@ def gen_age(cache_dir, out_dir):
             entries.append((start, end, age))
 
     age_list = sorted(ages, key=lambda a: tuple(int(x) for x in a.split(".")))
-    age_map = {v: i + 1 for i, v in enumerate(age_list)}  # 0 = unassigned
+    age_map = {v: i + 1 for i, v in enumerate(age_list)}
     age_list = ["Unassigned"] + age_list
 
     table = TwoStageTable("age", "uint8_t", 0)
@@ -1252,11 +1142,9 @@ def gen_age(cache_dir, out_dir):
 
 
 def gen_proplist(cache_dir, out_dir):
-    """Generate binary properties packed into uint64_t."""
     print("Generating proplist.n ...")
     table = TwoStageTable("props", "uint64_t", 0)
 
-    # Parse PropList.txt
     for (start, end), fields in parse_semicolon_file(cache_dir / "PropList.txt"):
         if fields and fields[0] in BINARY_PROP_MAP:
             bit = BINARY_PROP_MAP[fields[0]]
@@ -1264,7 +1152,6 @@ def gen_proplist(cache_dir, out_dir):
                 if cp < MAX_CP:
                     table.data[cp] |= (1 << bit)
 
-    # Parse DerivedCoreProperties.txt
     for (start, end), fields in parse_semicolon_file(
             cache_dir / "DerivedCoreProperties.txt"):
         if fields and fields[0] in BINARY_PROP_MAP:
@@ -1273,7 +1160,6 @@ def gen_proplist(cache_dir, out_dir):
                 if cp < MAX_CP:
                     table.data[cp] |= (1 << bit)
 
-    # Parse emoji properties
     for (start, end), fields in parse_semicolon_file(
             cache_dir / "emoji_emoji-data.txt"):
         if fields and fields[0] in BINARY_PROP_MAP:
@@ -1286,7 +1172,6 @@ def gen_proplist(cache_dir, out_dir):
 
 
 def gen_decomposition(cache_dir, out_dir):
-    """Generate canonical + compatibility decomposition mappings."""
     print("Generating decomposition.n ...")
 
     canonical = SparseMapping("canon_decomp")
@@ -1300,11 +1185,9 @@ def gen_decomposition(cache_dir, out_dir):
         if not decomp:
             continue
 
-        # Check for compatibility tag
         is_compat = False
         if decomp.startswith("<"):
             is_compat = True
-            # Strip tag
             idx = decomp.index(">")
             decomp = decomp[idx + 1:].strip()
 
@@ -1316,7 +1199,6 @@ def gen_decomposition(cache_dir, out_dir):
             compat.add(cp, cps)
         else:
             canonical.add(cp, cps)
-            # Also add to compat (canonical decomps are also compat decomps)
             compat.add(cp, cps)
 
     canonical.generate_n00b(out_dir / "decomposition.n")
@@ -1331,7 +1213,6 @@ def gen_decomposition(cache_dir, out_dir):
 
 
 def gen_composition(cache_dir, out_dir):
-    """Generate canonical composition hash table."""
     print("Generating composition.n ...")
 
     exclusions = set()
@@ -1341,8 +1222,7 @@ def gen_composition(cache_dir, out_dir):
             for cp in range(start, end + 1):
                 exclusions.add(cp)
 
-    # Build composition pairs from UnicodeData.txt canonical decompositions
-    compositions = {}  # (starter, combining) → composed
+    compositions = {}
     ud = parse_unicode_data(cache_dir / "UnicodeData.txt")
     for cp, parts in ud.items():
         if len(parts) <= 5:
@@ -1353,7 +1233,7 @@ def gen_composition(cache_dir, out_dir):
 
         cps = [int(x, 16) for x in decomp.split()]
         if len(cps) != 2:
-            continue  # Only binary decompositions compose
+            continue
 
         if cp in exclusions:
             continue
@@ -1361,7 +1241,6 @@ def gen_composition(cache_dir, out_dir):
         starter, combining = cps[0], cps[1]
         compositions[(starter, combining)] = cp
 
-    # Build open-addressing hash table
     n_entries = len(compositions)
     table_size = 1
     while table_size < n_entries * 2:
@@ -1398,11 +1277,8 @@ def gen_composition(cache_dir, out_dir):
 
 
 def gen_normprops(cache_dir, out_dir):
-    """Generate NFC/NFD/NFKC/NFKD Quick_Check values."""
     print("Generating normprops.n ...")
 
-    # QC values: Y=0, M=1, N=2
-    # Pack: bits 0-1=NFC_QC, 2-3=NFD_QC, 4-5=NFKC_QC, 6-7=NFKD_QC
     table = TwoStageTable("nqc", "uint8_t", 0)
 
     qc_map = {"Y": 0, "M": 1, "N": 2}
@@ -1424,10 +1300,8 @@ def gen_normprops(cache_dir, out_dir):
 
 
 def gen_casemap(cache_dir, out_dir):
-    """Generate simple + full case mappings + case folding."""
     print("Generating casemap.n ...")
 
-    # Simple case mappings from UnicodeData.txt fields 12, 13, 14
     simple_upper = SparseMapping("simple_upper")
     simple_lower = SparseMapping("simple_lower")
     simple_title = SparseMapping("simple_title")
@@ -1441,7 +1315,6 @@ def gen_casemap(cache_dir, out_dir):
         if len(parts) > 14 and parts[14].strip():
             simple_title.add(cp, [int(parts[14].strip(), 16)])
 
-    # Full case mappings from SpecialCasing.txt
     full_upper = SparseMapping("full_upper")
     full_lower = SparseMapping("full_lower")
     full_title = SparseMapping("full_title")
@@ -1464,7 +1337,6 @@ def gen_casemap(cache_dir, out_dir):
             if len(parts) >= 5 and parts[4].split() == ["Final_Sigma"]:
                 final_sigma_lower.add(cp, lower_cps)
                 continue
-            # Skip conditional mappings (have a 5th field with conditions)
             if len(parts) >= 5 and parts[4].strip():
                 continue
             title_cps = [int(x, 16) for x in parts[2].split()] if parts[2].strip() else []
@@ -1477,7 +1349,6 @@ def gen_casemap(cache_dir, out_dir):
             if upper_cps:
                 full_upper.add(cp, upper_cps)
 
-    # Case folding from CaseFolding.txt
     simple_fold = SparseMapping("casefold_simple")
     full_fold = SparseMapping("casefold_full")
 
@@ -1488,10 +1359,8 @@ def gen_casemap(cache_dir, out_dir):
         mapping = [int(x, 16) for x in fields[1].split()]
 
         if status == "C" or status == "S":
-            # Common/Simple — single codepoint
             simple_fold.add(start, mapping)
         if status == "C" or status == "F":
-            # Common/Full — possibly multi-codepoint
             full_fold.add(start, mapping)
 
     with open(out_dir / "casemap.n", "w") as f:
@@ -1510,7 +1379,6 @@ def gen_casemap(cache_dir, out_dir):
 
 
 def gen_confusables(cache_dir, out_dir):
-    """Generate confusable mappings for skeleton algorithm."""
     print("Generating confusables.n ...")
 
     confusables = SparseMapping("confusable")
@@ -1525,7 +1393,6 @@ def gen_confusables(cache_dir, out_dir):
             parts = [p.strip() for p in line.split(";")]
             if len(parts) < 3:
                 continue
-            # Format: source ; target ; type
             src_cps = [int(x, 16) for x in parts[0].split()]
             tgt_cps = [int(x, 16) for x in parts[1].split()]
 
@@ -1536,10 +1403,8 @@ def gen_confusables(cache_dir, out_dir):
 
 
 def gen_identifiers(cache_dir, out_dir):
-    """Generate Identifier_Status/Type tables."""
     print("Generating identifiers.n ...")
 
-    # Identifier_Status: Allowed=1, Restricted=0
     table = TwoStageTable("id_status", "uint8_t", 0)
     path = cache_dir / "IdentifierStatus.txt"
 
@@ -1553,18 +1418,15 @@ def gen_identifiers(cache_dir, out_dir):
 
 
 def gen_idna(cache_dir, out_dir):
-    """Generate IDNA mapping table."""
     print("Generating idna.n ...")
 
-    # IDNA statuses: valid=0, ignored=1, mapped=2, deviation=3, disallowed=4,
-    #                disallowed_STD3_valid=5, disallowed_STD3_mapped=6
     idna_status_map = {
         "valid": 0, "ignored": 1, "mapped": 2, "deviation": 3,
         "disallowed": 4, "disallowed_STD3_valid": 5,
         "disallowed_STD3_mapped": 6,
     }
 
-    status_table = TwoStageTable("idna_status", "uint8_t", 4)  # default: disallowed
+    status_table = TwoStageTable("idna_status", "uint8_t", 4)
     mapping = SparseMapping("idna_map")
 
     path = cache_dir / "IdnaMappingTable.txt"
@@ -1575,7 +1437,6 @@ def gen_idna(cache_dir, out_dir):
         if status in idna_status_map:
             status_table.set_range(start, end, idna_status_map[status])
 
-            # If there's a mapping
             if len(fields) > 1 and fields[1].strip():
                 map_cps = [int(x, 16) for x in fields[1].split()]
                 for cp in range(start, end + 1):
@@ -1586,21 +1447,9 @@ def gen_idna(cache_dir, out_dir):
 
 
 def gen_names(cache_dir, out_dir):
-    """Generate Unicode codepoint→name and name→codepoint tables from
-    UnicodeData.txt.
-
-    Skips range placeholders (`<CJK Ideograph>`, `<Hangul Syllable>`,
-    etc.) — those codepoints have algorithmically-computed names that
-    a future revision can layer on top.  Explicit-name codepoints
-    (ASCII, Latin, Cyrillic, Greek, symbols, emoji-style names, etc.)
-    are emitted into a sorted array of (cp, name-offset) records plus
-    a packed string pool of NUL-terminated names.
-    """
     print(f"Generating {out_dir}/names.n")
     ud = parse_unicode_data(cache_dir / "UnicodeData.txt")
 
-    # Filter to explicit names (skip <...> placeholders, control char
-    # entries with empty names, etc.).
     entries = []
     for cp in sorted(ud.keys()):
         name = ud[cp][1]
@@ -1608,8 +1457,6 @@ def gen_names(cache_dir, out_dir):
             continue
         entries.append((cp, name))
 
-    # Build a string pool with offsets.  Names share no prefixes
-    # in UnicodeData so a simple concat is fine.
     pool = bytearray()
     offsets = []
     for cp, name in entries:
@@ -1659,11 +1506,6 @@ def gen_names(cache_dir, out_dir):
 
 
 def _parse_break_suite(path):
-    """Parse a UAX segmentation test file into (cps, boundaries) cases.
-
-    Each line alternates a boundary marker with a codepoint, starting and
-    ending with a marker.  U+00F7 marks a break, U+00D7 a non-break.
-    """
     cases = []
 
     with open(path, encoding="utf-8") as f:
@@ -1852,10 +1694,6 @@ def _encode_collation_suite(cases):
 
 
 def _idna_unescape(text):
-    r"""IdnaTestV2 escapes characters as \uXXXX or \x{XXXX}.
-
-    A column written as "" denotes the empty string, per the file header.
-    """
     if text == '""':
         return ""
 
@@ -1882,15 +1720,10 @@ def _idna_unescape(text):
 
 IDNA_STATUS = re.compile(r"[A-Z][0-9A-Za-z_]*")
 
-# Status codes this port does not act on, per the flag table in the
-# IdnaTestV2.txt header. UseSTD3ASCIIRules is false, so U1 never fires.
-# V4 only applies when CheckHyphens is false, and CheckHyphens is true here.
-# X codes describe toUnicode results; this suite exercises toAsciiN.
 IDNA_IGNORED_STATUS = {"U1", "V4"}
 
 
 def _idna_expects_failure(status):
-    """True when a row's status set contains an error this port implements."""
     codes = set(IDNA_STATUS.findall(status))
     codes -= IDNA_IGNORED_STATUS
     codes = {c for c in codes if not c.startswith("X")}
@@ -1899,12 +1732,6 @@ def _idna_expects_failure(status):
 
 
 def _parse_idna_suite(path):
-    """IdnaTestV2 rows for toAsciiN, both the passes and the failures.
-
-    Column 4 is toAsciiN and column 5 its status; a blank column 5 inherits
-    column 3 (toUnicodeStatus), per the file header. A row whose surviving
-    status set is non-empty expects toAscii to report an error.
-    """
     cases = []
     skipped = 0
 
@@ -1973,7 +1800,6 @@ def _encode_idna_suite(cases):
 
 
 def gen_versions(out_dir, versions):
-    """Emit the UCD version the tables were built from."""
     print("Generating versions.n ...")
 
     with open(out_dir / "versions.n", "w") as f:
@@ -1983,7 +1809,6 @@ def gen_versions(out_dir, versions):
 
 
 def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
-    """Embed the UCD conformance suites as binary blobs."""
     print(f"Generating {out_path.name} ...")
 
     missing = [name for name in REQUIRED_TEST_DATA_FILES
@@ -2063,15 +1888,10 @@ def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
 
 
 def gen_collation(cache_dir, out_dir):
-    """Generate DUCET collation data from allkeys.txt."""
     print("Generating collation.n ...")
 
-    # Parse allkeys.txt format:
-    # codepoint(s) ; [.primary.secondary.tertiary] [.p.s.t] ...
-    # or: @implicitweights ranges
-
-    single_ces = {}    # cp → list of (primary, secondary, tertiary)
-    contractions = {}  # tuple of cps → list of (p, s, t)
+    single_ces = {}
+    contractions = {}
 
     path = cache_dir / "allkeys.txt"
     if not is_nonempty_file(path):
@@ -2115,16 +1935,13 @@ def gen_collation(cache_dir, out_dir):
             cp_strs = parts[0].split()
             cps = [int(x, 16) for x in cp_strs]
 
-            # Parse CE weights
             ce_str = parts[1]
             ces = []
-            # Find all [.XXXX.XXXX.XXXX] or [*XXXX.XXXX.XXXX] patterns
             i = 0
             while i < len(ce_str):
                 if ce_str[i] == '[':
                     end = ce_str.index(']', i)
                     inner = ce_str[i + 1:end]
-                    # Replace * with . for splitting (variable weight marker)
                     inner = inner.replace("*", ".")
                     ce_parts = [x for x in inner.split(".") if x]
                     if len(ce_parts) >= 3:
@@ -2139,12 +1956,9 @@ def gen_collation(cache_dir, out_dir):
             else:
                 contractions[tuple(cps)] = ces
 
-    # Build two-stage table for single-codepoint → CE offset
-    # CE data array stores: [count, p1, s1, t1, p2, s2, t2, ...]
     ce_data = []
     ce_offsets = {}
 
-    # Deduplicate CE sequences
     ce_seq_map = {}
     for cp in sorted(single_ces.keys()):
         ces = single_ces[cp]
@@ -2156,7 +1970,6 @@ def gen_collation(cache_dir, out_dir):
                 ce_data.extend([p, s, t])
         ce_offsets[cp] = ce_seq_map[key]
 
-    # Two-stage table mapping cp → offset into ce_data
     table = TwoStageTable("ducet", "uint32_t", 0xFFFFFFFF)
     for cp, offset in ce_offsets.items():
         table.set(cp, offset)
@@ -2171,8 +1984,6 @@ def gen_collation(cache_dir, out_dir):
         f.write(f"const contraction_count: u32 = {len(sorted_contr)}\n\n")
 
         if sorted_contr:
-            # Contraction index: {cp1, cp2, ..., 0, ce_offset}
-            # For simplicity, store as flat array with sentinel
             contr_data = []
             contr_index = []
             for cps, ces in sorted_contr:
@@ -2228,10 +2039,6 @@ def gen_collation(cache_dir, out_dir):
           f"{len(implicit_ranges)} implicit-weight ranges")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(description="Generate UCD tables")
     parser.add_argument("--ucd-version", default="18.0.0",
@@ -2277,7 +2084,6 @@ def main():
         "cldr":     args.cldr_version,
     }
 
-    # Resolve paths relative to CWD (works both standalone and from meson)
     cache_dir = UnicodeCache(Path(args.cache_dir).resolve(), versions)
     out_dir = Path(args.out_dir).resolve()
     conformance_dir = Path(args.conformance_dir).resolve()
@@ -2345,7 +2151,6 @@ def main():
         print("Unicode inputs are ready.")
         return 0
 
-    # Generate all tables
     gen_categories(cache_dir, out_dir)
     gen_combining(cache_dir, out_dir)
     gen_bidi_class(cache_dir, out_dir)

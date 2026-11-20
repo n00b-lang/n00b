@@ -90,7 +90,6 @@ record Bump layout(c) {
     cache:      Atomic[Ref[Block_Metadata]?]
 }
 
-// Los Large Object Store
 record Los_Obj layout(c) {
     next:         Ref[Los_Obj]?
     final_next:   Ref[Los_Obj]?
@@ -662,7 +661,6 @@ inline func bump_room(b: Ref[Bump]) -> uint {
             return cast[uint](distance)
         }
         require false
-        // should be unreachable
     }
     return 0
 }

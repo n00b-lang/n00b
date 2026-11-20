@@ -7,9 +7,6 @@ import internal.lex.spec
 import internal.lex.load
 import internal.lex.chars
 
-// The compiled lexer: the spec's blocks turned into the tables the
-// tokenizer runs on.
-
 record Comment {
     open:   string
     close:  string
@@ -269,8 +266,6 @@ func is_line_end(lx: Lexer, c: char) -> bool {
     return internal.lex.chars.contains(lx.newline, c)
 }
 
-// Whether `c` can continue a word. A spec without identifiers still has
-// words, such as the `abc` in `12abc`: they are Unicode identifiers.
 func continues_identifier(lx: Lexer, c: char) -> bool {
     if lx.identifiers.len() == 0 {
         return internal.grammar.model.is_identifier_continue(c)
@@ -282,8 +277,6 @@ func continues_identifier(lx: Lexer, c: char) -> bool {
     }
     return false
 }
-
-// ---- Compiling --------------------------------------------------------------
 
 object Compiler {
     lexer:  Lexer
@@ -314,8 +307,6 @@ private func looks_like_class(text: string) -> bool {
     return internal.lex.spec.is_token_block(text)
 }
 
-// A grammar class by name. An unknown name is an error when the spec
-// itself wrote it; from a base spec it is dropped.
 private func class_named(c: Compiler, text: string, span: internal.diag.Span,
                          own: bool) -> internal.grammar.model.Token_Id? {
     let found: internal.grammar.model.Token_Class? =
@@ -352,7 +343,6 @@ private func setting_class(c: Compiler, b: internal.lex.spec.Block,
     return class_named(c, v.text, v.span, s.own)
 }
 
-// Token ids for a list of classes and literals, as in `not-after`.
 private func token_set(c: Compiler, b: internal.lex.spec.Block, key: string)
     -> Dict[u128, bool] {
     var out: Dict[u128, bool] = new[Dict[u128, bool]]()
@@ -411,8 +401,6 @@ private func policy(c: Compiler, b: internal.lex.spec.Block, key: string,
     return fallback
 }
 
-// Texts from a setting's first group, each written case expanded when the
-// setting says `any case`.
 private func texts(b: internal.lex.spec.Block, key: string) -> List[string] {
     var out: List[string] = []
     let any_case: bool = internal.lex.spec.has_modifier(b, key, "any case")
@@ -442,7 +430,6 @@ private func add_unique(out: List[string], text: string) {
     out.append(text)
 }
 
-// Every upper/lower spelling of an ASCII word.
 private func cases(text: string) -> List[string] {
     var out: List[string] = []
     out.append("")
@@ -467,10 +454,6 @@ private func joined(b: internal.lex.spec.Block, key: string) -> string {
     return join(texts(b, key), "")
 }
 
-// ---- Character sets -------------------------------------------------------
-
-// Adds the terms of a set expression: names, ranges and characters joined
-// by `+` and `-`. A term with no operator before it gets `add`.
 private func build(c: Compiler, into: List[internal.lex.chars.Step],
                    values: List[internal.lex.spec.Value], add: bool,
                    start: bool) {
@@ -549,9 +532,6 @@ private func ascii_set(c: Compiler, b: internal.lex.spec.Block, key: string)
     return internal.lex.chars.ascii_members(pred_of(c, b, key))
 }
 
-// ---- Recovery -------------------------------------------------------------
-
-// `on-error`: `keep going` (the default), `skip to CHARS`, or `stop`.
 private func on_error(c: Compiler, b: internal.lex.spec.Block,
                       class: internal.grammar.model.Token_Id?, quoted: bool) {
     if class == nil {
@@ -584,8 +564,6 @@ private func on_error(c: Compiler, b: internal.lex.spec.Block,
     }
     c.lexer.recoveries[internal.grammar.model.raw_token_id(class)] = r
 }
-
-// ---- Comments, regions, directives ------------------------------------------
 
 private func strip_fill(text: string, fill: string, front: bool) -> string {
     let n: uint = byte_len(text)
@@ -653,8 +631,6 @@ private func directives(c: Compiler, b: internal.lex.spec.Block,
         c.lexer.directives.append((open = open, eol = eol, class = class))
     }
 }
-
-// ---- Strings ----------------------------------------------------------------
 
 private func escapes(c: Compiler, b: internal.lex.spec.Block) -> Escapes {
     var esc: Escapes = (constrained = false,
@@ -800,11 +776,6 @@ private func multiline(multi: List[string], quote: string) -> bool {
     return false
 }
 
-// ---- Numbers ----------------------------------------------------------------
-
-// One side of a number form: what an integer or a float block says about
-// numbers with a given prefix. Integer and float sides with the same prefix
-// become one Number_Form.
 record Number_Side {
     prefix:   string
     is_float: bool
@@ -910,7 +881,6 @@ private func allows(side: Number_Side?, shape: string) -> bool {
     return false
 }
 
-// Joins the integer and float sides that share a prefix into Number_Forms.
 private func number_forms(c: Compiler) {
     var order: List[string] = []
     var ints: Dict[string, Number_Side] = new[Dict[string, Number_Side]]()
@@ -968,8 +938,6 @@ private func number_forms(c: Compiler) {
     }
 }
 
-// A suffix written on both sides with the same result applies to both;
-// otherwise each applies only to its own side.
 private func merged_suffixes(i: Number_Side?, f: Number_Side?) -> List[Suffix] {
     var all: List[Suffix] = []
     if i != nil {
@@ -1013,8 +981,6 @@ private func same_class(a: internal.grammar.model.Token_Id?,
     return internal.grammar.model.raw_token_id(a) ==
         internal.grammar.model.raw_token_id(b)
 }
-
-// ---- Identifiers and sigils -------------------------------------------------
 
 private func identifier(c: Compiler, b: internal.lex.spec.Block,
                         class: internal.grammar.model.Token_Id?) {
@@ -1082,11 +1048,8 @@ private func sigil(c: Compiler, b: internal.lex.spec.Block,
     }
 }
 
-// ---- Other token kinds ------------------------------------------------------
-
 private func regex(c: Compiler, b: internal.lex.spec.Block,
                    class: internal.grammar.model.Token_Id?) {
-    // Not `texts`: an opener and closer can be the same, as in `/ /`.
     var delims: List[string] = []
     for v in internal.lex.spec.head(b, "delimiters") {
         delims.append(internal.lex.chars.decoded(v.text))
@@ -1167,8 +1130,6 @@ private func embed(c: Compiler, b: internal.lex.spec.Block,
         close_class = setting_class(c, b, "close-tag"), class = class))
 }
 
-// ---- layout and source --------------------------------------------------------
-
 private func layout(c: Compiler, b: internal.lex.spec.Block) {
     var l: Layout = c.lexer.layout
     l.brackets = joined(b, "brackets")
@@ -1221,7 +1182,6 @@ private func source(c: Compiler, b: internal.lex.spec.Block) {
     if internal.lex.spec.has(b, "newline") {
         c.lexer.newline = pred_of(c, b, "newline")
     }
-    // `reject:` can name these, as in `Whitespace - space - newline`.
     c.sets["space"] = c.lexer.space
     c.sets["newline"] = c.lexer.newline
     if internal.lex.spec.has(b, "reject") {
@@ -1244,8 +1204,6 @@ private func source(c: Compiler, b: internal.lex.spec.Block) {
     }
     c.lexer.layout = l
 }
-
-// ---- Tables -----------------------------------------------------------------
 
 func longest_first(texts: List[string]) -> Array[uint] {
     var shortness: List[uint] = []
@@ -1389,7 +1347,6 @@ private func value_class(lexer: Lexer, id: internal.grammar.model.Token_Id?) {
     }
 }
 
-// Classes after which a line end can end a statement.
 private func value_classes(lexer: Lexer) {
     for rule in lexer.identifiers {
         value_class(lexer, rule.class)
@@ -1419,16 +1376,10 @@ private func value_classes(lexer: Lexer) {
     }
 }
 
-// ---- Entry point --------------------------------------------------------------
-
-// An interpolated string block names its pieces' classes itself.
 private func has_pieces(b: internal.lex.spec.Block) -> bool {
     return b.kind == "string" and internal.lex.spec.has(b, "start")
 }
 
-// The class a token block produces. A block from a base spec whose class
-// the grammar doesn't declare is dropped quietly; the spec's own block is
-// an error.
 private func block_class(c: Compiler, b: internal.lex.spec.Block)
     -> internal.grammar.model.Token_Id? {
     let emits: List[internal.lex.spec.Value] = internal.lex.spec.head(b,
@@ -1455,7 +1406,6 @@ private func token_block(c: Compiler, b: internal.lex.spec.Block) {
         var form: internal.lex.spec.Block = b
         form.settings = settings
         if kind == "identifier" and texts(form, "prefix").len() > 0 {
-            // Rust's r#match: a prefixed identifier is a sigil.
             for p in texts(form, "prefix") {
                 c.lexer.sigils.append((prefix = p, digits = false,
                     before_string = false, unless_closed = false,
@@ -1494,7 +1444,6 @@ private func token_block(c: Compiler, b: internal.lex.spec.Block) {
         }
     }
     on_error(c, b, class, b.kind == "string")
-    // An interpolated string's pieces; an identifier's `start` is a set.
     if b.kind == "string" and internal.lex.spec.has(b, "start") {
         on_error(c, b, setting_class(c, b, "start"), true)
         on_error(c, b, setting_class(c, b, "middle"), true)

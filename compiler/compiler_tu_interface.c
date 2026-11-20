@@ -76,7 +76,6 @@ n00bb_interface_metadata_index_build(n00bb_interface_context_t *loader)
                                metadata.owner_name, metadata.key,
                                metadata.version);
             core_string_t text = core_buffer_string(&key);
-            // The first interface that has an entry wins, as in a scan.
             if (core_dict_contains(&index->entries, &text)) {
                 core_buffer_release(&key);
                 continue;
@@ -394,8 +393,6 @@ materialize_interface_callback(n00bb_interface_context_t *loader,
 
 enum { ENUM_VALUES_HEADER = 16 };
 
-// Reads the storage an enum's interface records: whether it is open, and
-// its declared or chosen storage width and signedness.
 static bool
 decode_interface_enum_storage(const uint8_t *data, size_t size,
                               n00bb_enum_range_t *range)
@@ -2078,8 +2075,6 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     CORE_STRING_STATIC("n00b.record-layout"), 1,
                     &layout_size);
                 if (layout) {
-                    // The policy, then for `align(N)` N in 4 little-endian
-                    // bytes.
                     uint32_t alignment = layout_size == 5
                         ? (uint32_t)layout[1] | (uint32_t)layout[2] << 8
                             | (uint32_t)layout[3] << 16
@@ -2288,9 +2283,6 @@ restore_interface_litmod_aliases(n00bb_interface_context_t *loader,
     return at == size;
 }
 
-// Declares a cached module's symbols from its interface. Every module of an
-// import cycle is restored before any of them resolves its package exports,
-// since a package can export a whole module from later in the cycle.
 bool
 restore_semantic_unit(void *context, core_translation_unit_t *unit)
 {

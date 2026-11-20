@@ -1,2 +1,2 @@
-tests/diagnostics/lower/value_owner.n:6:13: error N00B-S0103: `->` ends a body of an `if` statement, which isn't used as a value
+tests/diagnostics/lower/value_owner.n:4:13: error N00B-S0103: `->` ends a body of an `if` statement, which isn't used as a value
   help: to use the value, use the `if` as one, as in `let x = if ...` or `-> if ...`; otherwise remove the `->`

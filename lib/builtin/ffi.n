@@ -5,12 +5,10 @@ import sys.gc.alloc
 import sys.locks
 import sys.threads
 
-# The failure of a function an 'ffi literal binds, unless the binding
-# chooses its own error type.
 record Ffi_Error {
-    code: i64        # the contract's `via` value, or the status itself
-    text: string?    # the error channel's text, when there is one
-    fn:   string     # the contract function that failed
+    code: i64
+    text: string?
+    fn:   string
 }
 
 record Ffi_Bytes layout(c) {
@@ -115,7 +113,6 @@ fence litmod ffi(source: string) -> nil fail: string {
 }
 
 func __ffi_enter(buffer: uint) -> uint {
-    # `buffer` is in the export entry's frame, above the n00b frames it makes.
     sys.gc.alloc.note_stack_entry(buffer)
     abi.tls_relocate()
     let previous = ffi_unwind_top
@@ -151,7 +148,6 @@ func ffi_table_grow(modify table: Ffi_Table['T]) {
     table.next_free = next_free
 }
 
-# The calling thread, for the thread rules generated bindings check.
 func __ffi_thread_id() -> uint {
     return sys.threads.thread_id()
 }
@@ -160,9 +156,6 @@ func __ffi_on_main_thread() -> bool {
     return sys.threads.thread_is_main()
 }
 
-# Guards every callback table and the holds: a callback C may call on any
-# thread is registered on one thread and dispatched or freed on another.
-# Recursive, since a release run under it can free a table entry.
 var ffi_lock: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
                                  nesting = 0, collector = false)
 
@@ -199,9 +192,6 @@ func __ffi_table_owner(table: Ffi_Table['T], handle: u64) -> uint {
     return owner
 }
 
-# A thread_affine handle is used only on the thread that made it. Checked in
-# debug builds; reading the owner takes the table's lock, so it's read
-# before the assertion rather than in it.
 func __ffi_check_owner(table: Ffi_Table['T], handle: u64) {
     when debug_enabled() {
         let owner: uint = __ffi_table_owner(table, handle)
@@ -334,9 +324,6 @@ func __ffi_event_key(event: string, key: u64, thread_id: uint) {
     ffi_release_holds(event, nil, key, thread_id)
 }
 
-# A foreign record writ cannot express as `layout(c)` fields keeps its C bytes
-# in an Array[u8]; writ's accessors read and write its fields through these,
-# in the target's own byte order, as C does.
 func ffi_store(modify storage: Array[u8], at: uint, value: 'T) {
     let place: Ref['T] = unsafe_cast[Ref['T]] (ref storage[at])
     place.__value = value

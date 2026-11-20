@@ -1,6 +1,3 @@
-# Ending the process.
-
-# The runtime's exit, which also ends evaluation at compile time.
 [-
 library n00b
 
@@ -12,7 +9,6 @@ binding {
 }
 -]'ffi
 
-# Ends the process with `code`. At compile time, ends the evaluation instead.
 func exit(code: i32) {
     n00b_os_exit_raw(cast[int](code))
 }

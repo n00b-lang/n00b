@@ -43,8 +43,6 @@ typedef struct {
     bool interface_module;
     bool open_module;
     n00bb_native_declarations_t natives;
-    // For a module a module literal generated: the module the literal is
-    // in, and that module's source file.
     core_string_t generated_owner;
     core_string_t generated_owner_path;
     core_string_t generated_inputs;
@@ -212,8 +210,6 @@ n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
                 resolver->inventory, packages, 2))
             resolver->package_syntax_profile = package_syntax_profile(argv0);
         core_free(packages.data);
-        // The compiler's caches hold no sources, but often sit under the
-        // current directory (a build directory), and are large.
         core_string_t caches = n00bb_cache_root();
         if (caches.data)
             (void)core_snapshot_inventory_skip(resolver->inventory, caches);

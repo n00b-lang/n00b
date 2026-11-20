@@ -25,8 +25,6 @@ n00bb_shape_has_constraints(ir_shape_t *shape)
     return false;
 }
 
-// Stores `value` into the fixed-size array at `target` (an address, or a
-// global): the elements are copied into its storage.
 static bool
 n00bb_emit_fixed_array_store(ir_lower_context_t *context, ir_value_t *target,
                              ir_value_t *value, bool initializes,
@@ -66,16 +64,12 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
     if (!value || !n00bb_attach_expression_shape(context, visit->grammar,
             source, value))
         return false;
-    // A size known only at runtime keeps the array a reference: assigning
-    // it rebinds. Only a size known at compile time fixes the storage.
     bool fixed = true;
     for (uint32_t d = 0; fixed && d < ir_shape_rank(required); d++) {
         ir_shape_extent_t extent;
         fixed = ir_shape_extent(required, d, &extent)
             && extent.kind == IR_SHAPE_EXTENT_STATIC;
     }
-    // A local that isn't addressed holds its array by value, so rebinding
-    // it can't be told from copying into it.
     ir_value_t *local_address = local && fixed
         ? ir_lower_local_address(context, local) : nullptr;
     if (local && !local_address)
@@ -87,9 +81,6 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
             local_address ? local_address : address, value, true, span);
     if (address)
         return n00bb_emit_indirect_write(context, address, value, span);
-    // Types are solved after lowering: the store's constraint is what gives
-    // the value (an array literal, say) the global's declared type, so the
-    // value's type can still be open here.
     if (binding && binding->kind == IR_VAL_GLOBAL && binding->global)
         return n00bb_emit_fixed_array_store(context, binding, value,
             binding->global->mutability != IR_MUT_MUTABLE, span);
@@ -136,12 +127,6 @@ n00bb_materialize_assignment_source(ir_lower_context_t *context,
 
 
 
-// Records the field store just emitted for `target`, with the variable it
-// writes into, so that writes into a `let`, `const` or `in` parameter are
-// reported once types are solved. The variable is found from the store's
-// address: fields of a variable's own storage lead back to it, while a write
-// into an element, or through a reference or object handle, writes storage
-// the variable does not hold.
 static bool
 record_write_site(ir_lower_context_t *context, parse_tree_t *target,
                   core_string_t field)
@@ -199,8 +184,6 @@ check_loop_initialization(ir_lower_context_t *context,
         || child_nt(grammar, symbol->decl_node,
                     CORE_STRING_STATIC("expression")))
         return;
-    // The innermost loop being lowered repeats this assignment, unless the
-    // variable was declared inside it.
     (void)statement;
     n00bb_lower_context_t *lower = context->user;
     n00bb_loop_frame_t *frame = lower && lower->loops.len
@@ -231,7 +214,6 @@ report_unassignable(ir_lower_context_t *context, parse_tree_t *target)
     lower_help(context, N00B_TEXT_ASSIGNS_A_TEMPORARY_HELP, N00BB_NO_ARGS);
 }
 
-// Lowers an assignment to a variable the target was read from whole.
 static bool
 n00bb_lower_variable_assignment(ir_lower_context_t *context,
                                 parse_visit_t *visit, parse_tree_t *target,
@@ -244,7 +226,6 @@ n00bb_lower_variable_assignment(ir_lower_context_t *context,
         return false;
     check_loop_initialization(context, visit->grammar, visit->node, variable,
                               target);
-    // A narrowed read is the variable's binding, not a read of its own.
     if (!ir_value_has_uses(context->function, read)
         && read->def->op != IR_OP_TYPE_NARROW)
         (void)ir_instr_erase(read->def);
@@ -270,10 +251,6 @@ n00bb_lower_variable_assignment(ir_lower_context_t *context,
         != IR_LOWER_FAILED;
 }
 
-// Lowers an assignment that does not declare its variable. The target was
-// lowered as a value like any other expression: a variable it was read from
-// whole is assigned, and any other target is stored to the place it was
-// read from.
 static bool
 n00bb_lower_place_assignment(ir_lower_context_t *context,
                              parse_visit_t *visit, parse_tree_t *target,
@@ -312,7 +289,6 @@ n00bb_lower_place_assignment(ir_lower_context_t *context,
         ? block->instrs[block->n_instrs - 1] : nullptr;
     if (store && store->op == IR_OP_STORE)
         n00bb_rewrite_later(context, store);
-    // The field written is named by the store's address.
     ir_value_t *address = store && store->op == IR_OP_STORE
             && store->n_operands == 2
         ? ir_operand_value(&store->operands[0]) : nullptr;
@@ -342,8 +318,6 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         (void)target;
         ir_shape_t *shape = declared ? parse_sym_binding(declared,
             CORE_STRING_STATIC("ir.array-shape")) : nullptr;
-        // A ragged array's rows are arrays of their own, so its storage is
-        // not one fixed-size block: it is stored like any other value.
         ir_shape_storage_t storage;
         if (!n00bb_shape_has_constraints(shape)
             || (ir_shape_storage(shape, &storage)
@@ -366,7 +340,6 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         visit->grammar, visit->node, visit->annot->name_ref);
     parse_tree_t *source = parse_tree_resolve_child_ref(
         visit->grammar, visit->node, visit->annot->value_ref);
-    // `_ = value` evaluates the value and discards it.
     if (!compound && parse_tree_discards_value(visit->node))
         return !entering || ir_lower_handle_assignment(context, visit->node);
     if (compound) {
@@ -381,7 +354,6 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         return n00bb_lower_place_assignment(context, visit, target, source,
                                             entering);
 
-    // An assignment that declares its variable, which is not read.
     parse_sym_entry_t *symbol = parse_tree_sym(visit->node);
     if (!entering) {
         if (!n00bb_materialize_assignment_source(context, visit, source,
@@ -443,10 +415,6 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 
-// `x op= v` on an atomic `x`: `+=`, `-=`, `&=` and `|=` are one atomic
-// read-modify-write. `+=` and `-=` still check for overflow, by redoing
-// the operation on the value the update replaced. Other operators have no
-// atomic form.
 static ir_lower_result_t
 lower_atomic_update(ir_lower_context_t *context,
                     const n00bb_binary_operator_t *operator,
@@ -485,8 +453,6 @@ lower_atomic_update(ir_lower_context_t *context,
             operator->method, checked, 2, element, span);
         if (result.status != IR_LOWER_VALUE) return result;
     }
-    // The target's read only fed the update the read-modify-write replaced;
-    // an atomic load is never dropped as dead, so remove it here.
     ir_instr_t *read = operands[0]->def;
     if (read && read->op == IR_OP_LOAD && !ir_instr_erase(read))
         return lower_internal(context, span,
@@ -518,8 +484,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
                                        assigns->name_ref) : nullptr;
     (void)target;
     n00bb_lower_context_t *lower = context->user;
-    // The target was read like any other expression (operands[0]); the
-    // result is stored to where it was read from.
     th_type *target_type = operands[0]->type;
     const n00bb_binary_operator_t *operator = n00bb_binary_operator_assigned(
         first_token_text(core_tree_num_children(visit->node) > 1
@@ -529,8 +493,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
             N00B_TEXT_NOT_SUPPORTED_YET_THIS_COMPOUND,
             N00BB_NO_ARGS);
 
-    // An atomic target, read by a load through its address, is updated in
-    // one atomic step.
     ir_instr_t *target_read = operands[0]->def;
     ir_value_t *atomic_place = target_read && target_read->op == IR_OP_LOAD
         && target_read->n_operands == 1

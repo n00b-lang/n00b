@@ -1,8 +1,3 @@
-# The traits behind `==` and the ordering operators. A type implements
-# `Equal` with `__equal`, and `Comparable` with `__cmp`; the built-in
-# scalar types implement both. The operand types are separate here, so a
-# generic use is checked when it is specialized.
-
 trait Equal {
     func __equal(view self: 'T, view other: 'U) -> bool
 }

@@ -1,9 +1,3 @@
-# The errno a failed system call reports. Open: the kernel can return codes
-# newer than this list, and they arrive intact.
-#
-# Values are per platform. Linux uses the same numbers on x86_64 and
-# aarch64 (the asm-generic table).
-
 when target_os() == "linux" {
     open enum Errno: i32 {
         EPERM           = 1,
@@ -52,7 +46,6 @@ when target_os() == "linux" {
         ECONNREFUSED    = 111,
     }
 } else when target_os() == "macos" {
-    # The BSD table: EAGAIN is 35 and EDEADLK is 11.
     open enum Errno: i32 {
         EPERM           = 1,
         ENOENT          = 2,
@@ -100,7 +93,6 @@ when target_os() == "linux" {
         EOPNOTSUPP      = 102,
     }
 } else {
-    # Windows: the UCRT table, including its POSIX supplement.
     open enum Errno: i32 {
         EPERM           = 1,
         ENOENT          = 2,

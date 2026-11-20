@@ -1,8 +1,3 @@
-# A C variadic function through an unnamed `...` pack: as a List (the
-# default) and, bound by the name the plan gives the pack, as an Array.
-# Each call passes elements wider than a byte, so the shim must count
-# elements, not bytes.
-
 [-
 library c
 link "c"

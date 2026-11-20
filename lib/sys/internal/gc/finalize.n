@@ -51,8 +51,6 @@ func release_live(heap: Ref[internal.gc.core.Heap]) {
     }
 }
 
-# The finalizer thread. The runtime detaches it from the collector when it
-# returns.
 func thread_main(argument: Ref[byte]) -> Ref[byte] {
     let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] argument
     finalizer_thread = true

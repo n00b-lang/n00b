@@ -1,5 +1,4 @@
 #!/bin/sh
-# Regression checks for the medium punch-list fixes.
 set -eu
 
 compiler=$1
@@ -17,7 +16,6 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 test ! -s "$tmp/stdout"
 test "$(cat "$tmp/stderr")" = ok
 
-# A variable that may still be `nil` on some path stays an option.
 cat >"$tmp/maybe.n" <<'EOF'
 func maybe(c: bool) -> int {
     var x: int? = nil

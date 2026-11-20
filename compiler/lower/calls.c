@@ -39,7 +39,6 @@ n00bb_take_address(ir_lower_context_t *context, ir_local_t *local,
         ? take->dest : nullptr;
 }
 
-// Whether `shape` has a size for every dimension.
 static bool
 fully_sized(ir_shape_t *shape)
 {
@@ -49,11 +48,6 @@ fully_sized(ir_shape_t *shape)
     return sized;
 }
 
-// A `modify` or `out` parameter declared with a size works on the caller's
-// elements in place, so it and the array passed to it must be declared with
-// the same size in every dimension. Reports and returns false when they
-// aren't. A field whose record isn't known yet is checked once types are
-// solved.
 static bool
 fixed_reference_sizes_match(ir_lower_context_t *context, ir_value_t *address,
                             ir_shape_t *required_shape, parse_tree_t *argument,
@@ -99,13 +93,6 @@ fixed_reference_sizes_match(ir_lower_context_t *context, ir_value_t *address,
     return false;
 }
 
-// Returns the address an `out` or `modify` parameter is passed for
-// `argument`. The argument was lowered as a value, and its place recovered
-// from how that value was read. An element a container reaches through its
-// `__read` has no address, so a temporary is passed instead, and
-// n00bb_write_back_references stores it back through `__write`. Returns
-// nullptr after reporting when the argument is not a writable place, or is a
-// variable the call already receives.
 static ir_value_t *
 n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
                          parse_tree_t *argument, th_mode mode,
@@ -180,7 +167,6 @@ n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
     place.temporary = ir_local_add(context->function, name, value->type);
     if (!place.temporary) return nullptr;
     place.temporary->synthetic = true;
-    // An `out` parameter never reads the element, which may not exist yet.
     if (mode != TH_INOUT) (void)ir_instr_erase(value->def);
     else if (!n00bb_emit_sequence_shape_check(context, value, required_shape,
                                               span)
@@ -192,9 +178,6 @@ n00bb_reference_argument(ir_lower_context_t *context, parse_visit_t *visit,
     return address;
 }
 
-// Stores each temporary passed for an element with no address back through
-// its container's `__write`. Runs right after the call, so the callee's
-// writes reach the element whether the call succeeded or failed.
 static bool
 n00bb_write_back_references(ir_lower_context_t *context,
                             const core_list_t(n00bb_reference_argument_t)
@@ -275,8 +258,6 @@ n00bb_dispatch_keywords(ir_lower_context_t *context, parse_grammar_t *grammar,
         child_nt(grammar, arguments, CORE_STRING_STATIC("keyword-args")),
         &keywords);
     bool ok = dispatch != nullptr;
-    // More positional operands than written arguments: the receiver is
-    // implicit, so argument diagnostics count from the second operand.
     core_list_t(n00bb_tree_ptr_t) written = core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(grammar,
         child_nt(grammar, arguments, CORE_STRING_STATIC("positional-args")),
@@ -335,9 +316,6 @@ n00bb_overloaded(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return overloaded;
 }
 
-// A method's receiver is written back when the method takes it by
-// reference: rewrite passes the place the receiver was read from, or a
-// temporary when it names none.
 static bool
 mark_write_back(ir_lower_context_t *context, parse_grammar_t *grammar,
                 parse_tree_t *receiver, ir_value_t *value)
@@ -381,7 +359,6 @@ n00bb_lower_overloaded_call(ir_lower_context_t *context,
     if (value && !n00bb_dispatch_keywords(context, grammar, call_node,
                                           arguments, value->def))
         value = nullptr;
-    // Typing chooses among the functions this call names.
     if (value && lower->unit) {
         n00bb_overload_site_t *site = core_alloc(n00bb_overload_site_t);
         site->candidates = candidates;
@@ -862,8 +839,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_tu_state_t *caller_state = lower
         ? tu_state(lower->unit) : nullptr;
     parse_tree_t *call_node = visit->node;
-    // An element or slice is read the same wherever it appears; an
-    // assignment stores to the place the read names (n00bb_store_to).
     bool slice = false;
     bool index_call = n00bb_index_node(visit->grammar, call_node, &slice);
     core_string_t index_method = CORE_STRING_STATIC("__read");
@@ -875,14 +850,12 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             visit->grammar, call_node, container, result_type, span)
             : nullptr;
         if (read) return (ir_lower_result_t){IR_LOWER_VALUE, read};
-        // A reported problem with the bounds (a reversed slice, say).
         if (lower_failures(context) > failures)
             return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
         return lower_internal(context, span, "could not lower a slice");
     }
     parse_cf_label_t *call_label = lower && caller_state
         ? parse_cf_label_lookup(caller_state->annotations, call_node) : nullptr;
-    // Name resolution recorded what this call calls (n00bb_classify_calls).
     parse_node_facts_t *facts = parse_tree_call_facts(call_node);
     if (!facts)
         return lower_internal(context, span,
@@ -958,9 +931,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 N00BB_NO_ARGS);
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
-    // `has_type(value, T)` with the type written in place is a static type
-    // test; with a `typespec` value it is a call to builtin.abi.has_type,
-    // which checks at run time.
     parse_sym_entry_t *has_type = symbol ? canonical_symbol(symbol)
                                          : nullptr;
     bool has_type_call = has_type && has_type->owner_unit
@@ -1350,8 +1320,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (array) core_list_push(values, array);
         else collected = false;
     }
-    // A builtin that writes its first argument (an atomic store) writes the
-    // place that argument refers to; it reads it too only if the axiom says.
     const n00bb_axiom_t *axiom = collected && values.len
         ? n00bb_axiom_of_symbol(symbol) : nullptr;
     if (axiom && (axiom->writes & N00BB_AXIOM_PARAM(0)))
@@ -1405,8 +1373,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     }
     th_ctx *types = ir_module_types(context->module);
     th_type *error_type = th_func_error(signature);
-    // Whether the callee may fail is known before typing: a failure type
-    // still open is one being inferred from a body that may fail.
     bool has_error = error_type && !th_is_nil(error_type);
     th_type *call_result_type = has_error
         ? ir_call_outcome_type(context->module, signature)
@@ -1982,9 +1948,6 @@ declared_callee_location(ir_lower_context_t *context, const ir_func_t *callee,
     return at;
 }
 
-// For `f()!` where `f` cannot fail but returns an option: explain that `!`
-// passes failures along rather than unwrapping. False when the call's
-// result isn't an option.
 static bool
 infallible_option_help(ir_lower_context_t *context, core_string_t name,
                        th_type *result)
@@ -1998,8 +1961,6 @@ infallible_option_help(ir_lower_context_t *context, core_string_t name,
     return true;
 }
 
-// `x!` on an option: the item when `x` holds one; otherwise fail with
-// `nil`, which needs an option failure type (or an enclosing `try`).
 static bool
 unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
               ir_value_t *option, th_type *item, ir_span_t span,
@@ -2010,15 +1971,11 @@ unwrap_option(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *failure = lower && lower->function_symbol
         ? th_func_error(lower->function_symbol->type) : nullptr;
     failure = failure ? th_resolve(failure) : nullptr;
-    // The `try` whose handler a failure here goes to, as
-    // n00bb_route_try_error finds it.
     n00bb_try_frame_t *frame = nullptr;
     for (size_t i = lower ? lower->tries.len : 0; i > 0 && !frame; i--)
         if (lower->tries.data[i - 1].active && lower->tries.data[i - 1].in_body)
             frame = &lower->tries.data[i - 1];
     bool in_try = frame != nullptr;
-    // An inferred failure type can't take `nil`: a failure type of `nil`
-    // means the function can't fail. A generic one may be an option.
     bool inferred = failure && th_kind_of(failure) == TH_VAR
         && !th_var_name(failure).u8_bytes;
     bool accepts = failure && !th_is_nil(failure) && !inferred
@@ -2120,9 +2077,6 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                                    lower_unit(context), declared,
                                    N00B_TEXT_IS_DECLARED_HERE,
                                    N00BB_ARGS(ARG_TEXT(name)));
-        // `f()!` on a call that returns an option: `!` doesn't unwrap a
-        // call's option, so say how to get at the value instead. Stop here,
-        // or the option flowing on as its item reports a second error.
         if (infallible_option_help(context, name, outcome->type))
             return false;
         lower_help(context, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);

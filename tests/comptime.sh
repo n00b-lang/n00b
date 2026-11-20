@@ -71,7 +71,6 @@ prunes() {
         failed=1
         return
     fi
-    # $pruned lists every variable expected pruned, in order.
     want=$(for each in $pruned; do echo "PROFILE comptime-pruned $each"; done)
     if [ "$(grep comptime-pruned "$tmp/$name.err")" != "$want" ]; then
         echo "$name: expected only $pruned pruned" >&2

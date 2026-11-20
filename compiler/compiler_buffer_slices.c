@@ -338,8 +338,6 @@ path_parameter_bit(const ir_func_t *function, const ir_spath_t *path)
         ? parameter_bit(function->params[path->param]) : UINT64_MAX;
 }
 
-// Whether `path` is rooted at an `out` or `modify` parameter: one whose
-// value is the Ref to its caller's place.
 static bool
 by_reference_path(const ir_func_t *function, const ir_spath_t *path)
 {
@@ -599,8 +597,6 @@ flow_bit(uint64_t bits, uint32_t parameter)
     return parameter >= 64 ? bits == UINT64_MAX : (bits >> parameter) & 1;
 }
 
-// Whether `call` may store a tracked argument into a caller place passed
-// to an `out` or `modify` parameter.
 static bool
 stores_tracked_by_reference(window_t *window, const ir_instr_t *call,
                             const n00bb_flow_t *effects)
@@ -614,8 +610,6 @@ stores_tracked_by_reference(window_t *window, const ir_instr_t *call,
     return false;
 }
 
-// The caller local whose address is passed as by-reference argument `p`,
-// or nullptr when the place is anything else.
 static ir_local_t *
 reference_local(const ir_instr_t *call, uint32_t p)
 {
@@ -634,8 +628,6 @@ window_has_local(const window_t *window, const ir_local_t *local)
     return false;
 }
 
-// A view stored through a by-reference argument lives in the caller's
-// place: track the local it lands in, so the slice spans its uses.
 static bool
 track_reference_stores(window_t *window, const ir_instr_t *call,
                        bool *changed)

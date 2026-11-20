@@ -1,4 +1,4 @@
 panic: index 0 is out of range for an array of length 0
-  --> tests/diagnostics/runtime/failures.n:128:17
+  --> tests/diagnostics/runtime/failures.n:127:17
 backtrace:
-  at run (tests/diagnostics/runtime/failures.n:128:17)
+  at run (tests/diagnostics/runtime/failures.n:127:17)

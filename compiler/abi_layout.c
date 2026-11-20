@@ -566,10 +566,6 @@ compare_layout_runs(const void *left, const void *right)
     return 0;
 }
 
-// `alignment_bytes`, when not 0, raises the record's alignment to that
-// power of two and pads its size to a multiple of it, as C's `_Alignas`
-// does. It can't lower it: then this fails with `*natural_bytes` set to the
-// alignment the fields need.
 static bool
 publish_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
@@ -699,9 +695,6 @@ publish_record_layout(
             .child_typehash = th_hash(ir_module_types(module),
                                       members[i].type),
             .declaration_ordinal = members[i].ordinal,
-            // An inline array of packed bits (`Array[bool][N]`) starts on a
-            // byte and takes whole bytes, so a reference to it is a byte
-            // address and nothing shares its last byte.
             .extent_bits = inline_array
                 ? (bit_packed ? (stride * repetitions + 7) / 8 * 8
                               : stride * repetitions)

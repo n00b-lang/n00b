@@ -90,7 +90,6 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
     }
     uint32_t             count = slot < path->depth
         ? path->depth - slot - 1 : 0;
-    // A path with no steps has none to point into (`steps` may be null).
     const core_string_t *tail  = count ? path->steps + slot + 1 : nullptr;
     uint8_t              flags = path->flags
         & (uint8_t)(IR_SPATH_DEEP | SPATH_INLINE);
@@ -313,18 +312,12 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     case IR_ARG_MISSING:
         return;
     default:
-        // A fresh operand, like any by-reference one, is the address of the
-        // place the callee's parameter refers to.
         if (argument.value) pt_read(pt, argument.value, into);
         else unresolved(pt, into);
         return;
     }
 }
 
-// The items a call lets escape when its callee lets parameter `param`
-// escape. An `out` or `modify` parameter refers to the caller's place;
-// unless the callee lets that reference itself escape, only what the place
-// holds escapes, not the place.
 static void
 escaping_items(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
                uint32_t param, uint8_t escape, pt_set_t *into)
@@ -344,10 +337,6 @@ escaping_items(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(address);
 }
 
-// The storage a constructor fills is uninitialized when the call starts: a
-// callee path that reaches through a pointer it held then reaches nothing.
-// (The callee's own stores into what it allocated are summarized at the
-// allocations.)
 static bool
 fresh_entry_path(const ir_instr_t *call, const ir_spath_t *path)
 {
@@ -916,7 +905,6 @@ mapped_output(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(values);
 }
 
-// A write path's place, for finding the one a store destination names.
 static core_hash_value_t
 written_place_hash(void *key)
 {
@@ -941,8 +929,6 @@ written_place_eq(const void *a, const void *b)
         && steps_prefix(x->depth, x->steps, y->depth, y->steps);
 }
 
-// Whether the callee surely writes each of its store destinations: the
-// first non-deep write path to the destination's place says.
 static const bool *
 must_dests(pt_t *pt, const ir_summary_t *callee)
 {

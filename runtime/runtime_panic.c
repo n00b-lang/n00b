@@ -572,8 +572,6 @@ put_runtime_message(const failure_record_t *failure)
         put_signed((int64_t)failure->first);
         put(TEXT(".."));
         put_signed((int64_t)failure->second);
-        // A slice's bounds past the ends stop there; what fails is a start
-        // after the end.
         put((int64_t)failure->first > (int64_t)failure->second
             ? TEXT(" starts after its end, for ")
             : TEXT(" is out of bounds for "));
@@ -1196,9 +1194,6 @@ enum { ALTERNATE_STACK_BYTES = 1u << 18, STACK_FAULT_WINDOW = 1u << 16 };
 #if defined(__linux__) && defined(N00B_LIBC_FREE)
 #include "builtin_os_syscall.h"
 
-// Signals without libc: rt_sigaction takes the kernel's own sigaction
-// layout, and the handler returns through a restorer that calls
-// rt_sigreturn, which libc would otherwise supply.
 typedef struct {
     void *handler;
     unsigned long flags;

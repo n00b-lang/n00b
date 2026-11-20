@@ -1,27 +1,5 @@
 @lexer("swift.lex")
 
-# Swift Grammar
-#
-# Comprehensive syntactic grammar for Swift, based on The Swift Programming
-# Language specification. Covers all major language features including
-# declarations, statements, expressions, types, patterns, generics,
-# concurrency, and attributes.
-#
-# Lexer-provided tokens:
-#   %IDENTIFIER       Identifiers (including contextual keywords used as identifiers)
-#   %INTEGER          Integer literals (decimal, hex, octal, binary)
-#   %FLOAT            Floating-point literals
-#   %STRING           String literals (including interpolation)
-#   %MULTILINE_STRING Multiline string literals
-#   %REGEX_LIT        Regex literals
-#   %IMPLICIT_PARAM   Implicit closure parameters ($0, $1, ...)
-#
-# Start symbol: <top-level-declaration>
-
-# ============================================================================
-# Top-Level Structure
-# ============================================================================
-
 <top-level-declaration> ::= <statements>?
 
 <statements> @hardline @nospace($1) @nospace($2) ::= <statement> (<statement-separator> <statement>)* <statement-separator>?
@@ -38,10 +16,6 @@
               | <do-statement> <statement-separator>?
               | <compiler-control-statement>
 
-# ============================================================================
-# Import Declarations
-# ============================================================================
-
 <import-declaration> ::= <attribute-list>? %"import" <import-kind>? <import-path>
 
 <import-kind> ::= %"typealias" | %"struct" | %"class" | %"enum"
@@ -50,10 +24,6 @@
 <import-path> ::= <import-path-identifier> (%"." <import-path-identifier>)*
 
 <import-path-identifier> ::= %IDENTIFIER | <operator>
-
-# ============================================================================
-# Constant and Variable Declarations
-# ============================================================================
 
 <constant-declaration> ::= <attribute-list>? <declaration-modifiers>? %"let" <pattern-initializer-list>
 
@@ -74,7 +44,6 @@
 
 <initializer> ::= %"=" <expression>
 
-# Getter/Setter blocks
 <getter-setter-block> ::= <code-block>
                         | %"{" <getter-clause> <setter-clause>? %"}"
                         | %"{" <setter-clause> <getter-clause> %"}"
@@ -99,17 +68,9 @@
 
 <didset-clause> ::= <attribute-list>? %"didSet" <setter-name>? <code-block>
 
-# ============================================================================
-# Type Alias Declaration
-# ============================================================================
-
 <typealias-declaration> ::= <attribute-list>? <access-level-modifier>? %"typealias" %IDENTIFIER <generic-parameter-clause>? <typealias-assignment>
 
 <typealias-assignment> ::= %"=" <type>
-
-# ============================================================================
-# Function Declarations
-# ============================================================================
 
 <function-declaration> @nospace($2) @nospace($3) ::= <function-head> <function-name> <generic-parameter-clause>? <function-signature> <generic-where-clause>? <function-body>?
 
@@ -142,10 +103,6 @@
 <throws-clause> ::= %"throws" (%"(" <type> %")")?
                   | %"rethrows"
 
-# ============================================================================
-# Enum Declarations
-# ============================================================================
-
 <enum-declaration> ::= <attribute-list>? <access-level-modifier>? <indirect-keyword>? %"enum" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? %"{" <enum-members>? %"}"
 
 <indirect-keyword> ::= %"indirect"
@@ -177,10 +134,6 @@
                        | <static-string-literal>
                        | <boolean-literal>
 
-# ============================================================================
-# Struct Declarations
-# ============================================================================
-
 <struct-declaration> ::= <attribute-list>? <access-level-modifier>? %"struct" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? <struct-body>
 
 <struct-body> ::= %"{" <struct-members>? %"}"
@@ -189,10 +142,6 @@
 
 <struct-member> ::= <declaration>
                   | <compiler-control-statement>
-
-# ============================================================================
-# Class Declarations
-# ============================================================================
 
 <class-declaration> ::= <attribute-list>? <access-level-modifier>? %"final"? %"class" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? <class-body>
 
@@ -204,10 +153,6 @@
 <class-member> ::= <declaration>
                  | <compiler-control-statement>
 
-# ============================================================================
-# Actor Declarations
-# ============================================================================
-
 <actor-declaration> ::= <attribute-list>? <access-level-modifier>? %"actor" %IDENTIFIER <generic-parameter-clause>? <type-inheritance-clause>? <generic-where-clause>? <actor-body>
 
 <actor-body> ::= %"{" <actor-members>? %"}"
@@ -216,10 +161,6 @@
 
 <actor-member> ::= <declaration>
                  | <compiler-control-statement>
-
-# ============================================================================
-# Protocol Declarations
-# ============================================================================
 
 <protocol-declaration> ::= <attribute-list>? <access-level-modifier>? %"protocol" %IDENTIFIER <primary-associated-type-clause>? <type-inheritance-clause>? <generic-where-clause>? <protocol-body>
 
@@ -251,10 +192,6 @@
 
 <protocol-associated-type-declaration> ::= <attribute-list>? <access-level-modifier>? %"associatedtype" %IDENTIFIER <type-inheritance-clause>? <typealias-assignment>? <generic-where-clause>?
 
-# ============================================================================
-# Initializer Declarations
-# ============================================================================
-
 <initializer-declaration> ::= <initializer-head> <generic-parameter-clause>? <parameter-clause> <async-keyword>? <throws-clause>? <generic-where-clause>? <initializer-body>
 
 <initializer-head> ::= <attribute-list>? <declaration-modifiers>? %"init"
@@ -263,15 +200,7 @@
 
 <initializer-body> ::= <code-block>
 
-# ============================================================================
-# Deinitializer Declarations
-# ============================================================================
-
 <deinitializer-declaration> ::= <attribute-list>? %"deinit" <code-block>
-
-# ============================================================================
-# Extension Declarations
-# ============================================================================
 
 <extension-declaration> ::= <attribute-list>? <access-level-modifier>? %"extension" <type-identifier> <type-inheritance-clause>? <generic-where-clause>? <extension-body>
 
@@ -282,20 +211,12 @@
 <extension-member> ::= <declaration>
                      | <compiler-control-statement>
 
-# ============================================================================
-# Subscript Declarations
-# ============================================================================
-
 <subscript-declaration> ::= <subscript-head> <subscript-result> <generic-where-clause>? <getter-setter-block>
                           | <subscript-head> <subscript-result> <generic-where-clause>? <getter-setter-keyword-block>
 
 <subscript-head> ::= <attribute-list>? <declaration-modifiers>? %"subscript" <generic-parameter-clause>? <parameter-clause>
 
 <subscript-result> ::= %"->" <attribute-list>? <type>
-
-# ============================================================================
-# Operator Declarations
-# ============================================================================
 
 <operator-declaration> ::= <prefix-operator-declaration>
                          | <postfix-operator-declaration>
@@ -308,10 +229,6 @@
 <infix-operator-declaration> ::= %"infix" %"operator" <operator> <infix-operator-group>?
 
 <infix-operator-group> ::= %":" <precedence-group-name>
-
-# ============================================================================
-# Precedence Group Declarations
-# ============================================================================
 
 <precedence-group-declaration> ::= %"precedencegroup" <precedence-group-name> %"{" <precedence-group-attributes>? %"}"
 
@@ -334,10 +251,6 @@
 
 <associativity-value> ::= %"left" | %"right" | %"none"
 
-# ============================================================================
-# Macro Declarations
-# ============================================================================
-
 <macro-declaration> ::= <attribute-list>? <declaration-modifiers>? %"macro" %IDENTIFIER <generic-parameter-clause>? <function-signature> <generic-where-clause>? <macro-definition>?
 
 <macro-definition> ::= %"=" <macro-expansion-expression>
@@ -345,10 +258,6 @@
 <macro-expansion-expression> ::= %"#" %IDENTIFIER <generic-argument-clause>? <macro-arguments>?
 
 <macro-arguments> ::= %"(" <argument-list>? %")" <trailing-closures>?
-
-# ============================================================================
-# Declarations (summary)
-# ============================================================================
 
 <declaration> ::= <import-declaration>
                 | <constant-declaration>
@@ -368,47 +277,29 @@
                 | <precedence-group-declaration>
                 | <macro-declaration>
 
-# ============================================================================
-# Code Blocks
-# ============================================================================
-
 <code-block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <statements>? %"}"
-
-# ============================================================================
-# Loop Statements
-# ============================================================================
 
 <loop-statement> ::= <for-in-statement>
                    | <while-statement>
                    | <repeat-while-statement>
 
-# For-in statement
 <for-in-statement> ::= %"for" %"case"? <pattern> %"in" <expression> <where-clause>? <code-block>
 
-# While statement
 <while-statement> ::= %"while" <condition-list> <code-block>
 
-# Repeat-while statement
 <repeat-while-statement> ::= %"repeat" <code-block> %"while" <expression>
-
-# ============================================================================
-# Branch Statements
-# ============================================================================
 
 <branch-statement> ::= <if-statement>
                      | <guard-statement>
                      | <switch-statement>
 
-# If statement
 <if-statement> ::= %"if" <condition-list> <code-block> <else-clause>?
 
 <else-clause> ::= %"else" <code-block>
                | %"else" <if-statement>
 
-# Guard statement
 <guard-statement> ::= %"guard" <condition-list> %"else" <code-block>
 
-# Condition list
 <condition-list> ::= <condition> (%"," <condition>)*
 
 <condition> ::= <expression>
@@ -421,7 +312,6 @@
 <optional-binding-condition> ::= %"let" <pattern> <initializer>?
                                | %"var" <pattern> <initializer>?
 
-# Availability condition
 <availability-condition> ::= %"#available" %"(" <availability-arguments> %")"
                            | %"#unavailable" %"(" <availability-arguments> %")"
 
@@ -434,7 +324,6 @@
 
 <platform-version> ::= %INTEGER (%"." %INTEGER (%"." %INTEGER)?)?
 
-# Switch statement
 <switch-statement> ::= %"switch" <expression> %"{" <switch-cases>? %"}"
 
 <switch-cases> ::= <switch-case> <switch-cases>?
@@ -463,20 +352,12 @@
 
 <where-clause> ::= %"where" <expression>
 
-# ============================================================================
-# Labeled Statements
-# ============================================================================
-
 <labeled-statement> ::= <statement-label> <loop-statement>
                       | <statement-label> <if-statement>
                       | <statement-label> <switch-statement>
                       | <statement-label> <do-statement>
 
 <statement-label> ::= %IDENTIFIER %":"
-
-# ============================================================================
-# Control Transfer Statements
-# ============================================================================
 
 <control-transfer-statement> ::= <break-statement>
                                | <continue-statement>
@@ -494,15 +375,7 @@
 
 <throw-statement> ::= %"throw" <expression>
 
-# ============================================================================
-# Defer Statement
-# ============================================================================
-
 <defer-statement> ::= %"defer" <code-block>
-
-# ============================================================================
-# Do Statement / Error Handling
-# ============================================================================
 
 <do-statement> ::= %"do" <code-block> <catch-clauses>?
 
@@ -513,10 +386,6 @@
 <catch-pattern-list> ::= <catch-pattern> (%"," <catch-pattern>)*
 
 <catch-pattern> ::= <pattern> <where-clause>?
-
-# ============================================================================
-# Compiler Control Statements
-# ============================================================================
 
 <compiler-control-statement> ::= <conditional-compilation-block>
                                | <line-control-statement>
@@ -564,26 +433,14 @@
 <diagnostic-statement> ::= %"#warning" %"(" <static-string-literal> %")"
                          | %"#error" %"(" <static-string-literal> %")"
 
-# ============================================================================
-# Expressions
-# ============================================================================
-
 <expression> ::= <try-operator>? <await-operator>? <prefix-expression> <infix-expressions>?
 
 <expression-list> ::= <expression> (%"," <expression>)*
-
-# ============================================================================
-# Prefix Expressions
-# ============================================================================
 
 <prefix-expression> ::= <prefix-operator>? <postfix-expression>
                       | <in-out-expression>
 
 <in-out-expression> ::= %"&" %IDENTIFIER
-
-# ============================================================================
-# Infix Expressions (Binary Operators)
-# ============================================================================
 
 <infix-expressions> ::= <infix-expression> <infix-expressions>?
 
@@ -601,19 +458,11 @@
                           | %"as" %"?" <type>
                           | %"as" %"!" <type>
 
-# ============================================================================
-# Try and Await Operators
-# ============================================================================
-
 <try-operator> ::= %"try"
                  | %"try" %"?"
                  | %"try" %"!"
 
 <await-operator> ::= %"await"
-
-# ============================================================================
-# Postfix Expressions
-# ============================================================================
 
 <postfix-expression> ::= <primary-expression> <postfix-operations>?
 
@@ -628,7 +477,6 @@
                       | <forced-value-suffix>
                       | <optional-chaining-suffix>
 
-# Function call
 <function-call-suffix> ::= <function-call-argument-clause> <trailing-closures>?
                          | <trailing-closures>
 
@@ -641,14 +489,12 @@
                            | <operator> %":" <expression>
                            | <expression>
 
-# Trailing closures
 <trailing-closures> ::= <closure-expression> <labeled-trailing-closures>?
 
 <labeled-trailing-closures> ::= <labeled-trailing-closure> <labeled-trailing-closures>?
 
 <labeled-trailing-closure> ::= %IDENTIFIER %":" <closure-expression>
 
-# Initializer suffix
 <initializer-suffix> ::= %"." %"init"
                        | %"." %"init" %"(" <argument-names> %")"
 
@@ -656,26 +502,17 @@
 
 <argument-name> ::= %IDENTIFIER %":" | %"_" %":"
 
-# Explicit member access
 <explicit-member-suffix> ::= %"." %INTEGER
                            | %"." %IDENTIFIER <generic-argument-clause>?
                            | %"." %IDENTIFIER %"(" <argument-names> %")"
 
-# Self access
 <postfix-self-suffix> ::= %"." %"self"
 
-# Subscript
 <subscript-suffix> ::= %"[" <function-call-argument-list> %"]"
 
-# Forced value
 <forced-value-suffix> ::= %"!"
 
-# Optional chaining
 <optional-chaining-suffix> ::= %"?"
-
-# ============================================================================
-# Primary Expressions
-# ============================================================================
 
 <primary-expression> ::= %IDENTIFIER <generic-argument-clause>?
                        | <literal-expression>
@@ -691,10 +528,6 @@
                        | <key-path-string-expression>
                        | <macro-expansion-expression>
                        | %IMPLICIT_PARAM
-
-# ============================================================================
-# Literal Expressions
-# ============================================================================
 
 <literal-expression> ::= <literal>
                        | <array-literal>
@@ -727,14 +560,12 @@
 
 <regex-literal> ::= %REGEX_LIT
 
-# Array literal
 <array-literal> ::= %"[" <array-literal-items>? %"]"
 
 <array-literal-items> ::= <array-literal-item> (%"," <array-literal-item>)* %","?
 
 <array-literal-item> ::= <expression>
 
-# Dictionary literal
 <dictionary-literal> ::= %"[" <dictionary-literal-items> %"]"
                        | %"[" %":" %"]"
 
@@ -742,18 +573,10 @@
 
 <dictionary-literal-item> ::= <expression> %":" <expression>
 
-# ============================================================================
-# Self Expressions
-# ============================================================================
-
 <self-expression> ::= %"self"
                     | %"self" %"." %IDENTIFIER
                     | %"self" %"[" <function-call-argument-list> %"]"
                     | %"self" %"." %"init"
-
-# ============================================================================
-# Superclass Expressions
-# ============================================================================
 
 <superclass-expression> ::= <superclass-method-expression>
                           | <superclass-subscript-expression>
@@ -764,10 +587,6 @@
 <superclass-subscript-expression> ::= %"super" %"[" <function-call-argument-list> %"]"
 
 <superclass-initializer-expression> ::= %"super" %"." %"init"
-
-# ============================================================================
-# Closure Expressions
-# ============================================================================
 
 <closure-expression> ::= %"{" <attribute-list>? <closure-signature>? <statements>? %"}"
 
@@ -786,7 +605,6 @@
 
 <identifier-list> ::= %IDENTIFIER (%"," %IDENTIFIER)*
 
-# Capture list
 <capture-list> ::= %"[" <capture-list-items> %"]"
 
 <capture-list-items> ::= <capture-list-item> (%"," <capture-list-item>)*
@@ -799,10 +617,6 @@
                             | %IDENTIFIER %"=" <expression>
                             | %"self"
 
-# ============================================================================
-# Parenthesized and Tuple Expressions
-# ============================================================================
-
 <parenthesized-expression> ::= %"(" <expression> %")"
 
 <tuple-expression> ::= %"(" %")"
@@ -813,22 +627,10 @@
 <tuple-element> ::= %IDENTIFIER %":" <expression>
                   | <expression>
 
-# ============================================================================
-# Implicit Member Expression
-# ============================================================================
-
 <implicit-member-expression> ::= %"." %IDENTIFIER
                                | %"." %"init"
 
-# ============================================================================
-# Wildcard Expression
-# ============================================================================
-
 <wildcard-expression> ::= %"_"
-
-# ============================================================================
-# Key-Path Expression
-# ============================================================================
 
 <key-path-expression> ::= %"\\" <type>? %"." <key-path-components>
 
@@ -844,25 +646,12 @@
                      | %"self"
                      | %"[" <function-call-argument-list> %"]"
 
-# ============================================================================
-# Selector Expression
-# ============================================================================
-
 <selector-expression> ::= %"#selector" %"(" <expression> %")"
                         | %"#selector" %"(" %"getter" %":" <expression> %")"
                         | %"#selector" %"(" %"setter" %":" <expression> %")"
 
-# ============================================================================
-# Key-Path String Expression
-# ============================================================================
-
 <key-path-string-expression> ::= %"#keyPath" %"(" <expression> %")"
 
-# ============================================================================
-# Operators
-# ============================================================================
-
-# Binary operators (standard Swift operators)
 <binary-operator> ::= %"+"  | %"-"  | %"*"  | %"/"  | %"%"
                     | %"+=" | %"-=" | %"*=" | %"/=" | %"%="
                     | %"==" | %"!=" | %"<"  | %">"  | %"<=" | %">="
@@ -887,10 +676,6 @@
              | <postfix-operator>
 
 <custom-operator> ::= %IDENTIFIER
-
-# ============================================================================
-# Patterns
-# ============================================================================
 
 <pattern> ::= <wildcard-pattern> <type-annotation>?
             | <identifier-pattern> <type-annotation>?
@@ -925,10 +710,6 @@
 
 <as-cast-pattern> ::= <pattern> %"as" <type>
 
-# ============================================================================
-# Types
-# ============================================================================
-
 <type> ::= <function-type>
           | <array-type>
           | <dictionary-type>
@@ -945,12 +726,10 @@
           | <self-type>
           | %"(" <type> %")"
 
-# Type identifier
 <type-identifier> ::= <type-name> <generic-argument-clause>? (%"." <type-name> <generic-argument-clause>?)*
 
 <type-name> ::= %IDENTIFIER
 
-# Tuple type
 <tuple-type> ::= %"(" %")"
                | %"(" <tuple-type-element-list> %")"
 
@@ -961,7 +740,6 @@
 
 <element-name> ::= %IDENTIFIER | %"_"
 
-# Function type
 <function-type> ::= <attribute-list>? <function-type-argument-clause> <async-keyword>? %"throws"? %"->" <type>
 
 <function-type-argument-clause> ::= %"(" %")"
@@ -974,58 +752,37 @@
 
 <argument-label> ::= %IDENTIFIER | %"_"
 
-# Array type
 <array-type> ::= %"[" <type> %"]"
 
-# Dictionary type
 <dictionary-type> ::= %"[" <type> %":" <type> %"]"
 
-# Optional type
 <optional-type> ::= <type> %"?"
 
-# Implicitly unwrapped optional type
 <implicitly-unwrapped-optional-type> ::= <type> %"!"
 
-# Protocol composition type
 <protocol-composition-type> ::= <type-identifier> %"&" <protocol-composition-continuation>
 
 <protocol-composition-continuation> ::= <type-identifier> (%"&" <type-identifier>)*
 
-# Opaque type
 <opaque-type> ::= %"some" <type>
 
-# Existential type
 <existential-type> ::= %"any" <type>
 
-# Boxed protocol type (explicit Any)
 <boxed-protocol-type> ::= %"Any"
 
-# Metatype type
 <metatype-type> ::= <type> %"." %"Type"
                   | <type> %"." %"Protocol"
 
-# Any type
 <any-type> ::= %"Any"
 
-# Self type
 <self-type> ::= %"Self"
 
-# Type annotation
 <type-annotation> ::= %":" <attribute-list>? %"inout"? <type>
-
-# ============================================================================
-# Type Inheritance
-# ============================================================================
 
 <type-inheritance-clause> ::= %":" <type-inheritance-list>
 
 <type-inheritance-list> ::= <type-identifier> (%"," <type-identifier>)*
 
-# ============================================================================
-# Generics
-# ============================================================================
-
-# Generic parameter clause
 <generic-parameter-clause> ::= %"<" <generic-parameter-list> %">"
 
 <generic-parameter-list> ::= <generic-parameter> (%"," <generic-parameter>)*
@@ -1035,14 +792,12 @@
                       | <type-name> %":" <protocol-composition-type>
                       | %"each" <type-name>
 
-# Generic argument clause
 <generic-argument-clause> ::= %"<" <generic-argument-list> %">"
 
 <generic-argument-list> ::= <generic-argument> (%"," <generic-argument>)*
 
 <generic-argument> ::= <type>
 
-# Generic where clause
 <generic-where-clause> ::= %"where" <requirement-list>
 
 <requirement-list> ::= <requirement> (%"," <requirement>)*
@@ -1054,10 +809,6 @@
                             | <type-identifier> %":" <protocol-composition-type>
 
 <same-type-requirement> ::= <type-identifier> %"==" <type>
-
-# ============================================================================
-# Attributes
-# ============================================================================
 
 <attribute-list> ::= <attribute> <attribute-list>?
 
@@ -1077,10 +828,6 @@
                    | <operator>
                    | %"," | %":" | %";" | %"=" | %"@" | %"#"
                    | %"&" | %"->" | %"." | %"?" | %"!"
-
-# ============================================================================
-# Access Control and Declaration Modifiers
-# ============================================================================
 
 <declaration-modifiers> ::= <declaration-modifier> <declaration-modifiers>?
 
@@ -1123,54 +870,8 @@
 
 <mutation-modifier> ::= %"mutating" | %"nonmutating"
 
-# ============================================================================
-# Argument List (for function calls, macro expansions, etc.)
-# ============================================================================
-
 <argument-list> ::= <argument> (%"," <argument>)*
 
 <argument> ::= %IDENTIFIER %":" <expression>
              | <operator> %":" <expression>
              | <expression>
-
-# ============================================================================
-# Result Builder (used in function bodies with @resultBuilder attribute)
-#
-# Result builders are syntactic sugar; the builder methods (buildBlock,
-# buildEither, buildOptional, etc.) are resolved by the type checker.
-# No special grammar productions are required -- they use the existing
-# statement/expression grammar with attribute annotations.
-# ============================================================================
-
-# ============================================================================
-# Concurrency
-# ============================================================================
-
-# async/await are handled via <async-keyword> and <await-operator> above.
-#
-# Actor declarations are handled by <actor-declaration>.
-#
-# Task { } and TaskGroup are ordinary function/initializer calls and
-# need no special grammar productions.
-#
-# The structured concurrency keywords (async let) are covered by the
-# existing declaration grammar:
-#   attribute-list? declaration-modifiers? "let" pattern-initializer-list
-# where the expression on the right side may use "await".
-
-# ============================================================================
-# Property Wrappers
-#
-# Property wrappers are applied via attributes (@Wrapper var x: T = ...).
-# The attribute grammar above (@attribute-name with optional arguments)
-# covers their syntactic form.  The compiler resolves the wrapper type
-# and synthesizes the backing storage.  No additional grammar is needed.
-# ============================================================================
-
-# ============================================================================
-# String Interpolation
-#
-# String interpolation (\(expr)) is handled by the lexer, which produces
-# %STRING tokens containing interpolation segments.  No grammar-level
-# productions are needed.
-# ============================================================================

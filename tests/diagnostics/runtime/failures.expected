@@ -9,4 +9,4 @@ tests/diagnostics/runtime/failures.n:43:9: warning N00B-S0006: the value assigne
 tests/diagnostics/runtime/failures.n:55:11: note N00B-S0064: parameter `a` could be `view`: `pick` never writes anything reachable from it
 tests/diagnostics/runtime/failures.n:97:6: warning N00B-N0019: function `read_value` is never called
   help: call it or delete it
-tests/diagnostics/runtime/failures.n:137:17: warning N00B-S0059: this condition is always false, so the other branch never runs
+tests/diagnostics/runtime/failures.n:134:17: warning N00B-S0059: this condition is always false, so the other branch never runs

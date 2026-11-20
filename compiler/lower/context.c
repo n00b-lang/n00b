@@ -1,24 +1,5 @@
 #include "lower_internal.h"
 
-// `with` statements.
-//
-// `with [name =] manager { body }` uses the manager's `Context_Manager`
-// methods:
-// `__enter` runs before the body, and what it returns is bound to `name`;
-// `__exit` runs on every way out of the body, given that value and, when
-// the body failed, the failure as its `failure` keyword argument. Both are
-// dispatched like any method call, and either may fail. A manager is
-// entered after the managers to its left, and exited before them.
-//
-// Each manager is an exit scope (see n00bb_exit_scope_t): its exit block is
-// the only place its `__exit` is called. While the body is being lowered,
-// the manager is a failure handler, like a `try`: a body failure is given
-// to `__exit`. When `__exit` returns `true` the failure is dropped, and the
-// program continues after the manager; otherwise the failure goes on to the
-// handler outside it. A failure of `__enter` or `__exit` itself goes to the
-// handlers outside that manager.
-
-// `failure` is passed to `__exit` as the option its parameter is.
 static ir_value_t *
 with_failure_argument(ir_lower_context_t *context, ir_value_t *failure,
                       ir_span_t span)
@@ -34,11 +15,6 @@ with_failure_argument(ir_lower_context_t *context, ir_value_t *failure,
         ? some->dest : nullptr;
 }
 
-// Calls the manager's `method`, a `Context_Manager` method, with `argument`
-// after the manager when there is one and `failure` as the `failure`
-// keyword argument when there is one. The call may fail: a failure goes to
-// the handlers entered before `before_order`. `*value` is what it returns.
-// `value_form` marks the `__exit` of a `with` used as a value.
 static bool
 with_call(ir_lower_context_t *context, ir_local_t *manager,
           core_string_t method, ir_value_t *argument, ir_value_t *failure,
@@ -61,7 +37,6 @@ with_call(ir_lower_context_t *context, ir_local_t *manager,
         ? n00bb_dispatch(context, method, operands, argument ? 2 : 1,
                          outcome, span)
         : nullptr;
-    // A `modify` receiver is passed by the local holding the manager.
     bool ok = call && ir_annot_set(lower->ir_context, &call->def->annots,
             (ir_annot_t){.key = N00BB_WRITE_BACK_KEY, .kind = IR_ANNOT_BOOL,
                          .b = true})
@@ -77,8 +52,6 @@ with_call(ir_lower_context_t *context, ir_local_t *manager,
                               : nullptr;
     ir_block_t *error_block = ok_block
         ? n00bb_branch_block(context, lower, "with_error") : nullptr;
-    // The test is the compiler's: with a hook that cannot fail it always
-    // holds, which is not something to warn about.
     ir_span_t test_span = span;
     test_span.implied = true;
     if (!error_block
@@ -128,8 +101,6 @@ n00bb_pack_rest_values(ir_lower_context_t *context, th_type *element,
     return nullptr;
 }
 
-// Lowers one manager once its expression has been: holds it, runs its
-// `__enter`, binds the result, and starts handling the body's failures.
 bool
 n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
                          bool entering, void *state)
@@ -197,7 +168,6 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
     }
 
-    // The hooks' calls are the manager expression's, without its name.
     n00bb_with_item_t item = {
         .node = expression,
         .manager = manager,
@@ -210,11 +180,6 @@ n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
     return true;
 }
 
-// Leaves the managers innermost first: each one's exit block calls
-// `__exit`, then goes on by the reason it was reached for. A `with` used
-// as a value keeps its body's value across the exit blocks, and is that
-// value after them. Its managers can't drop a failure, which would leave
-// it no value: typing reports one whose `__exit` returns a `bool`.
 static bool
 with_leave(ir_lower_context_t *context, parse_grammar_t *grammar,
            n00bb_with_frame_t *frame, parse_tree_t *source)

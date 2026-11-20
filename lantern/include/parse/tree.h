@@ -265,8 +265,6 @@ parse_tree_call_facts(parse_tree_t *node)
         ? parse_tree_facts_for_update(node) : nullptr;
 }
 
-// The expression `node` stands for once parentheses and single-child
-// wrappers are seen through.
 static inline parse_tree_t *
 parse_tree_core(parse_tree_t *node)
 {

@@ -956,8 +956,6 @@ static void test_element_reads_see_their_own_store(void)
     ir_ctx_free(ctx);
 }
 
-// Interval bounds for bitwise operators and left shifts must hold with a
-// negative operand, where the operands' magnitudes are no bound at all.
 static void test_negative_bitwise_and_shift_bounds(void)
 {
     struct {

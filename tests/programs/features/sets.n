@@ -72,8 +72,6 @@ var more = words | {"c"}
 require more.len() == 3 and more.items().len() == 3
 require more.add("d") and !more.add("a") and more.len() == 4
 
-// Iterating a set yields its items, in insertion order, skipping removed
-// ones; a dictionary still yields its pairs.
 var walked: List[string] = []
 for item in more {
     walked.append(item)

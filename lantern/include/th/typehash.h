@@ -71,9 +71,6 @@ static inline bool th_mode_is_in(th_mode mode)
     return mode == TH_IN || mode == TH_VIEW;
 }
 
-// `out` and `modify` pass the caller's place by reference: the parameter's
-// IR value is a Ref to that place, and the callee reads and writes through
-// it. No mode adds an output to the call's result.
 static inline bool th_mode_by_reference(th_mode mode)
 {
     return mode == TH_OUT || mode == TH_INOUT;
@@ -471,7 +468,6 @@ bool     th_is_poison(const th_type *type);
 bool     th_mentions_poison(th_type *type);
 size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
-// Closed types parsed from text, kept by the text.
 th_type *th_text_type(th_ctx *ctx, core_string_t text);
 void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);

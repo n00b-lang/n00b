@@ -1,8 +1,3 @@
-# `looped` exports this whole module, and this module's import of
-# `loop_partner` comes back to `looped`: the manifest and this module are
-# in one import cycle, so the export is expanded before this module's
-# bodies are walked. Every constant must still be exported, used in a body
-# yet or not.
 import loop_partner
 
 const flag: uint = 1 << 3

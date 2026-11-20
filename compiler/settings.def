@@ -38,8 +38,6 @@ N00BB_SETTING(TOOLCHAIN_KEEP, "toolchain", "keep", INT, "1",
     RANGE(0, INT64_MAX))
 N00BB_SETTING(DEV_PROFILE_COMPILE, "dev", "profile_compile", BOOL, "false",
     ENVIRONMENT("N00BB_PROFILE_COMPILE"))
-// Prints the IR the backend is given: every module holding a function to
-// emit, once generic calls are specialized (`--dump-ir` prints it before).
 N00BB_SETTING(DEV_DUMP_FINAL_IR, "dev", "dump_final_ir", BOOL, "false",
     ENVIRONMENT("N00BB_DUMP_FINAL_IR"))
 N00BB_SETTING(DEV_CACHE_LOG, "dev", "cache_log", PATH, "",

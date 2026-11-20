@@ -5,20 +5,10 @@
 #include "ir/shape.h"
 #include "lib/buffer.h"
 
-// A whole-array store into a fixed-size array (a variable, field or
-// parameter declared with a size): it copies the elements into the
-// existing storage after checking the shape, and never rebinds it.
 #define N00BB_FIXED_ARRAY_STORE_KEY CORE_STRING_STATIC("n00bb.fixed-array-store")
 
-// On a zero-initialized `array.new` of objects: the type of the storage to
-// allocate, zeroed, for each element, since a zeroed object is a fresh
-// object with zeroed fields rather than a null handle.
 #define N00BB_ARRAY_ZERO_OBJECTS_KEY CORE_STRING_STATIC("n00bb.array.zero-objects")
 
-// On the zeroed default `array.new` of a `let` array declared without a size
-// or a value: its length (operand 0, a constant) is set from the `let`'s
-// assignment once the function is lowered, and its elements are checked
-// only if the default can be read.
 #define N00BB_LET_DEFAULT_KEY CORE_STRING_STATIC("n00bb.array.let-default")
 
 static inline bool
@@ -28,17 +18,9 @@ n00bb_fixed_array_store(const ir_instr_t *store)
                                  N00BB_FIXED_ARRAY_STORE_KEY);
 }
 
-// A `modify` or `out` parameter declared as a fixed-size array is passed as
-// the caller's elements, not as a reference to an array value: the callee
-// writes into that storage and can't rebind it. A function lists such
-// parameters as "index:extents" pairs, separated by commas, where extents
-// are the dimensions' sizes joined by 'x' (`0:4,2:3x4`).
 #define N00BB_FIXED_REFERENCES_KEY CORE_STRING_STATIC("n00bb.fixed-references")
 #define N00BB_FIXED_REFERENCE_MAX_RANK 8
 
-// The extents of parameter `index` of `function` when it is passed as its
-// elements: stores up to N00BB_FIXED_REFERENCE_MAX_RANK of them in
-// `extents` (which may be null) and returns the rank, else 0.
 static inline uint32_t
 n00bb_fixed_reference_shape(const ir_func_t *function, uint32_t index,
                             uint64_t *extents)
@@ -74,7 +56,6 @@ n00bb_fixed_reference_shape(const ir_func_t *function, uint32_t index,
     return 0;
 }
 
-// Writes the sizes `extents` as text (`4`, `3x4`) to `out`.
 static inline void
 n00bb_extents_text(uint32_t rank, const uint64_t *extents, core_buffer_t *out)
 {
@@ -83,8 +64,6 @@ n00bb_extents_text(uint32_t rank, const uint64_t *extents, core_buffer_t *out)
                            (unsigned long long)extents[d]);
 }
 
-// Writes the sizes of `shape` as text to `out` when it has a size for every
-// dimension; returns whether it does.
 static inline bool
 n00bb_shape_size_text(const ir_shape_t *shape, core_buffer_t *out)
 {
@@ -101,8 +80,6 @@ n00bb_shape_size_text(const ir_shape_t *shape, core_buffer_t *out)
     return true;
 }
 
-// The element count of parameter `index` of `function` when it is passed
-// as its elements (every dimension's size multiplied), else 0.
 static inline uint64_t
 n00bb_fixed_reference_count(const ir_func_t *function, uint32_t index)
 {

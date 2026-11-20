@@ -24,12 +24,6 @@ typedef struct {
 typedef struct {
     void *context;
     bool (*view)(void *context, const ir_instr_t *in, ir_abcd_view_t *out);
-    // For sizing integer literals, not for proving checks: a non-negative
-    // constant past what an ir_int_t holds (up to 2^128 - 1) saturates, and
-    // an immutable module variable holds its initial value (its static
-    // initializer, or its one `global.store`). Neither is a fact a build
-    // that proves checks redundant may use: the first is not the value, and
-    // a module initializer with run-time work may set the second again.
     bool literal_sizing;
 } ir_abcd_hooks_t;
 

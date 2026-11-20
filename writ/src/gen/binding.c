@@ -37,7 +37,6 @@ typedef struct {
     writ_str_t member;
 } target_t;
 
-// A `name` or `hide` aimed at a contract constant or syscall.
 typedef struct {
     writ_str_t contract;
     choice_t   name;
@@ -61,8 +60,6 @@ typedef struct {
 } handle_implementation_t;
 core_list_decl(handle_implementation_t);
 
-// An `error PATTERN -> "Type"` item, kept so that declarations other than
-// `fn`s (syscalls) can look up their error type by name.
 typedef struct {
     writ_str_t pattern;
     writ_str_t type;
@@ -328,8 +325,6 @@ known_slot(const writ_binding_t *b, size_t fn, writ_str_t name)
             return true;
         }
     }
-    // A slot the plan names, such as the `args` of an unnamed `...` pack:
-    // the name the generated signature shows.
     for (size_t i = 0; i < b->slots.len; i++) {
         if (b->slots.data[i].fn == fn && writ_str_eq(b->slots.data[i].slot, name)) {
             return true;
@@ -550,8 +545,6 @@ apply_glob(writ_binding_t *b, uint32_t id, bool hide)
 {
     writ_str_t pattern = text_of(b, at(b, id)->name);
     bool any = false;
-    // `hide` also reaches constants and syscalls; `raw` is only for
-    // functions.
     for (size_t i = 0; hide && i < writ_model_const_count(b->model); i++) {
         writ_str_t name = writ_model_const_at(b->model, i)->name;
         if (writ_glob_match(pattern, name)) {
@@ -1136,9 +1129,6 @@ writ_binding_type(const writ_binding_t *b, writ_str_t contract)
     return writ_profile_name(b->profile, WRIT_NAMING_TYPE, contract);
 }
 
-// The name a `name` item chose for contract constant or syscall `contract`,
-// or the contract name in the profile's convention; `*hidden` says `hide`
-// left it out.
 static writ_str_t
 decided_name(const writ_binding_t *b, writ_str_t contract, writ_naming_kind_t naming,
              bool *hidden)

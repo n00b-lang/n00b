@@ -1,4 +1,3 @@
-# A trait's type parameters (`'E` here) are fixed once for each bound.
 trait Stopper {
     func stop(self: 'T, failure: 'E?) -> bool
 }

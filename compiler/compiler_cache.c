@@ -429,10 +429,6 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
 
 static core_string_t canonical_path(core_string_t path);
 
-// What a module a literal generated is made from: the source of the module
-// the literal is in, then each contract file the literal reads (path and
-// contents), one per line of `inputs`. A file that can't be read counts as
-// empty, the same when stored and when checked.
 static void
 generated_source_bytes(core_string_t owner_path, core_string_t inputs,
                        core_buffer_t *out)
@@ -473,9 +469,6 @@ scc_freshness(cache_scc_t *scc)
     core_buffer_puts(&input, "n00b.scc.freshness.v1");
     for (size_t m = 0; m < scc->members.len; m++) {
         core_translation_unit_t *unit = scc->members.data[m];
-        // A generated module is fresh while the module its literal is in
-        // is, so it's keyed by that module's source, as a cached build
-        // checks it.
         core_string_t owner = {0}, owner_path = {0};
         if (n00bb_source_file_generated_owner(&unit->source, &owner,
                                               &owner_path)) {
@@ -622,9 +615,6 @@ typedef struct {
     uint64_t source_hash;
     core_list_t(core_string_t) imports;
     ir_module_t *module;
-    // A module a module literal generated has no file of its own: it is
-    // as fresh as the module the literal is in, which this names, with
-    // that module's source path and the hash of its source.
     core_string_t owner;
     core_string_t owner_path;
     uint64_t owner_hash;
@@ -638,9 +628,6 @@ typedef struct {
 } cache_link_t;
 core_list_decl(cache_link_t);
 
-// How many builds of one module the cache keeps: one per configuration a
-// project builds it in (debug, release, LTO, the C library, ...), and a few
-// from other compilers sharing the cache.
 constexpr size_t cache_module_candidates = 32;
 constexpr size_t cache_foreign_candidates = 4;
 
@@ -1081,8 +1068,6 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         const cache_member_t *member = &entry->members.data[m];
         uint8_t *source = nullptr;
         size_t source_bytes = 0;
-        // A generated module is checked by the module its literal is in,
-        // and by the contract files the literal reads.
         bool generated = member->owner.data != nullptr;
         core_string_t name = generated ? member->owner : member->name;
         core_string_t path = generated ? member->owner_path : member->path;
@@ -1427,7 +1412,6 @@ scc_in_stdlib(const n00bb_cache_t *cache, const cache_scc_t *scc)
     if (!cache->stdlib_root.u8_bytes) return false;
     bool inside = scc->members.len > 0;
     for (size_t m = 0; inside && m < scc->members.len; m++) {
-        // A generated module is where the module its literal is in is.
         core_string_t owner = {0}, owner_path = {0};
         const core_source_file_t *source = &scc->members.data[m]->source;
         core_string_t path = canonical_path(
@@ -2528,7 +2512,6 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
     if (!cache || !link) return false;
     core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
     bool ok = collect_sccs(link, &sccs, true);
-    // 0 unknown, 1 clean, 2 failed (an import cycle among SCCs can't happen).
     uint8_t *clean = clean_only && ok
         ? core_alloc_array(uint8_t, sccs.len ? sccs.len : 1) : nullptr;
     for (size_t s = 0; ok && s < sccs.len; s++) {
@@ -3320,11 +3303,6 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     return ok;
 }
 
-// Held by the one process compiling the builtin library for a variant, so
-// others building the same variant wait and reuse what it stores instead of
-// all compiling it at once. Released once it has stored, or when it exits.
-// A process waits at most once: a build that fails stores nothing, and the
-// processes that waited on it then compile side by side rather than queue.
 static int fill_lock = -1;
 static bool fill_waited = false;
 
@@ -3337,9 +3315,6 @@ release_fill_lock(void)
     fill_lock = -1;
 }
 
-// Takes the fill lock for this cache's variant when the builtin library
-// isn't cached. Returns true when another process held it: it has stored
-// what it built, and the cache should be read again.
 static bool
 take_fill_lock(n00bb_cache_t *cache)
 {
@@ -3365,8 +3340,6 @@ take_fill_lock(n00bb_cache_t *cache)
         cache_log("%.*s wait for another build to cache builtin",
                   (int)phase.u8_bytes, phase.data);
         waited = n00bb_lock_file(fd, true);
-        // Whatever the filler stored is there now; this process doesn't
-        // become the next filler.
         if (waited) n00bb_unlock_file(fd);
         close(fd);
         fd = -1;

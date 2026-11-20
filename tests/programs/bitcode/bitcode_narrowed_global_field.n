@@ -1,6 +1,3 @@
-// A field read through a top-level optional object once a nil check has
-// narrowed it.
-
 record Entry {
     items: List[int]
     on:    bool

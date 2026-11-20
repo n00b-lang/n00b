@@ -85,16 +85,12 @@ declaration_default_write(const ir_instr_t *in)
     return mark && mark->kind == IR_ANNOT_BOOL && mark->b;
 }
 
-// A local's length, when every whole assignment to it in `function` gives
-// it the same one that's known: a literal's, or another known array's.
 static bool
 assigned_local_extent(const ir_func_t *function, const ir_local_t *local,
                       uint32_t dimension, uint64_t *length, int depth)
 {
     if (static_extent(ir_local_shape(local), dimension, length)) return true;
     if (!function || dimension || depth > 16) return false;
-    // If its address goes anywhere but to index, read or store it (to a
-    // call, say, which could assign it), its assignments aren't all here.
     for (uint32_t b = 0; b < function->n_blocks; b++)
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             const ir_instr_t *taken = function->blocks[b]->instrs[i];
@@ -146,8 +142,6 @@ assigned_local_extent(const ir_func_t *function, const ir_local_t *local,
     return any;
 }
 
-// A module array's length: its declared size, or the length of the static
-// value an immutable one starts with.
 static bool
 global_extent(const ir_global_t *global, uint32_t dimension, uint64_t *length)
 {
@@ -158,8 +152,6 @@ global_extent(const ir_global_t *global, uint32_t dimension, uint64_t *length)
     for (uint32_t d = 0; d < dimension; d++) {
         if (value->kind != IR_GLOBAL_INIT_SEQUENCE || !value->aggregate.count)
             return false;
-        // Rows of one length are a rectangle; otherwise, there's no one
-        // length for the dimension.
         uint64_t row = value->aggregate.items[0].aggregate.count;
         for (size_t i = 0; i < value->aggregate.count; i++)
             if (value->aggregate.items[i].kind != IR_GLOBAL_INIT_SEQUENCE
@@ -172,9 +164,6 @@ global_extent(const ir_global_t *global, uint32_t dimension, uint64_t *length)
     return true;
 }
 
-// The static extent of dimension `dimension` of the array `value` reaches,
-// following copies, loads and addresses back to what declares its shape or
-// assigns it, and indexes out to the dimension they select from.
 static bool
 static_array_extent(const ir_func_t *function, const ir_value_t *value,
                     uint32_t dimension, uint64_t *length, int depth)
@@ -190,7 +179,6 @@ static_array_extent(const ir_func_t *function, const ir_value_t *value,
     const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def : nullptr;
     if (!def) return false;
     if (!function && def->block) function = def->block->owner;
-    // An array literal not laid out by its shape has one item per operand.
     if (def->op == IR_OP_AGGREGATE && !dimension
         && th_kind_of(th_resolve(value->type)) == TH_SEQUENCE) {
         *length = def->n_operands;
@@ -214,13 +202,10 @@ static_array_extent(const ir_func_t *function, const ir_value_t *value,
     }
     case IR_OP_INDEX:
     case IR_OP_SEQUENCE_GET:
-        // A row of a multi-dimensional array: the next dimension.
         return static_array_extent(function, base, dimension + 1, length,
                                    depth + 1);
     case IR_OP_FIELD:
     case IR_OP_EXTRACT: {
-        // A one-dimensional array field held inline has as many elements as
-        // its layout holds.
         th_type *field_type = th_resolve(value->type);
         if (th_kind_of(field_type) == TH_INDIRECTION)
             field_type = th_resolve(th_ind_referent(field_type));
@@ -262,7 +247,6 @@ n00bb_static_array_length(const ir_func_t *function, const ir_value_t *value,
     return static_array_extent(function, value, 0, length, 0);
 }
 
-// Whether a closed enum `symbol` has a member whose value is 0.
 static bool
 enum_has_zero(parse_sym_entry_t *symbol)
 {
@@ -278,10 +262,6 @@ enum_has_zero(parse_sym_entry_t *symbol)
     return false;
 }
 
-// Whether a record or object `type`, zeroed, is a value that code in `site`
-// could build from a field tuple: no `__init` it must run (one outside its
-// package), no field private to another module, and every field zeroable,
-// none of them an `object` or a reference.
 static bool
 record_zero_tolerant(core_translation_unit_t *site, th_type *type,
                      th_type *record, th_type **blame, uint32_t depth)
@@ -322,7 +302,6 @@ n00bb_zero_tolerant(core_translation_unit_t *site, th_type *type,
 {
     n00bb_tu_state_t *state = site ? tu_state(site) : nullptr;
     type = type ? th_resolve(type) : nullptr;
-    // A type not yet known (a generic's parameter) is checked where it is.
     if (!state || !type || depth > 16 || th_kind_of(type) == TH_VAR
         || th_option_item(type) || th_is_nil(type)) return true;
     *blame = type;
@@ -357,8 +336,6 @@ n00bb_zero_tolerant(core_translation_unit_t *site, th_type *type,
         || category == IR_CLASS_BOOL || category == IR_CLASS_FLOAT;
 }
 
-// An array whose elements start zeroed must hold elements with a zero
-// value. Reports, and returns false, when `element` has none.
 bool
 n00bb_check_zeroed_elements(ir_lower_context_t *context, th_type *element,
                             ir_span_t span)
@@ -400,10 +377,6 @@ n00bb_emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
                                  span, true);
 }
 
-// The zeroed default of a `let` array declared without a size or a value,
-// whose length its assignment gives (n00bb_size_let_defaults): `length` is
-// a placeholder constant that it sets, and it checks the elements only if
-// the default can be read.
 ir_value_t *
 n00bb_emit_let_default_array(ir_lower_context_t *context, th_type *type,
                              ir_span_t span)
@@ -459,9 +432,6 @@ emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
         known_prefix++;
     for (uint32_t i = known_prefix; i < rank; i++)
         if (extents[i].value) return nullptr;
-    // The elements start zeroed; ragged rows start as empty arrays instead.
-    // A bad element is reported, and the allocation still made, so the
-    // caller goes on as usual.
     if (check_elements && known_prefix == rank)
         (void)n00bb_check_zeroed_elements(context, leaf, span);
     ir_shape_t *shape = ir_shape_new(lower->ir_context, leaf, rank);
@@ -503,9 +473,6 @@ emit_array_allocation(ir_lower_context_t *context, th_type *leaf,
     for (uint32_t i = 0; ok && i < known_prefix; i++)
         ok = ir_instr_operand_value(instruction, extents[i].value);
     ok = ok && ir_value_set_shape(instruction->dest, shape);
-    // A zeroed object is a fresh object with zeroed fields, not a null
-    // handle, so each element gets one: the annotation names the storage to
-    // allocate for it.
     th_ctx *types = ir_module_types(context->module);
     th_type *element = leaf ? th_resolve(leaf) : nullptr;
     th_type *reference = ok && known_prefix == rank && element

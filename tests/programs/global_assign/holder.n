@@ -1,10 +1,7 @@
-# Module variables a function reassigns from literals. Each literal takes
-# its element types from the declaration: 4000000000 only fits a u32.
 var table: Array[u32][4]
 var names: Dict[string, u32]
 var plain: Array[u32]
 
-# A record whose array field is stored inline, between two other fields.
 record Slots {
     tag: u8
     values: Array[u32][3]

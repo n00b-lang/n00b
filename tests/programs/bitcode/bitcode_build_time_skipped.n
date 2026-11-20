@@ -1,6 +1,3 @@
-// Every literal here is built from runtime values, so nothing needs baking:
-// tests/bitcode.sh checks that building this skips the build-time stage.
-
 func one(s: string) -> List[string] {
     return [s]
 }

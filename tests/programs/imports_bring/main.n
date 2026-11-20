@@ -3,7 +3,6 @@ import bring_all
 import brought_type
 import generic_alias
 
-// Another module's generic alias, applied here.
 var bag: generic_alias.Bag[string] = new[generic_alias.Bag[string]]()
 bag["x"] = nil
 var pairs: generic_alias.Pairing[string, int] =

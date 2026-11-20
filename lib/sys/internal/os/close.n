@@ -1,5 +1,3 @@
-# Closing a file descriptor.
-
 import internal.errno
 bring errno_of from internal.os.support
 
@@ -59,8 +57,6 @@ when target_os() == "linux" {
     -]'ffi
 }
 
-# Closes `fd`. Not retried on EINTR: the descriptor is released even when
-# the call is interrupted, and a retry could close a reused one.
 func close(fd: i32) fail: internal.errno.Errno {
     when target_os() == "linux" {
         syscall_close(fd)!

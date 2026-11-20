@@ -94,11 +94,6 @@ typedef struct ir_summaries_t ir_summaries_t;
 
 typedef void (*ir_summary_target_fn)(void *sink, ir_func_t *target);
 
-// How a global is hidden from a caller. A PRIVATE global (one the caller
-// can't name and whose address never leaves its module) has its own reads
-// and writes left out, but what flows out of it to places the caller sees
-// stays, as the global's deep path. A BARRIER global (behind the
-// collector's abstraction barrier) is left out entirely.
 typedef enum : uint8_t {
     IR_SUMMARY_VISIBLE,
     IR_SUMMARY_HIDDEN_PRIVATE,
@@ -116,14 +111,8 @@ typedef struct {
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
                                    uint32_t flag);
     bool (*global_reachable)(void *context, const ir_global_t *global);
-    // Whether code in `function`'s module can name `global`. Paths under a
-    // global it can't name are kept as the global's deep path: the module
-    // has no use for the detail, and it would grow every summary it reaches.
     bool (*global_named)(void *context, const ir_func_t *function,
                          const ir_global_t *global);
-    // How `global` is hidden from code in `caller`, an
-    // ir_summary_hidden_t: what a callee does to a hidden global is left
-    // out of the summary the caller composes.
     uint8_t (*global_hidden)(void *context, const ir_func_t *caller,
                              const ir_global_t *global);
     uint64_t (*bookkeeping)(void *context, const ir_func_t *function,
@@ -203,8 +192,6 @@ typedef struct {
     ir_func_t *(*function)(void *context, core_string_t module,
                            core_string_t name);
     void *context;
-    // The table a stored summary's texts are numbered in, or null when
-    // they're written out in full.
     const ir_summary_texts_t *texts;
 } ir_summary_resolver_t;
 bool          ir_summary_encode(const ir_summary_t *summary,

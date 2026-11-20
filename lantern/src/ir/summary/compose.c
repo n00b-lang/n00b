@@ -62,8 +62,6 @@ place_flags(const ir_spath_t *path)
                               : path->flags;
 }
 
-// A place as a word, for the places a summary's named paths reach: the
-// kind in the low bits, above the global or the source parameter.
 static uint64_t
 place_key(const ir_splace_t *place)
 {
@@ -85,10 +83,7 @@ place_key(const ir_splace_t *place)
 }
 
 typedef struct {
-    // place_key of a named place (not a parameter) -> the flags its paths
-    // carry, plus one so no entry is zero.
     core_dict_t             named;
-    // Paths through a parameter, which depend on the call's arguments.
     core_list_t(uint32_t)   params;
     uint8_t                 unknown_flags;
     bool                    unknown;
@@ -154,8 +149,6 @@ entry_access(flow_query_t *q, uint32_t flag)
         ? (uintptr_t)core_dict_get(q->entry_access, key, &found) : 0;
     if (found) return (uint8_t)(had - 1);
     uint8_t flags = entries_access(q->summaries, flag, q->target);
-    // What was asked of the entries, not their whole summary: entries grow
-    // as specialization adds functions, without changing most answers.
     note_entry_access(q->summaries, q->f ? q->f->owner : nullptr, flag,
                       q->target, flags);
     if (q->entry_access)
@@ -264,9 +257,6 @@ cached_call_effect(flow_query_t *q, const ir_instr_t *call,
         leaf_effects_reset(q->leaf_effects);
         q->effects_place = *q->target;
     }
-    // A call's effect on one leaf of the place isn't its effect on the
-    // place, so each leaf has its own cache. Steps are interned, so the
-    // leaf's steps name it.
     core_dict_t *effects = q->effects;
     if (q->leaf) {
         bool found = false;
@@ -677,7 +667,6 @@ instruction_flags(const ir_func_t *f, const ir_instr_t *in)
             : IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
                 | IR_SUMMARY_ALLOCATES_DIRECT;
     case IR_OP_ARRAY_NEW: {
-        // An array storage placement keeps in the frame isn't allocated.
         ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
             CORE_STRING_STATIC("ir.allocation_local"));
         if (placed && placed->kind == IR_ANNOT_BOOL && placed->b) return 0;
@@ -688,8 +677,6 @@ instruction_flags(const ir_func_t *f, const ir_instr_t *in)
                 | IR_SUMMARY_ALLOCATES_DIRECT
             : IR_SUMMARY_MAY_ALLOCATE;
     case IR_OP_AGGREGATE: {
-        // An array built from its elements is allocated like `array.new`'s,
-        // unless storage placement keeps it in the frame.
         th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
         ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
             CORE_STRING_STATIC("ir.allocation_local"));
@@ -703,9 +690,6 @@ instruction_flags(const ir_func_t *f, const ir_instr_t *in)
     }
     case IR_OP_INDEX:
     case IR_OP_SEQUENCE_GET: {
-        // A row of a rectangular array has no array value of its own; the
-        // index allocates a view of it unless storage placement keeps the
-        // view in the frame.
         const ir_value_t *base = in->n_operands
             ? ir_operand_value(&in->operands[0]) : nullptr;
         th_type *array = !base ? nullptr
@@ -728,8 +712,6 @@ instruction_flags(const ir_func_t *f, const ir_instr_t *in)
     case IR_OP_BUFFER_AS_STRING:
     case IR_OP_BUFFER_SLICE_END:
         return IR_SUMMARY_MAY_COLLECT;
-    // A pause or a fence changes no value, but is there for when things
-    // happen, so the call that makes one is kept and isn't pointless.
     case IR_OP_CPU_RELAX:
     case IR_OP_THREAD_FENCE:
         return IR_SUMMARY_HINTS;

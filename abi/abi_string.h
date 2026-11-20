@@ -40,10 +40,6 @@ typedef struct {
     uint64_t rich_reserved;
 } n00bb_abi_string_header_t;
 
-/* Decode the tag and length/auxiliary bits of a little-endian 16-byte string
- * value. Pointer bytes remain in value[0..7] and require relocation and
- * pool validation by the containing metadata reader. Invalid encodings and
- * short lengths fail without modifying out. */
 bool n00bb_abi_string_decode(const uint8_t *value, size_t available,
                              n00bb_abi_string_header_t *out);
 

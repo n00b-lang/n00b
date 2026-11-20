@@ -43,9 +43,6 @@ typedef struct {
 bool n00bb_abi_image_key_for_target(const core_target_desc_t *target,
                                     n00bb_abi_image_key_t *out);
 
-/* Table bytes must already be present. The checksum covers the current
- * serialized bytes; final images call this after static-link rewrites and
- * before loader relocations. */
 bool n00bb_abi_container_write(
     uint8_t *image, size_t image_bytes,
     const n00bb_abi_image_header_t *header,
@@ -53,7 +50,6 @@ bool n00bb_abi_container_write(
     const n00bb_abi_table_schema_t *schemas, size_t schema_count,
     bool allow_unknown);
 
-/* Never follows a directory entry until header, key, and checksum pass. */
 bool n00bb_abi_container_read(
     const uint8_t *image, size_t image_bytes,
     const n00bb_abi_image_key_t *expected_key,

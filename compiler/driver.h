@@ -40,12 +40,9 @@ bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
 void n00bb_source_file_mark_interface(core_source_file_t *source,
                                       uint64_t source_hash);
 bool n00bb_source_file_is_interface(const core_source_file_t *source);
-// True for a module a module literal generated, giving the module the
-// literal is in and that module's source path.
 bool n00bb_source_file_generated_owner(const core_source_file_t *source,
                                        core_string_t *owner,
                                        core_string_t *owner_path);
-// The files a generated module's literal reads, one per line.
 core_string_t n00bb_source_file_generated_inputs(
     const core_source_file_t *source);
 bool n00bb_same_package(const core_translation_unit_t *left,

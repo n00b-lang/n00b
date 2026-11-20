@@ -193,7 +193,6 @@ variant Choice {
     empty: nil
 }
 
-// A function can't be a case, so this one doesn't hide the `empty` arm.
 func empty() -> uint {
     return 0
 }
@@ -549,8 +548,6 @@ func quiet_clock() -> uint {
     return __unobserved(sys.clock.now_ns())
 }
 
-# Bounded arrays of scalars that stay in the call live in its frame, so
-# making them allocates nothing; one that's returned is still allocated.
 record Frame_Words layout(c) {
     tag: u32
     words: Array[u64][4]
@@ -577,9 +574,6 @@ func heap_literal() -> Array[u64] {
     return words
 }
 
-# A row of a rectangular array has no array value of its own; indexing
-# through a row it only reaches makes the row's view in the frame, so it
-# allocates nothing. A row read whole is a value of its own.
 var lang_grid: Array[u32][3][4]
 
 func grid_poke(r: int, c: int, v: u32) -> u32 {
@@ -592,16 +586,12 @@ func grid_row_total(r: int) -> u32 {
     return row[0] + row[1] + row[2] + row[3]
 }
 
-# A rectangular array built from a nested literal is one block, which can
-# live in the frame.
 func frame_grid(r: int, c: int) -> u32 {
     var m: Array[u32][2][3] = [[1, 2, 3], [4, 5, 6]]
     m[r][c] = m[r][c] * 10
     return m[r][c] + m[0][0]
 }
 
-# A function's frame arrays share 2048 bytes: one array can use all of it,
-# but past it arrays are allocated, alone or together with others.
 func frame_at_budget() -> u64 {
     var words: Array[u64][256]
     words[255] = 3
@@ -720,7 +710,6 @@ func effect_paths_check() {
     require !__function_writes(ref dict_store, "key")
     require __function_reads(ref list_size, "items.__value.count")
     require !__function_reads(ref list_size, "items.__value.items")
-    // `modify` passes the caller's place: its first `__value` is that place.
     require __function_writes(ref effects_random, "buffer.__value.__value[]")
     require __function_has_effect(ref shout, "may_output")
     require !__function_has_effect(ref shout, "may_input")
@@ -802,8 +791,6 @@ func search_check() {
     require sort.search(none, 3) == 0
 }
 
-// An empty list literal inside a loop over a collection: the literal is
-// built in its own function, which must not clean up the loop's cursor.
 func empty_list_in_loop_check() {
     var words: List[string] = []
     words.append("a")
@@ -1642,8 +1629,6 @@ func callback_failure_check() {
     var initial: Fail_State
     initial.count = 0
     try {
-        # The handler's `modify` state is the callback's own: the failed
-        # call's update (-1) stays, so the next call counts from there.
         require run_fail_counter(initial)! == 1
     } fail(err) {
         require false
@@ -1796,7 +1781,6 @@ func make_root() -> Root {
     var codes: Array[i32] = [3, 5, 7, 0]
     code_anchors.append(codes)
     let base: uint = __abi_ref_address(ref items[0])
-    // A field tuple leaves out the union's arms; the setter picks one.
     var made: Root = (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
                       items = unsafe_cast[Foreign[Item]?] base, total = 4,
                       codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
@@ -1835,8 +1819,6 @@ func bake_foreign_check() {
     require text != nil and text == "word"
 }
 
-// A C float field is an ordinary field; an untagged union keeps its bytes,
-// and every arm reads them as its own type.
 func foreign_bytes_check() {
     var p: Point = (x = 1.5, y = 2.25)
     p.y = p.x + p.y
@@ -2310,8 +2292,6 @@ func local_reference_store_check() {
     items[1] = 9
     let list: List[int] = list_from_items(items, 2)
     require list.len() == 2 and list[1] == 9
-    # A literal keyword argument to an imported constructor takes the
-    # parameter's type: `items` is an Array, not the List being built.
     let literal: List[int] = new[List[int]](items = [4, 5, 6])
     require literal.len() == 3 and literal[2] == 6
 }

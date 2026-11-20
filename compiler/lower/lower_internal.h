@@ -195,36 +195,19 @@ typedef ir_block_t *n00bb_ir_block_ptr_t;
 
 core_list_decl(n00bb_ir_block_ptr_t);
 
-// A construct with code to run on every way out of it: a `with` manager
-// (`__exit`) or a loop over a container (`__cleanup`). While lowering is
-// inside it, every way out sets `reason` and `failure` and jumps to its one
-// `exit` block, which runs that code once and goes on by `reason`:
-// N00BB_EXIT_FALLTHROUGH, past the construct; N00BB_EXIT_FAILURE, on to the
-// next failure handler (`failure` holds the failure, and is `nil` for every
-// other reason); or, for a `return`, `break` or `continue` leaving through
-// it, N00BB_EXIT_RESUMES plus the index of the block in `resumes` that goes
-// on from there. A failure handler is the innermost of these and the `try`s
-// whose bodies lowering is in.
 typedef struct {
     ir_block_t *exit;
     ir_local_t *reason;
     th_type *failure_type;
     ir_local_t *failure;
     core_list_t(n00bb_ir_block_ptr_t) resumes;
-    // Against the other control frames' orders: a smaller order encloses.
     uint64_t order;
-    // Lowering is inside the construct, so ways out go through `exit`.
     bool open;
-    // A `with` manager handles the failures it is given; a loop passes
-    // them on, so a failure goes through a loop only on its way to a
-    // handler outside it.
     bool handles;
     bool fallthrough;
     bool failure_reachable;
 } n00bb_exit_scope_t;
 
-// A failure's reason is above all the others, so when no failure can reach
-// an exit block, the range of its reason shows the failure test is false.
 #define N00BB_EXIT_FALLTHROUGH UINT64_C(0)
 #define N00BB_EXIT_RESUMES UINT64_C(1)
 #define N00BB_EXIT_FAILURE UINT64_C(0xffffffff)
@@ -283,7 +266,6 @@ typedef struct {
     parse_tree_t *body;
     ir_block_t *test_block;
     ir_block_t *body_block;
-    // Set while the body reads a variable narrowed by `has_type`.
     void *binding_checkpoint;
     bool narrowed;
 } n00bb_branch_arm_t;
@@ -329,16 +311,11 @@ typedef struct {
     parse_sym_entry_t *iterator_symbol;
     parse_tree_t *iteration_source;
     n00bb_iteration_plan_t *iteration_plan;
-    // The cursor lives in a local: `__next` takes it by reference.
     ir_local_t *iteration_cursor;
     core_list_t(parse_sym_entry_ptr_t) iteration_bindings;
-    // The loop's binding pattern, which the bindings are projected from.
     parse_tree_t *iteration_pattern;
     void *binding_checkpoint;
-    // The bindings when the loop began: a variable bound since then is
-    // declared inside the loop.
     void *entry_bindings;
-    // A loop over a container calls `__cleanup` on every way out of it.
     n00bb_exit_scope_t scope;
     bool binding_scope_active;
     bool range_inclusive;
@@ -460,18 +437,12 @@ typedef struct {
     ir_block_t *join;
     ir_local_t *error_value;
     ir_local_t *result_value;
-    // When the try was entered, against the other control frames' orders:
-    // a frame with a smaller order encloses it.
     uint64_t order;
     bool expression;
     bool error_reachable;
     bool join_reachable;
     bool active;
-    // Lowering is still in the try's body, so failures go to its handler.
     bool in_body;
-    // An option's `x!` routed `nil` here (with that option's source text
-    // and span); and the first failure routed here that `nil` doesn't fit.
-    // A handler that binds the error can't hold both.
     bool routes_nil;
     core_string_t nil_text;
     ir_span_t nil_span;
@@ -480,8 +451,6 @@ typedef struct {
 
 core_list_decl(n00bb_try_frame_t);
 
-// One manager of a `with` statement. Its exit block runs `__exit`, given
-// `value` (what `__enter` returned) and the failure, if any.
 typedef struct {
     parse_tree_t *node;
     ir_local_t *manager;
@@ -496,18 +465,11 @@ typedef struct {
     parse_tree_t *body;
     core_list_t(n00bb_with_item_t) items;
     bool active;
-    // A `with` used as a value: its body's `->` gives the value.
     bool expression;
 } n00bb_with_frame_t;
 
 core_list_decl(n00bb_with_frame_t);
 
-// A place passed to an `out` or `modify` parameter. When it is a whole
-// variable, `local` or `storage` (a parameter or global) names it, for the
-// check that one call is not given the same variable twice. An element a
-// container reaches through its accessors has no address, so it is passed as
-// the address of `temporary`, which is written back to `container` at
-// `index` once the call returns or fails.
 typedef struct {
     ir_local_t *local;
     ir_value_t *storage;
@@ -536,7 +498,6 @@ typedef struct {
     parse_tree_t *node;
     core_list_t(parse_tree_ptr_t) expressions;
     core_list_t(n00bb_ir_value_ptr_t) values;
-    // The field names of a named-field literal (empty for a tuple).
     core_list_t(core_string_t) names;
 } n00bb_tuple_parts_t;
 
@@ -583,8 +544,6 @@ struct n00bb_lower_context {
     bool write_back_open_index;
     core_dict_t node_types;
     bool node_types_ready;
-    // The field use each field read (and each place formed from one) was
-    // lowered from.
     core_dict_t field_reads;
     bool field_reads_ready;
     core_list_t(n00bb_try_frame_t) tries;
@@ -769,8 +728,6 @@ n00bb_emit_sequence_shape_check(ir_lower_context_t *context,
                                 ir_value_t *value, ir_shape_t *expected,
                                 ir_span_t span);
 
-// Reports an error when `value`'s length is known while lowering and
-// differs from a static extent of `expected`; the shape checks call it.
 void
 n00bb_report_static_shape_mismatch(ir_lower_context_t *context,
                                    ir_value_t *value, ir_shape_t *expected,
@@ -1132,7 +1089,6 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                       ir_value_t *const *operands, size_t operand_count,
                       th_type *result_type, ir_span_t span, void *state);
 
-// Starts `scope` for the construct entered with `order`.
 bool
 n00bb_exit_scope_open(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                       uint64_t order, bool handles, ir_span_t span);
@@ -1140,56 +1096,33 @@ n00bb_exit_scope_open(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
 void
 n00bb_exit_scope_free(n00bb_exit_scope_t *scope);
 
-// Leaves `scope` for its exit block for `reason`, with `error` when the
-// reason is a failure.
 bool
 n00bb_exit_scope_jump(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                       uint64_t reason, ir_value_t *error, ir_span_t span);
 
-// Closes `scope` once lowering has left the construct, first leaving it by
-// falling through when that is reachable. When anything reaches the exit
-// block, lowering continues there with `*reached` set, for the construct's
-// own exit code; `*failure` is then the failure, or nullptr when no failure
-// reaches the block.
 bool
 n00bb_exit_scope_close(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                        ir_span_t span, bool *reached, ir_value_t **failure);
 
-// Goes on from `scope`'s exit block once its exit code has run: to `after`
-// when falling through, or for a failure that `verdict` (if given: what
-// the exit code returned) drops by being `true`; back to the resume
-// blocks; and otherwise on to the failure handlers outside the construct.
-// Lowering continues in `after` if anything reaches it.
 bool
 n00bb_exit_scope_finish(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                         ir_block_t *after, ir_value_t *verdict,
                         parse_tree_t *source, n00bb_text_t phrase);
 
-// Fails the function with `error`, raised where only the frames entered
-// before `before_order` are open, leaving through the loops still open.
 bool
 n00bb_emit_function_failure(ir_lower_context_t *context, ir_value_t *error,
                             ir_span_t span, uint64_t before_order);
 
-// Sends `error`, raised where only the frames entered before `before_order`
-// are open, to its handler, or out of the function.
 bool
 n00bb_propagate_failure(ir_lower_context_t *context, parse_tree_t *source,
                         ir_value_t *error, ir_span_t span,
                         uint64_t before_order, n00bb_text_t phrase);
 
-// Leaves through the exit blocks of the constructs entered after
-// `stop_order`, innermost first, for a `return`, `break`, `continue` or a
-// block's value. `*value`, when there is one, is carried across them, and
-// is what was carried after.
 bool
 n00bb_emit_scoped_success(ir_lower_context_t *context,
                           parse_tree_t *exit_node, uint64_t stop_order,
                           ir_value_t **value);
 
-// Keeps `value` across exit blocks that other paths also reach: in an
-// option that is `nil` from the function's entry, so every path has
-// written it. n00bb_kept_value reads it back as `type`.
 ir_local_t *
 n00bb_keep_across_exits(ir_lower_context_t *context, ir_value_t *value,
                         ir_span_t span);
@@ -1214,21 +1147,15 @@ bool
 n00bb_lower_with_manager(ir_lower_context_t *context, parse_visit_t *visit,
                          bool entering, void *state);
 
-// The innermost exit scope open between `stop_order` and `before_order`.
 n00bb_exit_scope_t *
 n00bb_innermost_exit_scope(n00bb_lower_context_t *lower, uint64_t stop_order,
                            uint64_t before_order);
 
-// The handler a failure raised where only the frames entered before
-// `before_order` are open goes to: the innermost `try` whose body lowering
-// is in, or open exit scope. At most one of `*try_frame` and `*scope` is
-// set.
 void
 n00bb_failure_handler(n00bb_lower_context_t *lower, uint64_t before_order,
                       n00bb_try_frame_t **try_frame,
                       n00bb_exit_scope_t **scope);
 
-// As n00bb_route_try_error, for the handlers entered before `before_order`.
 int
 n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
                            ir_span_t span, uint64_t before_order);
@@ -1385,12 +1312,6 @@ n00bb_from_reference_address(ir_value_t *value);
 
 
 
-// A container element reached through `__read` has no address. Assigning
-// to one of its fields copies the element into a temporary, updates the
-// field there, and stores the temporary back through `__write`.
-
-
-
 void
 n00bb_note_field_read(ir_lower_context_t *context, ir_value_t *value,
                       parse_tree_t *node);
@@ -1420,11 +1341,6 @@ ir_value_t *
 n00bb_field_storage(ir_lower_context_t *context, ir_value_t *base,
                     core_string_t name, th_type *type, ir_span_t span);
 
-// An element a container reaches through `__read` has no address, so writing
-// part of it goes through `element`, a copy, which is stored back to the
-// container at `index` with `__write` afterwards. The container is read
-// again from `container_place` then, when it has one (it may itself be such
-// a copy), and is the value `container` otherwise.
 typedef struct {
     ir_value_t *container;
     ir_value_t *container_place;
@@ -1531,10 +1447,6 @@ bind_missing_external(ir_lower_context_t *context,
 bool
 n00bb_check_required_fields(n00bb_link_analysis_t *analysis);
 
-// Whether module variable `global`, an array with a declared size, has no
-// static storage: its size is only known when the program runs, or its
-// elements can't be zeroed statically (objects, which each need one). Its
-// module's initializer then allocates it.
 static inline bool
 n00bb_global_needs_runtime_array(const ir_global_t *global)
 {
@@ -1549,10 +1461,6 @@ bool
 n00bb_allocate_runtime_global(ir_lower_context_t *context,
                               parse_sym_entry_t *symbol, ir_span_t span);
 
-// Whether the zero representation of `type` is one of its values, for code
-// in `site`: what an array's elements hold when it is created without a
-// value for them. When not, `*blame` is the type (it, or a part of it) whose
-// zero isn't a value.
 bool
 n00bb_zero_tolerant(core_translation_unit_t *site, th_type *type,
                     th_type **blame, uint32_t depth);
@@ -1563,19 +1471,11 @@ ir_value_t *
 n00bb_emit_let_default_array(ir_lower_context_t *context, th_type *type,
                              ir_span_t span);
 
-// The bounds of slice `contents` (`a:b`, `a until b`, `a to b`, with either
-// bound left out) as `__slice` and `__write_slice` take them: each an
-// `int?`, nil when left out, then whether `to` includes the end. Reports
-// constant bounds in the wrong order, and returns false. (Bounds outside an
-// array of known length are checked on the IR: n00bb_check_known_ranges.)
 bool
 n00bb_lower_slice_arguments(ir_lower_context_t *context,
                             parse_grammar_t *grammar, parse_tree_t *contents,
                             ir_value_t *arguments[3]);
 
-// The length of array `value`, in `function`, when it is known without
-// running the program: a declared size, a literal's, or the one every whole
-// assignment to the variable holding it gives.
 bool
 n00bb_static_array_length(const ir_func_t *function, const ir_value_t *value,
                           uint64_t *length);

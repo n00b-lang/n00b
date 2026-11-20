@@ -73,8 +73,6 @@ all_ones_above(ir_int_t value)
     return mask;
 }
 
-// The two's-complement span both ranges fit in, [-2^k, 2^k - 1]: no
-// bitwise operation on values in it leaves it.
 static ir_interval_t
 bitwise_span(ir_interval_t a, ir_interval_t b)
 {
@@ -85,7 +83,6 @@ bitwise_span(ir_interval_t a, ir_interval_t b)
     return (ir_interval_t){-mask - 1, mask};
 }
 
-// `2^shift` for shift counts in [0, 127]; ir_int_max past what fits.
 static ir_int_t
 power_of_two(ir_int_t shift)
 {
@@ -203,21 +200,16 @@ ir_interval_apply(ir_op_t op, ir_interval_t a, ir_interval_t b)
             return (ir_interval_t){0, ir_int_lesser(a.hi, b.hi)};
         if (a.lo >= 0) return (ir_interval_t){0, a.hi};
         if (b.lo >= 0) return (ir_interval_t){0, b.hi};
-        // Both may be negative: the magnitude bound below is not one for
-        // bitwise results (-2 & -3 is -4).
         return bitwise_span(a, b);
     case IR_OP_OR:
     case IR_OP_XOR:
         if (a.lo >= 0 && b.lo >= 0)
             return (ir_interval_t){0, all_ones_above(ir_int_greater(a.hi, b.hi))};
-        // With a negative operand (4 ^ -4 is -8) only the span holds.
         return bitwise_span(a, b);
     case IR_OP_SHL:
         if (a.lo >= 0 && b.lo >= 0)
             return (ir_interval_t){shift_left(a.lo, b.lo),
                                    shift_left(a.hi, b.hi)};
-        // A negative value shifts as a multiply by 2^count (-3 << 4 is -48),
-        // which the magnitude bound below does not cover.
         if (b.lo >= 0)
             return ir_interval_apply(IR_OP_MUL, a,
                 (ir_interval_t){power_of_two(b.lo), power_of_two(b.hi)});

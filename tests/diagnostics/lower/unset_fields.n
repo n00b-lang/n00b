@@ -1,6 +1,3 @@
-# A local whose address is taken is set and read through it, a field at a
-# time or by the calls it's handed to; every read needs what it reads set.
-
 record Pair {
     a: int
     b: int

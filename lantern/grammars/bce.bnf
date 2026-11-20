@@ -1,5 +1,3 @@
-# C2Y Grammar (translated from bCe parse.c)
-
 @lexer("bce.lex")
 
 <provided_identifier> ::= %IDENTIFIER
@@ -371,14 +369,6 @@
 <modified_literal> ::= %IDENTIFIER %"{" <array_literal_list>? %","? %"}"
     | %IDENTIFIER %"{" <dict_pair_list> %","? %"}"
 
-# WP-011: bare dict literal `{key: value, ...}`. Disambiguates from
-# `<braced_initializer>` by requiring at least one `<dict_pair>` (i.e.
-# at least one `:` key/value separator).  Empty `{}` and comma-only
-# initializer lists fall through to `<braced_initializer>`; designated
-# initializers (`.x = 5`) likewise stay in `<braced_initializer>`.
-# The `<modified_literal>` rule above shares <dict_pair_list> so that
-# explicit `d{key: value, ...}` accepts the same body shape; the
-# modifier-vs-bare distinction is resolved by the xform pass.
 <dict_literal> ::= %"{" <dict_pair_list> %","? %"}"
 
 <dict_pair_list> ::= <dict_pair> (%"," <dict_pair>)*
@@ -708,9 +698,6 @@
 <keyword_clause> ::= %"_Kargs" <keyword_param_list>
     | %"_Kargs" %":" %"_Opaque"
 
-# The `rpc` keyword is contextual — the tokenizer only emits it as a
-# grammar terminal when preceded by `@`, so existing user code that
-# uses `rpc` as an identifier (variable, field, function) is unaffected.
 <rpc_clause> ::= %"_Rpc" %"(" <string_literal> %")"
 
 <keyword_param> ::= <declaration_specifiers> <declarator> %"=" <initializer>
@@ -1097,10 +1084,6 @@
     | <try_expression>
     | <postfix_expression>
 
-# bCe `_try <unary-expression>`: error-propagation for bCe_result_t. Spelled
-# `_try` (not `try`) because bCe uses `try` as an ordinary identifier. Lowered
-# by xform_try: on a non-ok result, the enclosing function returns the error;
-# otherwise the expression yields the unwrapped `.ok` value.
 <try_expression> ::= %"_Try" <unary_expression>
 
 <_kw_kw_alignof> ::= %"alignof"
@@ -1126,18 +1109,8 @@
 
 <macro_block_statement> ::= <postfix_expression> <compound_statement>
 
-# C _Defer TS (WG14 N3734). bCe only has to parse it; clang lowers it natively
-# under -fdefer-ts, which bCe forces. `defer` is rewritten to `_Defer` by the
-# prescan unless --bCe-disable-defer is given.
 <defer_statement> ::= %"_Defer" <secondary_block>
 <defer_statement> ::= %"defer" <secondary_block>
 
-# `_With (T *p = acquire(); release(p)) { ... }` -- a scoped binding whose
-# cleanup runs on every exit path. The cleanup clause is optional; without it
-# the release template given by --bCe-with-release is used, so bCe never learns
-# the runtime's finalizer. Lowered by xform_with to a block holding the
-# declaration and a _Defer. `with` is rewritten to `_With` by the prescan unless
-# --bCe-disable-with is given. The `;` separates the binding from the cleanup,
-# so the one-clause form needs no trailing semicolon.
 <with_statement> ::= %"_With" %"(" %"var"? <attribute_specifier_sequence>? <declaration_specifiers> <init_declarator_list> (%";" <expression>)? %")" <secondary_block>
 <with_statement> ::= %"with" %"(" %"var"? <attribute_specifier_sequence>? <declaration_specifiers> <init_declarator_list> (%";" <expression>)? %")" <secondary_block>

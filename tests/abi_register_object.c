@@ -204,8 +204,6 @@ main(int argc, char **argv)
                 target_index = symbol.native_section_index;
                 offset = symbol.section_offset + relocation.addend_bits;
             }
-            /* Runtime relocations may name external symbols that are resolved
-               when the library is linked into an executable. */
             if (!target_index && i != metadata.native_index) continue;
             assert(target_index && target_index <= section_count
                 && loaded[target_index]
@@ -506,7 +504,6 @@ main(int argc, char **argv)
         }
         assert(matches == 1);
     }
-    /* The published snapshot borrows the relocated sections until exit. */
     free(object);
     return 0;
 }

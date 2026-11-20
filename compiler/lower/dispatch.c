@@ -10,7 +10,6 @@ n00bb_emit_iteration_call(ir_lower_context_t *context, core_string_t method,
     ir_value_t *result = receiver && return_type
         ? n00bb_dispatch(context, method, &receiver, 1, return_type, span)
         : nullptr;
-    // A `modify` receiver is passed by the place it was read from.
     return result && (!write_back || ir_annot_set(lower->ir_context,
             &result->def->annots, (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
                                                .kind = IR_ANNOT_BOOL,
@@ -60,9 +59,6 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
 {
     if (!context || !argument || !value) return nullptr;
     (void)grammar;
-    // What is consumed is decided by how the argument was read: a whole
-    // variable gives up its value, a part of one cannot be taken out of it,
-    // and anything else is a temporary already owned by the call.
     ir_instr_t *read = value->kind == IR_VAL_INSTR ? value->def : nullptr;
     ir_value_t *address = read && read->op == IR_OP_LOAD
             && read->n_operands == 1

@@ -44,13 +44,10 @@ rejects missing_name N00B-N0015 'bring missing from geo\n'
 rejects import_bring_all 'is written `bring all from geo`' \
     'import geo bring all\n'
 rejects private_name N00B-N0015 'bring secret from geo\n'
-# Functions brought from two modules overload each other; a call that both
-# take with the same parameters is ambiguous.
 rejects duplicate N00B-T0012 \
     'bring circle from geo\nbring circle from shapes\nrequire circle() == 1\n'
 rejects all_overlap N00B-T0012 \
     'bring all from geo\nbring all from shapes\nrequire circle() == 1\n'
-# A brought function and a local value of its name still clash.
 rejects local_clash N00B-N0014 \
     'bring circle from geo\nlet circle = 5\n'
 

@@ -307,8 +307,6 @@ static bool writes_location(const ir_instr_t *in, const void *location)
         && address_location(ir_operand_value(&in->operands[0])) == location;
 }
 
-// The place an `out` or `modify` parameter refers to is lent to the callee
-// for the call, so reads through it are not shared with other writers.
 static bool lent_place(const ir_value_t *address)
 {
     const ir_func_t *f = address->kind == IR_VAL_PARAM ? address->owner
@@ -425,7 +423,6 @@ static bool refined(refine_t *r, ir_instr_t *read)
     return false;
 }
 
-// A write to a local through its destination that gives it a present value.
 static bool present_local_write(const ir_instr_t *in, const void *location)
 {
     if (in->dest_kind != IR_DEST_LOCAL || (const void *)in->dest_local
@@ -449,8 +446,6 @@ static bool present_local_write(const ir_instr_t *in, const void *location)
                 && !th_is_nil(type)));
 }
 
-// Assigning a present value proves the variable is present where only such
-// assignments reach it: the read of an option slot is unwrapped there.
 static bool assigned_present(refine_t *r, ir_instr_t *read)
 {
     const void *location = read->op == IR_OP_EXTRACT ? nullptr
@@ -476,8 +471,6 @@ static bool assigned_present(refine_t *r, ir_instr_t *read)
     return present;
 }
 
-// The address `in` uses as a place: a field's base, or the address of the
-// place a call passes to an `out` or `modify` parameter.
 static ir_value_t *place_operand(const ir_instr_t *in)
 {
     if (in->op == IR_OP_FIELD && in->n_operands == 2) {
@@ -499,8 +492,6 @@ static ir_value_t *place_operand(const ir_instr_t *in)
     return nullptr;
 }
 
-// What a place's address names, as tests record it: the global or local it
-// takes the address of, or the address itself.
 static const void *place_key(const ir_value_t *base)
 {
     const ir_instr_t *def = base && base->kind == IR_VAL_INSTR ? base->def
@@ -584,8 +575,6 @@ static void plan_places(refine_t *r, ir_block_t *block)
             core_list_push(r->places.data[at - 1].fields, in);
             r->places.data[at - 1].last = in;
             if (in->op != IR_OP_FIELD) {
-                // A call writing the place through its reference leaves it
-                // present: the place is stored back as `some` after it.
                 core_dict_put(&r->written, in, in);
             }
             else {

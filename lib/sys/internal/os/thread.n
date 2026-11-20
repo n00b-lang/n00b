@@ -1,5 +1,3 @@
-# The calling thread: starting others, yielding, its stack and its id.
-
 import internal.threads
 bring address_ref from internal.os.support
 
@@ -34,8 +32,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # The calling thread's stack top, kept after the first query, which may
-    # take the runtime's thread list lock.
     thread var linux_stack_high: uint = 0
 } else when target_os() == "macos" {
     [-
@@ -86,24 +82,18 @@ when target_os() == "linux" {
     -]'ffi
 }
 
-# Starts a thread that runs `entry`; false when it can't be started. Make
-# the entry with `callback[sys.threads.Thread_Entry](ref f, ...)`, binding
-# any arguments `f` takes.
 func thread_start(entry: internal.threads.Thread_Entry) -> bool {
     return internal.threads.thread_start(entry)
 }
 
-# The calling thread's id, unique among running threads.
 func thread_id() -> uint {
     return internal.threads.thread_id()
 }
 
-# True on the thread that started the program.
 func thread_is_main() -> bool {
     return internal.threads.thread_is_main()
 }
 
-# Lets other threads run.
 func thread_yield() {
     when target_os() == "linux" {
         _ = sched_yield()
@@ -114,8 +104,6 @@ func thread_yield() {
     }
 }
 
-# The address just past the top of the calling thread's stack, which grows
-# down from it; nil when it can't be found.
 func thread_stack_high_self() -> Ref[byte]? {
     when target_os() == "linux" {
         if linux_stack_high == 0 {
@@ -135,11 +123,6 @@ func thread_stack_high_self() -> Ref[byte]? {
     }
 }
 
-# Notes that `address`, in a frame of an export entry from C, is above every
-# n00b frame the call makes. A thread C started (with libc's pthreads, say)
-# has a stack the runtime knows nothing of; on Linux its top is taken as the
-# highest such entry so far, since n00b code runs on it only below one.
-# Returns whether that raised the thread's stack top.
 func thread_stack_entry(address: uint) -> bool {
     when target_os() == "linux" {
         if linux_stack_high == 0 {
@@ -155,7 +138,6 @@ func thread_stack_entry(address: uint) -> bool {
     }
 }
 
-# An id for the calling thread that thread_suspend and thread_resume take.
 func thread_control_self() -> uint {
     when target_os() == "linux" {
         return cast[uint](gettid())

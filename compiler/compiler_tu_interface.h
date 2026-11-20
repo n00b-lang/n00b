@@ -11,8 +11,6 @@ typedef struct {
     size_t linked_interface_count;
     ir_ctx_t *ir_context;
     const n00bb_cache_t *cache;
-    // The linked interfaces' metadata by owner, key and version, built
-    // before workers read it; without it, lookups scan every entry.
     n00bb_metadata_index_t *metadata_index;
 } n00bb_interface_context_t;
 

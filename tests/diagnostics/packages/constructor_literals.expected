@@ -1,5 +1,5 @@
-tests/diagnostics/packages/constructor_literals/consumer.n:12:29: error N00B-N0006: `Sealed` has a private field `hidden`, so a field tuple outside module `constructor_literals.sealed` cannot build it
+tests/diagnostics/packages/constructor_literals/consumer.n:9:29: error N00B-N0006: `Sealed` has a private field `hidden`, so a field tuple outside module `constructor_literals.sealed` cannot build it
   help: call its constructor, or write `unsafe_cast[Sealed](...)` to build it without running the constructor
-tests/diagnostics/packages/constructor_literals/consumer.n:17:19: error N00B-N0006: `Sealed` has a private field `hidden`, so `cast` outside module `constructor_literals.sealed` cannot build it
+tests/diagnostics/packages/constructor_literals/consumer.n:13:19: error N00B-N0006: `Sealed` has a private field `hidden`, so `cast` outside module `constructor_literals.sealed` cannot build it
   help: call its constructor, or write `unsafe_cast[Sealed](...)` to build it without running the constructor
 tests/diagnostics/packages/constructor_literals/sealed.n:3:13: warning N00B-N0021: field `hidden` of `Sealed` is set but never read

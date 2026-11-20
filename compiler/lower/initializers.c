@@ -96,8 +96,6 @@ collect_dynamic_sym_declarations(parse_grammar_t *grammar,
     if (nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))) {
         parse_sym_entry_t *symbol = nullptr;
         ir_global_t *global = declared_global(grammar, state, node, &symbol);
-        // An array declared without a value whose size is only known when
-        // the program runs is allocated by the initializer, too.
         parse_sym_entry_t *declared = !global && state && state->ir_module
             ? parse_tree_sym(node) : nullptr;
         ir_global_t *sized = declared
@@ -821,9 +819,6 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
             && unit == core_link_unit_root(state->link, 0);
         ir_module_t *module = unit_module(state);
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
-            // A cached module's functions have their bodies in the cache:
-            // its value methods are the program's as much as a compiled
-            // module's are, or boxed dispatch can't find them.
             ir_func_t *declared = ir_func_at(module, j);
             ir_func_t *function = declared ? n00bb_cached_body(declared)
                                            : nullptr;
@@ -843,10 +838,6 @@ collect_emission_roots(n00bb_link_analysis_t *analysis,
                        CORE_STRING_STATIC("__n00bb_dispatch_")))
                 core_list_push(*roots, function);
         }
-        // A literal's generated module is whole in the object the program's
-        // compile-time code runs with, so its cached copy serves any later
-        // build. At run time only what the program calls is kept, so a
-        // library it binds is linked only when something calls it.
         if (root || (generated && !generated_whole)) continue;
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);

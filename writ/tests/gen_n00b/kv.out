@@ -628,9 +628,9 @@ func next(self: Iter) -> Entry? fail: Ffi_Error {
 35	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
 64	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
 90	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-108	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-130	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
-149	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
+108	tests/gen_n00b/../bind/kv.writ:30:1	kv_get
+130	tests/gen_n00b/../bind/kv.writ:40:1	kv_iter_new
+149	tests/gen_n00b/../bind/kv.writ:43:1	kv_iter_next
 library kv
 load static
 extern __kv_open writ_kv_n00b_kv_open (ref[array[u8]], ref[uint], ref[int]) -> i32 fail: nil

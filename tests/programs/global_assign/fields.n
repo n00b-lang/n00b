@@ -1,6 +1,3 @@
-# Array literals stored into a record's fixed-size array field with the
-# wrong length: in a record literal and by assigning the field. These are
-# found once types are solved, so they are separate from lengths.n.
 import holder
 
 func main() -> nil {

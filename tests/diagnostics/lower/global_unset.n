@@ -1,6 +1,3 @@
-# A module variable with no initializer must be set before any function
-# that may run after initialization reads it.
-
 var counted: int
 var set_later: int
 var set_here: int

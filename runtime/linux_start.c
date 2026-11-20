@@ -1,26 +1,3 @@
-// Program startup for Linux without libc.
-//
-// n00b programs on Linux link no C library: this file provides what the C
-// startup files and libc would, for the runtime and for compiled n00b code:
-//
-//   - `_start`, which reads argc, argv, the environment and the auxiliary
-//     vector from the initial stack, sets up thread-local storage for the
-//     main thread, runs the program and exits;
-//   - the saved environment and auxiliary vector;
-//   - thread-local storage blocks, built from the program's PT_TLS segment;
-//   - memcpy, memmove, memset, memcmp and bcmp, which compiled code calls;
-//   - malloc, calloc, realloc and free over the n00b pool allocator, plus
-//     strlen, strcmp and memchr, for FFI shims.
-//
-// It is built only into the program runtime, with N00B_LIBC_FREE defined.
-//
-// A program whose FFI contracts link "c" links libc dynamically, but still
-// starts here: the dynamic loader sets libc up, main thread included, and
-// then jumps to _start. These definitions interpose libc's, so C code
-// allocates from the n00b pool too. Threads the runtime starts carry n00b's
-// thread-local storage only, not libc's, so a shim for a contract that
-// links "c" refuses to run on one (n00b_ffi_libc_thread_check).
-
 #if defined(__linux__) && defined(N00B_LIBC_FREE)
 
 #include <stdatomic.h>
@@ -34,8 +11,6 @@
 
 #include <elf.h>
 
-// The program's main: runtime_main.c's, which runs the n00b program, or a
-// compile-time program's own.
 int main(int argc, char **argv);
 
 char **n00b_linux_environ;
@@ -49,10 +24,6 @@ n00b_linux_auxv(uintptr_t type)
         if (entry[0] == type) return entry[1];
     return 0;
 }
-
-// ---------------------------------------------------------------------------
-// Memory functions. `no_builtin` keeps the compiler from turning these loops
-// back into calls to themselves.
 
 __attribute__((no_builtin)) void *
 memcpy(void *restrict destination, const void *restrict source, size_t count)
@@ -111,17 +82,6 @@ strlen(const char *text)
     while (text[length]) length++;
     return length;
 }
-
-// ---------------------------------------------------------------------------
-// Thread-local storage.
-//
-// The static linker resolves every thread-local access to a fixed offset
-// from the thread pointer, in the layout the architecture's ABI defines:
-//
-//   x86_64 (variant II): the TLS block ends at the thread pointer, which
-//     points to a thread control block whose first word points to itself.
-//   aarch64 (variant I): the thread pointer points to a 16-byte control
-//     block, and the TLS block follows it, aligned.
 
 typedef struct {
     const unsigned char *image;
@@ -212,13 +172,6 @@ set_thread_pointer(uintptr_t pointer)
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// A minimal stand-in for the few libc calls the compile-time runtime
-// makes. Allocations map whole pages, with two words in front of the
-// block: the mapping's size, then where the mapping starts (an aligned
-// block need not start right after the header). They are few and
-// short-lived, so that is enough.
-
 enum { ALLOCATION_HEADER = 16 };
 
 static uintptr_t
@@ -228,7 +181,6 @@ page_bytes(void)
     return page ? page : 4096;
 }
 
-// `size` zeroed bytes aligned to `alignment`, a power of two of at least 16.
 static void *
 page_allocate(size_t size, size_t alignment)
 {
@@ -246,7 +198,6 @@ page_allocate(size_t size, size_t alignment)
     return block;
 }
 
-// The bytes from `memory` to the end of its mapping.
 static uintptr_t
 page_usable(void *memory)
 {
@@ -282,18 +233,6 @@ n00b_linux_realloc(void *memory, size_t size)
     n00b_linux_free(memory);
     return grown;
 }
-
-// ---------------------------------------------------------------------------
-// The C allocator, for FFI shims and C libraries linked into a program: the
-// n00b pool allocator (lib/sys/internal/pool.n), which every program links.
-// A program without it, such as a compile-time one, falls back to the page
-// allocator above, and so does a program before _start: with libc linked,
-// the loader and libc's initializers may allocate before the n00b program
-// (and the pool) is set up.
-//
-// free and realloc tell the two apart by the block's first header word: a
-// pool block's is a size class below 16 or a mapping size with its top bit
-// set; a page allocation's is its mapping size, a whole number of pages.
 
 static bool started;
 
@@ -342,10 +281,6 @@ free(void *memory)
     else n00b_linux_free(memory);
 }
 
-// The rest of the allocator libc's own would provide, so no block from
-// libc's allocator reaches the free above. Alignments past the pool's 16
-// bytes come from the page allocator.
-
 void *
 aligned_alloc(size_t alignment, size_t size)
 {
@@ -388,8 +323,6 @@ malloc_usable_size(void *memory)
 {
     if (!memory) return 0;
     if (page_allocated(memory)) return page_usable(memory);
-    // The pool's header (lib/sys/internal/pool.n): a size class, or a large
-    // block's mapping size with the top bit set.
     uint64_t tag = *(uint64_t *)((unsigned char *)memory - ALLOCATION_HEADER);
     return tag >> 63 ? (size_t)(tag & ~(1ull << 63)) - ALLOCATION_HEADER
                      : (size_t)16 << tag;
@@ -437,7 +370,6 @@ n00b_linux_write(int fd, const void *bytes, size_t count)
     return written < 0 ? -1 : written;
 }
 
-// libc's, when the program links it; null otherwise.
 extern void exit(int status) __attribute__((weak));
 extern int __cxa_atexit(void (*function)(void *), void *argument,
                         void *dso) __attribute__((weak));
@@ -447,9 +379,6 @@ static bool runtime_thread_now(void);
 [[noreturn]] void
 n00b_linux_exit_program(int status)
 {
-    // With libc linked, exit as a C program does: libc runs its atexit
-    // handlers, the shared libraries' destructors, and flushes stdio. That
-    // takes libc's thread state, which a runtime thread lacks.
     if (exit && !runtime_thread_now()) exit(status);
     for (;;)
         (void)n00b_linux_syscall6(__NR_exit_group, status, 0, 0, 0, 0, 0);
@@ -462,22 +391,6 @@ n00b_linux_exit(int status)
         (void)n00b_linux_syscall6(__NR_exit_group, status, 0, 0, 0, 0, 0);
 }
 
-// ---------------------------------------------------------------------------
-// Threads.
-//
-// Each thread gets one mapping:
-//
-//   [ control | TLS area | guard | stack ............ top | cap ]
-//
-// The guard and the cap are mapped with no access. Besides catching an
-// overflow, they keep the stack a mapping of its own: the kernel merges
-// neighbouring anonymous mappings with the same access, and a merged one
-// would make /proc/self/maps, which the collector reads the stack top
-// from, report the end of a neighbour instead.
-// The kernel clears `tid` when the thread has exited (CLONE_CHILD_CLEARTID);
-// a thread can't unmap the stack it runs on, so finished threads' mappings
-// are released by the next thread_start.
-
 typedef struct thread_area {
     _Atomic int32_t tid;
     struct thread_area *next;
@@ -486,8 +399,6 @@ typedef struct thread_area {
     void *argument;
 } thread_area_t;
 
-// Set on the threads n00b_linux_thread_start starts: they have no libc
-// thread state, even when the program links libc.
 static _Thread_local bool runtime_thread;
 
 static bool
@@ -528,8 +439,6 @@ enum {
     LINUX_CLONE_CHILD_CLEARTID = 0x200000,
 };
 
-// clone: the child starts on `stack`, calls entry(argument), and exits the
-// thread. Returns the child's id in the parent, or a negated errno.
 long n00b_linux_clone(unsigned long flags, void *stack, _Atomic int32_t *tid,
                       uintptr_t thread_pointer, void (*entry)(void *),
                       void *argument);
@@ -540,16 +449,14 @@ __asm__(
     ".globl n00b_linux_clone\n"
     ".type n00b_linux_clone, @function\n"
     "n00b_linux_clone:\n"
-    // rdi flags, rsi stack, rdx tid, rcx thread pointer, r8 entry,
-    // r9 argument. The child pops entry and argument off its new stack.
     "    and $-16, %rsi\n"
     "    sub $16, %rsi\n"
     "    mov %r8, 0(%rsi)\n"
     "    mov %r9, 8(%rsi)\n"
-    "    mov %rcx, %r8\n"            // tls: 5th syscall argument
-    "    mov %rdx, %r10\n"           // child_tid: 4th
-    "    mov $56, %eax\n"            // __NR_clone
-    "    syscall\n"                  // clone(flags, stack, ptid, ctid, tls)
+    "    mov %rcx, %r8\n"
+    "    mov %rdx, %r10\n"
+    "    mov $56, %eax\n"
+    "    syscall\n"
     "    test %rax, %rax\n"
     "    jnz 1f\n"
     "    xor %ebp, %ebp\n"
@@ -557,7 +464,7 @@ __asm__(
     "    pop %rdi\n"
     "    call *%rax\n"
     "    xor %edi, %edi\n"
-    "    mov $60, %eax\n"            // __NR_exit: this thread only
+    "    mov $60, %eax\n"
     "    syscall\n"
     "    ud2\n"
     "1:  ret\n"
@@ -568,12 +475,11 @@ __asm__(
     ".globl n00b_linux_clone\n"
     ".type n00b_linux_clone, %function\n"
     "n00b_linux_clone:\n"
-    // x0 flags, x1 stack, x2 tid, x3 thread pointer, x4 entry, x5 argument.
     "    and x1, x1, #-16\n"
     "    stp x4, x5, [x1, #-16]!\n"
-    "    mov x4, x2\n"               // child_tid: 5th syscall argument
-    "    mov x8, #220\n"             // __NR_clone
-    "    svc #0\n"                   // clone(flags, stack, ptid, tls, ctid)
+    "    mov x4, x2\n"
+    "    mov x8, #220\n"
+    "    svc #0\n"
     "    cbnz x0, 1f\n"
     "    ldp x4, x5, [sp], #16\n"
     "    mov x29, #0\n"
@@ -581,7 +487,7 @@ __asm__(
     "    mov x0, x5\n"
     "    blr x4\n"
     "    mov x0, #0\n"
-    "    mov x8, #93\n"              // __NR_exit: this thread only
+    "    mov x8, #93\n"
     "    svc #0\n"
     "    brk #0\n"
     "1:  ret\n"
@@ -602,7 +508,6 @@ unlock_threads(void)
     atomic_flag_clear_explicit(&threads_lock, memory_order_release);
 }
 
-// Releases the mappings of threads the kernel has finished with.
 static void
 release_finished_threads(void)
 {
@@ -648,9 +553,6 @@ n00b_linux_thread_start(void (*entry)(void *), void *argument)
     area->entry = entry;
     area->argument = argument;
     uintptr_t thread_pointer = n00b_linux_tls_init(base + control);
-    // The area joins the list before the thread starts, which may ask for
-    // its stack's top right away. Its tid is nonzero until the kernel clears
-    // it, so it isn't taken for a finished thread's meanwhile.
     atomic_store_explicit(&area->tid, -1, memory_order_relaxed);
     lock_threads();
     area->next = threads;
@@ -677,12 +579,8 @@ n00b_linux_thread_start(void (*entry)(void *), void *argument)
     return 0;
 }
 
-// The address just past the top of the main thread's stack.
 static uintptr_t main_stack_high;
 
-// The kernel copies the program's file name (AT_EXECFN) to the very top of
-// the initial stack, with only a null word above it, so the stack's mapping
-// ends at the page boundary after it.
 static uintptr_t
 initial_stack_high(uintptr_t *stack)
 {
@@ -698,8 +596,6 @@ initial_stack_high(uintptr_t *stack)
 uintptr_t
 n00b_linux_stack_high(uintptr_t sp)
 {
-    // The main thread's is known without the thread list, whose lock a
-    // thread stopped for the collector may hold.
     if (n00b_linux_syscall6(__NR_gettid, 0, 0, 0, 0, 0, 0)
         == n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0))
         return main_stack_high;
@@ -714,17 +610,12 @@ n00b_linux_stack_high(uintptr_t sp)
     return high;
 }
 
-// ---------------------------------------------------------------------------
-// Startup.
-
 static void
 call_loader_finalizer(void *finalizer)
 {
     ((void (*)(void))finalizer)();
 }
 
-// `finalizer` is what the dynamic loader passes for atexit (zero from the
-// kernel): it runs the shared libraries' destructors.
 [[noreturn]] void
 n00b_linux_start(uintptr_t *stack, void (*finalizer)(void))
 {
@@ -738,8 +629,6 @@ n00b_linux_start(uintptr_t *stack, void (*finalizer)(void))
     main_stack_high = initial_stack_high(stack);
 
     find_tls_template();
-    // Under the dynamic loader (AT_BASE is where it is loaded), the main
-    // thread's thread-local storage is set up already, libc's with it.
     if (!n00b_linux_auxv(AT_BASE)) {
         long area = n00b_linux_syscall6(__NR_mmap, 0,
             (long)n00b_linux_tls_bytes(), LINUX_PROT_READ | LINUX_PROT_WRITE,
@@ -757,8 +646,6 @@ n00b_linux_start(uintptr_t *stack, void (*finalizer)(void))
     n00b_linux_exit_program(main(argc, argv));
 }
 
-// The kernel, or the dynamic loader, starts the process here, with the
-// stack pointer at argc and the loader's finalizer in rdx (x0).
 __attribute__((naked, noreturn)) void
 _start(void)
 {

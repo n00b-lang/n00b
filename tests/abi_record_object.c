@@ -1561,8 +1561,6 @@ check_c_foreign(const core_object_section_t *metadata,
     assert(types && extractors && trace_arms && stream);
     th_ctx *context = th_ctx_new();
     assert(context);
-    // The records come from c_foreign's FFI contract, so they live in the
-    // module its literal generates.
     uint64_t holder_hash = th_hash(context, TH_NAME(context,
         "__ffi_c_foreign___ffi_literal_1.Holder"));
     uint64_t item_hash = th_hash(context, TH_NAME(context,

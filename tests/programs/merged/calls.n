@@ -84,8 +84,6 @@ func total(c: bool) -> uint {
 require total(true) == 15
 require total(false) == 9
 
-// A value statement gives the value of the innermost construct it is in: an
-// `if` or `try` used as a value inside a block value keeps its own value.
 func block_of_if(c: bool) -> int {
     let y = {
         -> if c { -> 10 } else { -> 20 }

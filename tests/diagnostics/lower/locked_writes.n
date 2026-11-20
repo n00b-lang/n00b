@@ -1,9 +1,6 @@
 import sys.locks
 import sys.threads
 
-# Writes a thread makes under a lock are not races, however the lock is
-# taken: directly, through functions that take and let go of it, through a
-# `with` manager, or inside a function given the shared value.
 var guard: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
                               nesting = 0, collector = false)
 var direct_total: int = 0
@@ -51,7 +48,6 @@ func worker() {
         managed_total += 1
     }
     deposit(savings, 1)
-    # Still a race: nothing guards it.
     unguarded_total += 1
 }
 

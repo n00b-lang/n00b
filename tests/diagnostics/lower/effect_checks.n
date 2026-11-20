@@ -128,7 +128,6 @@ func quiet_copy(n: int) -> int {
     return copy_twice(n)
 }
 
-// Copying an object copies its handle: nothing is finalized.
 !may_effect(noisy_copy, output)
 !may_effect(quiet_copy, output)
 !may_effect(copy_twice, output)

@@ -224,8 +224,6 @@ widened_value(ir_lower_context_t *context, ir_value_t *value, th_type *target,
     return ok ? aggregate->dest : nullptr;
 }
 
-// A value with no place of its own is copied into a fresh local, whose
-// address is returned.
 static ir_value_t *
 temporary_place(ir_lower_context_t *context, ir_value_t *value,
                 ir_span_t span)
@@ -299,8 +297,6 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
         n00bb_lower_context_t *lower = context->user;
         core_string_t text = node && lower
             ? source_text_of(lower->unit, node) : (core_string_t){0};
-        // Once types are solved there is no later rewrite of a `ref`
-        // dispatch; the place's address is the reference.
         ir_value_t *reference = !place ? nullptr
             : lower && lower->solved ? place
             : n00bb_emit_reference(context, place, text, span);
@@ -353,7 +349,6 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
     ir_value_t *integer = n00bb_typed_integer_value(context, node, value,
                                                     target, span);
     if (integer != value) return integer;
-    // A float passed where a wider float is wanted widens.
     ir_machine_t from = ir_machine_of(context->module, value->type);
     ir_machine_t to = ir_machine_of(context->module, target);
     if (from.class == IR_CLASS_FLOAT && to.class == IR_CLASS_FLOAT

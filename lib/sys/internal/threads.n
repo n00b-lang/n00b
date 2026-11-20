@@ -14,9 +14,6 @@ record Thread_Context layout(c) {
     pc:        Ref[byte]?
 }
 
-# The runtime's thread queries, as direct calls. The collector uses these
-# where no mutator may be needed, so this literal has no shims and no
-# state of its own.
 [-
 library n00b
 
@@ -40,8 +37,6 @@ binding {
 }
 -]'ffi
 
-# Starting a thread. The runtime attaches the new thread to the collector
-# before it runs the entry, and detaches it after.
 [-
 library n00b
 
@@ -53,16 +48,10 @@ fn n00b_os_thread_start(entry: Thread_Entry once,
   effects threads, alloc, blocking, of entry
 -]'ffi
 
-# Starts a thread that runs `entry`; false when it can't be started. Make
-# the entry with `callback[sys.threads.Thread_Entry](ref f, ...)`, binding
-# any arguments `f` takes.
 func thread_start(entry: Thread_Entry) -> bool {
     return n00b_os_thread_start(entry) == 0
 }
 
-# The collector's own thread start, which allocates nothing: the collector
-# starts its finalizer thread from code that may run before the thread has
-# a mutator, where a callback (an object on the heap) can't be made.
 func collector_thread_start(entry: Ref[(Ref[byte]) -> Ref[byte]],
                             argument: Ref[byte]) -> bool {
     return n00b_os_thread_start_raw(unsafe_cast[Ref[byte]] entry,
@@ -101,14 +90,10 @@ func thread_stack_entry(address: uint) -> bool {
     return internal.os.thread.thread_stack_entry(address)
 }
 
-# The stack pointer: an address below every frame the caller's thread has
-# on its stack.
 func stack_address() -> uint {
     return __stack_pointer()
 }
 
-# The bytes below the stack pointer that a function may use without moving
-# it, which the platform's ABI promises signal handlers leave alone.
 func stack_red_zone_bytes() -> uint {
     when target_arch() == "x86_64" and target_os() != "windows" {
         return 128
@@ -119,8 +104,6 @@ func stack_red_zone_bytes() -> uint {
     }
 }
 
-# True where every frame saves its caller's frame pointer, so the frames
-# chain (everywhere but Windows).
 func frame_pointer_chain() -> bool {
     when target_os() == "windows" {
         return false
@@ -129,8 +112,6 @@ func frame_pointer_chain() -> bool {
     }
 }
 
-# Saves the calling thread's registers in `snapshot`, so a collector can scan
-# what they hold.
 func thread_capture_self(snapshot: Ref[Thread_Context]) {
     n00b_os_thread_capture_self_raw(unsafe_cast[Ref[byte]] snapshot)
 }
@@ -139,8 +120,6 @@ func thread_control_self() -> uint {
     return internal.os.thread.thread_control_self()
 }
 
-# Tells the processor this thread is spinning on a value another thread
-# will change.
 func cpu_relax() {
     __cpu_relax()
 }

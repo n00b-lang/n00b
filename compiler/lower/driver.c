@@ -647,8 +647,6 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
             module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))) : nullptr;
         if (initializer) core_list_push(initializer_functions, initializer);
     }
-    // Typing knows what each `with` manager's `__exit` returns, so whether
-    // it can drop a failure is settled before the analyses walk the paths.
     for (size_t i = 0; ok && i < units.len; i++) {
         ir_module_t *module = unit_module(tu_state(units.data[i]));
         for (size_t f = 0; module && f < ir_func_count(module); f++)

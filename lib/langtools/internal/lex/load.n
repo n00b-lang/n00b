@@ -3,17 +3,6 @@ import internal.scan
 import internal.lex.spec
 import internal.lex.typical
 
-// Lex spec syntax: one setting per line, grouped into blocks.
-//
-//     extends: typical
-//     STRING {
-//         quotes: '"' "'"
-//         variant raw { prefix: r   raw: yes }
-//     }
-//
-// A block is `NAME { ... }`, or `NAME:` with an indented body. A block may
-// also sit on one line, as `NAME { key: v   key: v }`.
-
 record Item {
     text:   string
     quoted: bool
@@ -54,8 +43,6 @@ private func suggest(l: Loader, code: string, message: string, it: Item,
     }
     internal.scan.report(l.sc, d)
 }
-
-// ---- Reading lines --------------------------------------------------------
 
 private func is_key_text(text: string) -> bool {
     let n: uint = byte_len(text)
@@ -141,8 +128,6 @@ private func read_lines(l: Loader) {
     }
 }
 
-// ---- Settings ---------------------------------------------------------------
-
 private func value_of(it: Item) -> internal.lex.spec.Value {
     return (text = it.text, quoted = it.quoted, span = it.span)
 }
@@ -151,8 +136,6 @@ private func is_word(it: Item, text: string) -> bool {
     return !it.quoted and !it.key and !it.comma and it.text == text
 }
 
-// Where a setting starts at `at`: its key, its operation and the index of
-// its first value. A key needs its colon except as the first word of a line.
 private func setting_at(items: List[Item], at: uint, line_start: bool)
     -> Tuple[string, internal.lex.spec.Op, uint]? {
     if at >= items.len() {
@@ -184,7 +167,6 @@ private func setting_at(items: List[Item], at: uint, line_start: bool)
     return nil
 }
 
-// Appends items[from until end] to a setting's groups, splitting at commas.
 private func fill(s: internal.lex.spec.Setting, items: List[Item], from: uint,
                   end: uint) {
     for i: uint from from until end {
@@ -204,8 +186,6 @@ private func new_setting(key: string, op: internal.lex.spec.Op,
     return (key = key, op = op, groups = groups, own = true, span = span)
 }
 
-// Reads the settings on one line into `block`. A line that starts with no
-// key continues the block's last setting.
 private func settings_line(l: Loader, block: internal.lex.spec.Block,
                            items: List[Item], from: uint, end: uint) {
     var at: uint = from
@@ -254,10 +234,6 @@ private func next_key(items: List[Item], from: uint, end: uint) -> uint {
     return end
 }
 
-// ---- Blocks -----------------------------------------------------------------
-
-// The shape of a block header line: where its name is, and whether it opens
-// with a brace or a colon.
 record Header {
     name:  Item
     brace: bool
@@ -282,7 +258,6 @@ private func header_of(line: Line, at: uint) -> Header? {
     return nil
 }
 
-// Parses a block whose header is on line `index`; returns the line after it.
 private func block(l: Loader, index: uint, at: uint,
                    out: internal.lex.spec.Block) -> uint {
     let line: Line = l.lines[index]
@@ -342,8 +317,6 @@ private func body_line(l: Loader, out: internal.lex.spec.Block, i: uint)
     settings_line(l, out, line.items, 0, line.items.len())
     return i + 1
 }
-
-// ---- The file -------------------------------------------------------------
 
 record Raw {
     base:    string
@@ -417,8 +390,6 @@ private func parse(l: Loader) -> Raw {
     return raw
 }
 
-// ---- Merging ----------------------------------------------------------------
-
 private func copy_setting(s: internal.lex.spec.Setting, own: bool)
     -> internal.lex.spec.Setting {
     var groups: List[List[internal.lex.spec.Value]] = []
@@ -483,8 +454,6 @@ private func drop_keys(modify target: internal.lex.spec.Block,
     target.settings = kept
 }
 
-// Applies one written setting to a block. `replaced` holds the keys this
-// block has already replaced, so a key written twice accumulates.
 private func apply(modify target: internal.lex.spec.Block,
                    s: internal.lex.spec.Setting, replaced: Dict[string, bool]) {
     let key: string = s.key
@@ -597,7 +566,6 @@ private func merge_settings(modify target: internal.lex.spec.Block,
     }
 }
 
-// Merges a written block into an existing one, variants by name.
 private func merge(modify target: internal.lex.spec.Block,
                    written: internal.lex.spec.Block) {
     merge_settings(target, written.settings, written.own)
@@ -617,17 +585,13 @@ private func merge(modify target: internal.lex.spec.Block,
     }
 }
 
-// ---- Resolving `like` -------------------------------------------------------
-
 object Resolver {
     l:       Loader
     spec:    internal.lex.spec.Spec
     written: Dict[string, internal.lex.spec.Block]
-    // Absent: not started; false: resolving now; true: done.
     done:    Dict[string, bool]
 }
 
-// Replaces the block of the same name.
 private func put_block(spec: internal.lex.spec.Spec,
                        b: internal.lex.spec.Block) {
     for i: uint from 0 until spec.blocks.len() {
@@ -638,8 +602,6 @@ private func put_block(spec: internal.lex.spec.Spec,
     }
 }
 
-// Gives a block its kind, filling in a `like:` block from its prototype,
-// which is resolved first.
 private func resolve(r: Resolver, name: string) {
     let state: bool? = r.done[name]
     if state != nil {
@@ -681,8 +643,6 @@ private func resolve(r: Resolver, name: string) {
     r.done[name] = true
 }
 
-// A `like:` block: a copy of the block it names, with its own settings
-// merged in.
 private func from_prototype(r: Resolver, b: internal.lex.spec.Block,
                             w: internal.lex.spec.Block,
                             like: internal.lex.spec.Value)
@@ -753,10 +713,6 @@ private func check_settings(l: Loader,
     }
 }
 
-// ---- Loading ----------------------------------------------------------------
-
-// The spec a file extends. The built-in `typical` extends nothing, so it is
-// built here directly; any other base was loaded by the caller.
 private func base_spec(l: Loader, raw: Raw, bases: Dict[string,
                        internal.lex.spec.Spec]) -> internal.lex.spec.Spec {
     if raw.base == "" {
@@ -776,7 +732,6 @@ private func base_spec(l: Loader, raw: Raw, bases: Dict[string,
     return found
 }
 
-// A parsed file applied to the spec it extends.
 private func build(l: Loader, raw: Raw, base: internal.lex.spec.Spec,
                    source_name: string) -> internal.lex.spec.Spec {
     var spec: internal.lex.spec.Spec = inherit(l, raw, base, source_name)
@@ -793,8 +748,6 @@ private func build(l: Loader, raw: Raw, base: internal.lex.spec.Spec,
     return spec
 }
 
-// A copy of the base spec, less the blocks this file removes, with this
-// file's named escapes and sets added.
 private func inherit(l: Loader, raw: Raw, base: internal.lex.spec.Spec,
                      source_name: string) -> internal.lex.spec.Spec {
     var spec: internal.lex.spec.Spec = new[internal.lex.spec.Spec](source_name)
@@ -828,8 +781,6 @@ private func inherit(l: Loader, raw: Raw, base: internal.lex.spec.Spec,
     return spec
 }
 
-// Merges each written block into the base block of the same name, or adds
-// it. A new block with `like:` is filled in later, by `resolve`.
 private func apply_written(r: Resolver, raw: Raw) {
     for w in raw.blocks {
         r.written[w.name] = w
@@ -876,8 +827,6 @@ func __init(self: Resolver, l: Loader, spec: internal.lex.spec.Spec) {
     self.done = new[Dict[string, bool]]()
 }
 
-// Loads a lex spec. `extends: typical` starts from the built-in typical
-// language; any other base must be passed in `bases`, by name.
 func load(text: string, source_name: string = "<string>",
           bases: Dict[string, internal.lex.spec.Spec]? = nil)
     -> internal.lex.spec.Spec fail: List[internal.diag.Diagnostic] {

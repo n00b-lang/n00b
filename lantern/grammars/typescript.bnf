@@ -1,49 +1,11 @@
 @lexer("typescript.lex")
 
-# TypeScript Grammar
-#
-# A complete syntactic grammar for TypeScript, covering all ES2024 JavaScript
-# syntax plus TypeScript-specific extensions (type annotations, interfaces,
-# enums, namespaces, generics, mapped types, conditional types, decorators,
-# etc.).
-#
-# This is a SYNTACTIC grammar only. Lexical details (string escapes, number
-# formats, regex internals, template literal scanning, etc.) are handled by
-# the lexer.
-#
-# Token types provided by the lexer:
-#   %IDENTIFIER       - Any identifier that is not a keyword
-#   %INTEGER          - Integer literal (decimal, hex, octal, binary)
-#   %FLOAT            - Floating-point literal
-#   %STRING           - String literal (single or double quoted)
-#   %TEMPLATE_HEAD    - Opening segment of a template literal with substitutions
-#   %TEMPLATE_MIDDLE  - Middle segment between substitutions
-#   %TEMPLATE_TAIL    - Closing segment of a template literal with substitutions
-#   %NO_SUBST_TEMPLATE - Template literal with no substitutions
-#   %REGEX_LIT        - Regular expression literal
-#
-# Keywords are written as %"keyword".
-# Operators and punctuation are written as %"op".
-#
-# TypeScript contextual keywords beyond ES2024:
-#   type, interface, declare, namespace, module, enum, abstract, implements,
-#   private, protected, public, readonly, override, as, is, keyof, typeof,
-#   infer, extends, satisfies, asserts, out, in (type variance), using
-
-# ============================================================================
-# Source file (start symbol)
-# ============================================================================
-
 <source-file> ::= <statement-list>?
 
 <statement-list> @hardline ::= <statement-list-item>+
 
 <statement-list-item> ::= <declaration>
                          | <statement>
-
-# ============================================================================
-# Statements
-# ============================================================================
 
 <statement> ::= <block-statement>
               | <variable-statement>
@@ -63,12 +25,10 @@
 <breakable-statement> ::= <iteration-statement>
                          | <switch-statement>
 
-# Block
 <block-statement> ::= <block>
 
 <block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <statement-list>? %"}"
 
-# Variable statement (var only; let/const are lexical declarations)
 <variable-statement> ::= %"var" <variable-declaration-list> <semicolon>
 
 <variable-declaration-list> ::= <variable-declaration> (%"," <variable-declaration>)*
@@ -76,18 +36,13 @@
 <variable-declaration> ::= <binding-identifier> <type-annotation>? <initializer>?
                           | <binding-pattern> <type-annotation>? <initializer>
 
-# Empty statement
 <empty-statement> ::= %";"
 
-# Expression statement
-# (lookahead restriction: not { or function or class or let [ -- enforced by parser)
 <expression-statement> ::= <expression> <semicolon>
 
-# If statement
 <if-statement> ::= %"if" %"(" <expression> %")" <statement> %"else" <statement>
                   | %"if" %"(" <expression> %")" <statement>
 
-# Iteration statements
 <iteration-statement> ::= <do-while-statement>
                          | <while-statement>
                          | <for-statement>
@@ -120,18 +75,14 @@
                     | <let-or-const> <binding-identifier> <type-annotation>?
                     | <let-or-const> <binding-pattern> <type-annotation>?
 
-# Continue / Break
 <continue-statement> ::= %"continue" %IDENTIFIER? <semicolon>
 
 <break-statement> ::= %"break" %IDENTIFIER? <semicolon>
 
-# Return
 <return-statement> ::= %"return" <expression>? <semicolon>
 
-# With
 <with-statement> ::= %"with" %"(" <expression> %")" <statement>
 
-# Switch
 <switch-statement> ::= %"switch" %"(" <expression> %")" <case-block>
 
 <case-block> ::= %"{" <case-clauses>? %"}"
@@ -143,14 +94,11 @@
 
 <default-clause> ::= %"default" %":" <statement-list>?
 
-# Labelled statement
 <labelled-statement> ::= %IDENTIFIER %":" <statement>
                         | %IDENTIFIER %":" <declaration>
 
-# Throw
 <throw-statement> ::= %"throw" <expression> <semicolon>
 
-# Try
 <try-statement> ::= %"try" <block> <catch-clause>
                    | %"try" <block> <finally-clause>
                    | %"try" <block> <catch-clause> <finally-clause>
@@ -163,12 +111,7 @@
 
 <finally-clause> ::= %"finally" <block>
 
-# Debugger
 <debugger-statement> ::= %"debugger" <semicolon>
-
-# ============================================================================
-# Declarations
-# ============================================================================
 
 <declaration> ::= <hoistable-declaration>
                 | <class-declaration>
@@ -182,19 +125,13 @@
                 | <ambient-declaration>
                 | <using-declaration>
 
-# Hoistable declarations
 <hoistable-declaration> ::= <function-declaration>
                            | <generator-declaration>
                            | <async-function-declaration>
                            | <async-generator-declaration>
 
-# ============================================================================
-# Lexical declarations (let, const)
-# ============================================================================
-
 <lexical-declaration> @nospace($2) ::= <let-or-const> <binding-list> <semicolon>
 
-# Used inside for-init where we don't want a trailing semicolon
 <lexical-declaration-no-semi> ::= <let-or-const> <binding-list>
 
 <let-or-const> ::= %"let" | %"const"
@@ -204,16 +141,8 @@
 <lexical-binding> ::= <binding-identifier> <type-annotation>? <initializer>?
                      | <binding-pattern> <type-annotation>? <initializer>
 
-# ============================================================================
-# Using declarations (ES2024 Explicit Resource Management)
-# ============================================================================
-
 <using-declaration> ::= %"using" <binding-list> <semicolon>
                        | %"await" %"using" <binding-list> <semicolon>
-
-# ============================================================================
-# Binding patterns (destructuring)
-# ============================================================================
 
 <binding-identifier> ::= %IDENTIFIER
 
@@ -244,10 +173,6 @@
 
 <binding-elision> ::= %","
 
-# ============================================================================
-# Function declarations
-# ============================================================================
-
 <function-declaration> ::= <decorator-list>? %"function" <binding-identifier> <type-parameters>? <call-signature> <function-body>
                           | <decorator-list>? %"function" <binding-identifier> <type-parameters>? <call-signature> <semicolon>
 
@@ -271,10 +196,6 @@
 
 <directive> ::= %STRING <semicolon>
 
-# ============================================================================
-# Call signature and parameter list (shared by functions, methods, arrows)
-# ============================================================================
-
 <call-signature> @nospace ::= %"(" <parameter-list>? %")" <return-type>?
 
 <parameter-list> @nospace($1) @nospace($2) ::= <parameter> (%"," <parameter>)* (%"," <rest-parameter>)?
@@ -288,10 +209,6 @@
 <return-type> ::= %":" <type>
 
 <type-annotation> ::= %":" <type>
-
-# ============================================================================
-# Class declarations
-# ============================================================================
 
 <class-declaration> ::= <decorator-list>? <class-modifiers>? %"class" <binding-identifier> <type-parameters>? <class-heritage>? <class-body>
                         | <decorator-list>? <class-modifiers>? %"class" <type-parameters>? <class-heritage>? <class-body>
@@ -319,7 +236,6 @@
 
 <class-static-block> ::= %"static" <block>
 
-# A class member may have decorators, modifiers, and the member itself.
 <class-member> ::= <decorator-list>? <class-member-modifiers>? <class-member-definition>
 
 <class-member-modifiers> ::= <class-member-modifier>+
@@ -340,12 +256,10 @@
                              | <property-definition>
                              | <index-signature>
 
-# Property definition
 <property-definition> ::= <property-name> %"!" <type-annotation>? <initializer>?
                          | <property-name> %"?" <type-annotation>? <initializer>?
                          | <property-name> <type-annotation>? <initializer>?
 
-# Method definition
 <method-definition> ::= <property-name> %"?" <type-parameters>? <call-signature> <function-body>
                         | <property-name> <type-parameters>? <call-signature> <function-body>
                         | %"*" <property-name> <type-parameters>? <call-signature> <generator-body>
@@ -354,12 +268,7 @@
                         | %"get" <property-name> %"(" %")" <return-type>? <function-body>
                         | %"set" <property-name> %"(" <parameter> %")" <return-type>? <function-body>
 
-# Index signature  [key: Type]: Type
 <index-signature> ::= %"[" <binding-identifier> %":" <type> %"]" %":" <type>
-
-# ============================================================================
-# Property names
-# ============================================================================
 
 <property-name> ::= <literal-property-name>
                    | <computed-property-name>
@@ -371,23 +280,11 @@
 
 <computed-property-name> ::= %"[" <assignment-expression> %"]"
 
-# ============================================================================
-# Interface declarations (TypeScript)
-# ============================================================================
-
 <interface-declaration> ::= %"interface" <binding-identifier> <type-parameters>? <interface-extends>? <object-type>
 
 <interface-extends> ::= %"extends" <type-list>
 
-# ============================================================================
-# Type alias declarations (TypeScript)
-# ============================================================================
-
 <type-alias-declaration> ::= %"type" <binding-identifier> <type-parameters>? %"=" <type> <semicolon>
-
-# ============================================================================
-# Enum declarations (TypeScript)
-# ============================================================================
 
 <enum-declaration> ::= %"const"? %"enum" <binding-identifier> %"{" <enum-member-list>? %","? %"}"
 
@@ -395,25 +292,16 @@
 
 <enum-member> ::= <property-name> <initializer>?
 
-# ============================================================================
-# Namespace / module declarations (TypeScript)
-# ============================================================================
-
 <namespace-declaration> ::= %"namespace" <namespace-name> <namespace-body>
 
 <namespace-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
 <namespace-body> ::= %"{" <statement-list>? %"}"
 
-# Module declarations (for ambient modules: declare module "name" { ... })
 <module-declaration> ::= %"module" <module-name> <namespace-body>
 
 <module-name> ::= %STRING
                  | <namespace-name>
-
-# ============================================================================
-# Ambient declarations (declare)
-# ============================================================================
 
 <ambient-declaration> ::= %"declare" <ambient-body>
 
@@ -427,10 +315,6 @@
                   | <namespace-declaration>
                   | <module-declaration>
                   | %"global" <namespace-body>
-
-# ============================================================================
-# Import declarations
-# ============================================================================
 
 <import-declaration> ::= %"import" <import-clause> <from-clause> <semicolon>
                         | %"import" <module-specifier> <semicolon>
@@ -461,10 +345,6 @@
 
 <module-specifier> ::= %STRING
 
-# ============================================================================
-# Export declarations
-# ============================================================================
-
 <export-declaration> ::= %"export" %"*" <from-clause> <semicolon>
                         | %"export" %"*" %"as" <export-name> <from-clause> <semicolon>
                         | %"export" <named-exports> <from-clause> <semicolon>
@@ -494,10 +374,6 @@
                  | %STRING
                  | %"default"
 
-# ============================================================================
-# Decorators
-# ============================================================================
-
 <decorator-list> ::= <decorator>+
 
 <decorator> ::= %"@" <decorator-expression>
@@ -509,14 +385,8 @@
                                  | <decorator-member-expression> %"." %IDENTIFIER
                                  | %"(" <expression> %")"
 
-# ============================================================================
-# Expressions
-# ============================================================================
-
-# Comma expression
 <expression> ::= <assignment-expression> (%"," <assignment-expression>)*
 
-# Assignment expression
 <assignment-expression> ::= <conditional-expression>
                            | <yield-expression>
                            | <arrow-function>
@@ -540,45 +410,36 @@
                          | %"||="
                          | %"??="
 
-# Conditional (ternary) expression
 <conditional-expression> ::= <short-circuit-expression> %"?" <assignment-expression> %":" <assignment-expression>
                             | <short-circuit-expression>
 
 <short-circuit-expression> ::= <logical-or-expression>
                               | <coalesce-expression>
 
-# Nullish coalescing
 <coalesce-expression> ::= <coalesce-expression> %"??" <bitwise-or-expression>
                          | <bitwise-or-expression>
 
-# Logical OR
 <logical-or-expression> ::= <logical-or-expression> %"||" <logical-and-expression>
                            | <logical-and-expression>
 
-# Logical AND
 <logical-and-expression> ::= <logical-and-expression> %"&&" <bitwise-or-expression>
                             | <bitwise-or-expression>
 
-# Bitwise OR
 <bitwise-or-expression> ::= <bitwise-or-expression> %"|" <bitwise-xor-expression>
                            | <bitwise-xor-expression>
 
-# Bitwise XOR
 <bitwise-xor-expression> ::= <bitwise-xor-expression> %"^" <bitwise-and-expression>
                             | <bitwise-and-expression>
 
-# Bitwise AND
 <bitwise-and-expression> ::= <bitwise-and-expression> %"&" <equality-expression>
                             | <equality-expression>
 
-# Equality
 <equality-expression> ::= <equality-expression> %"==" <relational-expression>
                          | <equality-expression> %"!=" <relational-expression>
                          | <equality-expression> %"===" <relational-expression>
                          | <equality-expression> %"!==" <relational-expression>
                          | <relational-expression>
 
-# Relational
 <relational-expression> ::= <relational-expression> %"<" <shift-expression>
                            | <relational-expression> %">" <shift-expression>
                            | <relational-expression> %"<=" <shift-expression>
@@ -590,28 +451,23 @@
                            | <relational-expression> %"satisfies" <type>
                            | <shift-expression>
 
-# Shift
 <shift-expression> ::= <shift-expression> %"<<" <additive-expression>
                       | <shift-expression> %">>" <additive-expression>
                       | <shift-expression> %">>>" <additive-expression>
                       | <additive-expression>
 
-# Additive
 <additive-expression> ::= <additive-expression> %"+" <multiplicative-expression>
                          | <additive-expression> %"-" <multiplicative-expression>
                          | <multiplicative-expression>
 
-# Multiplicative
 <multiplicative-expression> ::= <multiplicative-expression> %"*" <exponentiation-expression>
                                | <multiplicative-expression> %"/" <exponentiation-expression>
                                | <multiplicative-expression> %"%" <exponentiation-expression>
                                | <exponentiation-expression>
 
-# Exponentiation (right-associative)
 <exponentiation-expression> ::= <unary-expression> %"**" <exponentiation-expression>
                                | <unary-expression>
 
-# Unary
 <unary-expression> ::= <update-expression>
                       | %"delete" <unary-expression>
                       | %"void" <unary-expression>
@@ -622,27 +478,20 @@
                       | %"!" <unary-expression>
                       | %"await" <unary-expression>
 
-# Update (prefix/postfix increment/decrement)
 <update-expression> ::= <left-hand-side-expression> %"++"
                        | <left-hand-side-expression> %"--"
                        | %"++" <unary-expression>
                        | %"--" <unary-expression>
                        | <left-hand-side-expression>
 
-# ============================================================================
-# Left-hand-side expressions
-# ============================================================================
-
 <left-hand-side-expression> ::= <call-expression>
                                | <new-expression>
                                | <optional-expression>
                                | <tagged-template-expression>
 
-# New expression
 <new-expression> ::= <member-expression>
                     | %"new" <new-expression>
 
-# Member expression
 <member-expression> ::= <primary-expression>
                        | <member-expression> %"." %IDENTIFIER
                        | <member-expression> %"[" <expression> %"]"
@@ -653,18 +502,14 @@
                        | <meta-property>
                        | <type-assertion>
 
-# Super property access
 <super-property> ::= %"super" %"." %IDENTIFIER
                     | %"super" %"[" <expression> %"]"
 
-# import.meta, new.target
 <meta-property> ::= %"new" %"." %"target"
                    | %"import" %"." %"meta"
 
-# Type assertion: <Type>expr (angle-bracket form)
 <type-assertion> ::= %"<" <type> %">" <unary-expression>
 
-# Call expression
 <call-expression> ::= <member-expression> <type-arguments>? <arguments>
                      | %"super" <arguments>
                      | %"import" %"(" <assignment-expression> %")"
@@ -675,7 +520,6 @@
                      | <call-expression> <template-literal>
                      | <call-expression> %"!"
 
-# Optional chaining
 <optional-expression> ::= <member-expression> <optional-chain>
                          | <call-expression> <optional-chain>
                          | <optional-expression> <optional-chain>
@@ -690,12 +534,10 @@
                     | <optional-chain> <type-arguments>? <arguments>
                     | <optional-chain> <template-literal>
 
-# Tagged template
 <tagged-template-expression> ::= <member-expression> <template-literal>
                                 | <call-expression> <template-literal>
                                 | <tagged-template-expression> <template-literal>
 
-# Arguments
 <arguments> ::= %"(" %")"
               | %"(" <argument-list> %","? %")"
 
@@ -703,10 +545,6 @@
 
 <argument-item> ::= <assignment-expression>
                    | %"..." <assignment-expression>
-
-# ============================================================================
-# Primary expressions
-# ============================================================================
 
 <primary-expression> ::= %"this"
                         | %IDENTIFIER
@@ -722,7 +560,6 @@
                         | <regex-literal>
                         | <parenthesized-expression>
 
-# Literals
 <literal> ::= %"null"
              | %"true"
              | %"false"
@@ -732,12 +569,7 @@
 
 <regex-literal> ::= %REGEX_LIT
 
-# Parenthesized expression
 <parenthesized-expression> ::= %"(" <expression> %")"
-
-# ============================================================================
-# Array literal
-# ============================================================================
 
 <array-literal> ::= %"[" <array-element-list>? %"]"
 
@@ -747,10 +579,6 @@
                    | %"..." <assignment-expression>
 
 <array-elision> ::= %","
-
-# ============================================================================
-# Object literal
-# ============================================================================
 
 <object-literal> ::= %"{" %"}"
                     | %"{" <property-definition-list> %","? %"}"
@@ -770,19 +598,11 @@
                                | %"get" <property-name> %"(" %")" <return-type>? <function-body>
                                | %"set" <property-name> %"(" <parameter> %")" <return-type>? <function-body>
 
-# ============================================================================
-# Template literals
-# ============================================================================
-
 <template-literal> @nospace ::= %NO_SUBST_TEMPLATE
                       | %TEMPLATE_HEAD <expression> <template-spans>
 
 <template-spans> @nospace ::= %TEMPLATE_TAIL
                     | %TEMPLATE_MIDDLE <expression> <template-spans>
-
-# ============================================================================
-# Function / generator / async expressions
-# ============================================================================
 
 <function-expression> ::= %"function" <binding-identifier>? <type-parameters>? <call-signature> <function-body>
 
@@ -791,10 +611,6 @@
 <async-function-expression> ::= %"async" %"function" <binding-identifier>? <type-parameters>? <call-signature> <async-function-body>
 
 <async-generator-expression> ::= %"async" %"function" %"*" <binding-identifier>? <type-parameters>? <call-signature> <async-generator-body>
-
-# ============================================================================
-# Arrow functions
-# ============================================================================
 
 <arrow-function> ::= <arrow-parameters> <return-type>? %"=>" <concise-body>
 
@@ -809,43 +625,15 @@
 <async-concise-body> ::= <assignment-expression>
                         | %"{" <function-body-content> %"}"
 
-# ============================================================================
-# Class expressions
-# ============================================================================
-
 <class-expression> ::= <decorator-list>? %"class" <binding-identifier>? <type-parameters>? <class-heritage>? <class-body>
-
-# ============================================================================
-# Yield expression
-# ============================================================================
 
 <yield-expression> ::= %"yield"
                       | %"yield" <assignment-expression>
                       | %"yield" %"*" <assignment-expression>
 
-# ============================================================================
-# Initializer
-# ============================================================================
-
 <initializer> ::= %"=" <assignment-expression>
 
-# ============================================================================
-# Semicolon (explicit; ASI is a parser/lexer concern)
-# ============================================================================
-
 <semicolon> ::= %";"
-
-# ============================================================================
-# ============================================================================
-#
-#                      TYPESCRIPT TYPE SYSTEM
-#
-# ============================================================================
-# ============================================================================
-
-# ============================================================================
-# Type (top-level type production)
-# ============================================================================
 
 <type> ::= <union-type>
           | <function-type>
@@ -853,32 +641,16 @@
           | <conditional-type>
           | <infer-type>
 
-# ============================================================================
-# Conditional types: T extends U ? X : Y
-# ============================================================================
-
 <conditional-type> ::= <union-type> %"extends" <union-type> %"?" <type> %":" <type>
-
-# ============================================================================
-# Union and intersection types
-# ============================================================================
 
 <union-type> ::= %"|"? <intersection-type> (%"|" <intersection-type>)*
 
 <intersection-type> ::= %"&"? <type-operand> (%"&" <type-operand>)*
 
-# ============================================================================
-# Type operand (postfix type operators: [], !, indexed access)
-# ============================================================================
-
 <type-operand> ::= <primary-type> <type-postfix>*
 
 <type-postfix> ::= %"[" %"]"
                   | %"[" <type> %"]"
-
-# ============================================================================
-# Primary types
-# ============================================================================
 
 <primary-type> ::= <parenthesized-type>
                  | <type-reference>
@@ -897,25 +669,11 @@
                  | <type-predicate>
                  | <asserts-type>
 
-# Parenthesized type
 <parenthesized-type> ::= %"(" <type> %")"
-
-# ============================================================================
-# Type references
-# ============================================================================
 
 <type-reference> ::= <type-name> <type-arguments>?
 
 <type-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
-
-# Predefined type keywords that can also serve as type references.
-# These are contextually recognized: string, number, boolean, symbol,
-# bigint, void, undefined, never, any, unknown, object.
-# The lexer emits them as %IDENTIFIER; the parser resolves them by text.
-
-# ============================================================================
-# Type arguments and parameters (generics)
-# ============================================================================
 
 <type-arguments> ::= %"<" <type-argument-list> %">"
 
@@ -936,10 +694,6 @@
 
 <type-default> ::= %"=" <type>
 
-# ============================================================================
-# Object type (used for interfaces and inline object types)
-# ============================================================================
-
 <object-type> @hardline($1) @indent($1) @hardline($2) ::= %"{" <type-member-list>? %"}"
 
 <type-member-list> @hardline @nospace($1) @nospace($2) ::= <type-member> (<type-member-separator> <type-member>)* <type-member-separator>?
@@ -955,31 +709,21 @@
                  | <getter-signature>
                  | <setter-signature>
 
-# Property signature
 <property-signature> @nospace($2) @nospace($3) ::= %"readonly"? <property-name> %"?"? <type-annotation>?
 
-# Method signature
 <method-signature> ::= <property-name> %"?"? <type-parameters>? <call-signature-params>
 
 <call-signature-params> ::= %"(" <parameter-list>? %")" <return-type>?
 
-# Call signature as a member (bare call signature in interface)
 <call-signature-member> ::= <type-parameters>? <call-signature-params>
 
-# Construct signature
 <construct-signature> ::= %"new" <type-parameters>? <call-signature-params>
 
-# Index signature in type position: [key: string]: Type
 <index-signature-type> ::= %"readonly"? %"[" <binding-identifier> %":" <type> %"]" %":" <type>
 
-# Getter / setter signatures
 <getter-signature> ::= %"get" <property-name> %"(" %")" <return-type>?
 
 <setter-signature> ::= %"set" <property-name> %"(" <parameter> %")" <return-type>?
-
-# ============================================================================
-# Mapped types: { [K in keyof T]: T[K] }
-# ============================================================================
 
 <mapped-type> ::= %"{" <mapped-type-modifiers>? %"[" <type-parameter-mapped> %"]" <mapped-type-modifiers>? %":" <type> <type-member-separator>? %"}"
 
@@ -991,10 +735,6 @@
                            | %"-" %"readonly"
                            | %"+"? %"?"
                            | %"-" %"?"
-
-# ============================================================================
-# Tuple types
-# ============================================================================
 
 <tuple-type> ::= %"[" %"]"
                | %"[" <tuple-element-list> %","? %"]"
@@ -1014,55 +754,23 @@
 
 <tuple-named-element> ::= %IDENTIFIER %":" <type>
 
-# ============================================================================
-# Function type and constructor type
-# ============================================================================
-
 <function-type> ::= <type-parameters>? %"(" <parameter-list>? %")" %"=>" <type>
 
 <constructor-type> ::= %"new" <type-parameters>? %"(" <parameter-list>? %")" %"=>" <type>
 
-# ============================================================================
-# Array type shorthand
-# ============================================================================
-
 <array-type-shorthand> ::= <primary-type> %"[" %"]"
-
-# ============================================================================
-# typeof type queries
-# ============================================================================
 
 <type-query> ::= %"typeof" <type-query-expression>
 
 <type-query-expression> ::= %IDENTIFIER (%"." %IDENTIFIER)*
 
-# ============================================================================
-# keyof T
-# ============================================================================
-
 <keyof-type> ::= %"keyof" <type>
-
-# ============================================================================
-# unique symbol
-# ============================================================================
 
 <unique-type> ::= %"unique" %"symbol"
 
-# ============================================================================
-# readonly T[]
-# ============================================================================
-
 <readonly-type> ::= %"readonly" <type>
 
-# ============================================================================
-# this type
-# ============================================================================
-
 <this-type> ::= %"this"
-
-# ============================================================================
-# Literal types
-# ============================================================================
 
 <literal-type> ::= %STRING
                   | %INTEGER
@@ -1075,38 +783,18 @@
                   | %"-" %INTEGER
                   | %"-" %FLOAT
 
-# ============================================================================
-# Template literal types: `${Type}`
-# ============================================================================
-
 <template-literal-type> ::= %NO_SUBST_TEMPLATE
                            | %TEMPLATE_HEAD <type> <template-literal-type-spans>
 
 <template-literal-type-spans> ::= %TEMPLATE_TAIL
                                  | %TEMPLATE_MIDDLE <type> <template-literal-type-spans>
 
-# ============================================================================
-# Import types: import("module").Type
-# ============================================================================
-
 <import-type> ::= %"typeof"? %"import" %"(" %STRING %")" (%"." <type-name>)? <type-arguments>?
-
-# ============================================================================
-# infer T
-# ============================================================================
 
 <infer-type> ::= %"infer" %IDENTIFIER <type-constraint>?
 
-# ============================================================================
-# Type predicates: param is Type
-# ============================================================================
-
 <type-predicate> ::= %IDENTIFIER %"is" <type>
                     | %"this" %"is" <type>
-
-# ============================================================================
-# Assertion functions: asserts param (is Type)?
-# ============================================================================
 
 <asserts-type> ::= %"asserts" %IDENTIFIER
                   | %"asserts" %IDENTIFIER %"is" <type>

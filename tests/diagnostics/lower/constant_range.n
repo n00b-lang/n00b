@@ -1,5 +1,3 @@
-// A constant index or slice bound outside an array of known length is
-// reported without running the program.
 record Holder {
     tags: Array[int][2]
 }
@@ -18,8 +16,6 @@ func indexes() -> int {
     return low + row + column + tag + fine
 }
 
-// Slice bounds past the array's ends stop there; only a start after the end
-// is an error.
 func slices() -> uint {
     let mixed = fixed[2:-2]
     let past = fixed[4:4]
@@ -30,8 +26,6 @@ func slices() -> uint {
     return mixed.len() + past.len() + through.len() + below.len() + meets.len() + whole.len()
 }
 
-// Range analysis knows a literal's length, and the values an index or bound
-// can take, not just constants.
 let literal: Array[int] = [10, 20, 30]
 
 func ranges(c: bool) -> int {
@@ -53,9 +47,6 @@ func ranges(c: bool) -> int {
     return past + held + joined + cast[int](backwards.len()) + cast[int](beyond.len()) + unsure
 }
 
-// The length of an array passed in isn't known, and neither is one whose
-// address goes to a call that could assign it, so these are checked when
-// the program runs.
 func grow(modify items: Array[int]) {
     items = [1, 2, 3, 4, 5]
 }

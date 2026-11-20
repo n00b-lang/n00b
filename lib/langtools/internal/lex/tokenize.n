@@ -221,7 +221,6 @@ private func comment(r: Run) -> bool {
         }
     }
     elif level >= 2 and internal.scan.at_text(sc, k.close) {
-        // `/**/`: the stars run straight into the closer.
         internal.scan.advance(sc, byte_len(k.close))
     }
     else {
@@ -1111,8 +1110,6 @@ private func terminal_min(r: Run, min_len: uint) -> bool {
     return false
 }
 
-// Identifier rules are tried in order; a rule whose class isn't the
-// grammar's identifier class (Ruby's CONSTANT) leaves keywords to it.
 private func identifier(r: Run) -> bool {
     let c: char = current(r)
     for rule in r.lx.identifiers {
@@ -1149,7 +1146,6 @@ private func is_identifier_class(id: internal.grammar.model.Token_Id) -> bool {
         internal.grammar.model.identifier_token_id
 }
 
-// Reports an identifier problem as the profile's policy says.
 private func flag(r: Run, policy: internal.lex.compile.Policy, code: string,
                   message: string, from: internal.scan.Mark,
                   class: internal.grammar.model.Token_Id?) -> bool {
@@ -1548,9 +1544,6 @@ private func bidi_control(code: u32) -> bool {
         (code >= 0x2066 and code <= 0x2069)
 }
 
-// One pass over the whole source for characters the spec rejects anywhere,
-// in strings and comments too: the `source` block's `reject` set, and
-// bidirectional controls under the `bidi` policy.
 private func check_source(r: Run) {
     let lx: internal.lex.compile.Lexer = r.lx
     let src: string = r.sc.src

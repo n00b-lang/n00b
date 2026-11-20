@@ -1,6 +1,3 @@
-# Inline module arrays of packed bits (`bool`, odd-width integers): their
-# bits start at the first byte after the array value, whatever the
-# dimensions, and a sized `modify` parameter works on them in place.
 var flags: Array[bool][10]
 var seeded: Array[bool][3] = [true, false, true]
 var small: Array[u:3][5] = [1, 2, 3, 4, 7]

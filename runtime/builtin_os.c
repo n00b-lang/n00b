@@ -441,7 +441,6 @@ void n00b_os_set_thread_exit_hook(void (*hook)(void))
 }
 
 #if defined(__linux__) && defined(N00B_LIBC_FREE)
-// Without malloc, a thread's start packet gets a page of its own.
 static os_thread_packet_t *packet_new(void)
 {
     long area = n00b_linux_syscall6(__NR_mmap, 0, (long)os_page_size(),
@@ -466,9 +465,6 @@ static void packet_free(os_thread_packet_t *packet)
 }
 #endif
 
-// The collector's detach (sys.internal.gc.alloc.detach_runtime_mutator).
-// Programs define it; this weak stand-in serves C programs that link the
-// runtime without a collector.
 __attribute__((weak)) void n00b_gc_detach_thread(void)
 {
 }
@@ -483,8 +479,6 @@ static void *os_thread_begin(void *raw)
     void (*seed)(void *) = atomic_load(&thread_seed_hook);
     if (seed) seed(packet.seed);
     void *result = packet.entry(packet.argument);
-    // A thread that ran n00b code is attached to the collector; it must
-    // leave before it ends, or a collection would wait for it forever.
     n00b_gc_detach_thread();
     void (*exit_hook)(void) = atomic_load(&thread_exit_hook);
     if (exit_hook) exit_hook();
@@ -510,7 +504,6 @@ static int32_t os_thread_start_raw(os_thread_packet_t *packet)
 
 #elif defined(__linux__) && defined(N00B_LIBC_FREE)
 
-// Threads without libc: linux_start.c clones them.
 static void os_thread_begin_linux(void *raw)
 {
     (void)os_thread_begin(raw);
@@ -684,9 +677,6 @@ bool n00b_os_on_stack(const void *address, uint64_t bytes)
 
 
 #if !(defined(__linux__) && defined(N00B_LIBC_FREE))
-// Shims for contracts that link "c" call this first. Only Linux's runtime
-// starts threads without libc's thread state (runtime/linux_start.c); here
-// every thread is a libc thread.
 void
 n00b_ffi_libc_thread_check(void)
 {

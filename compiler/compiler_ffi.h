@@ -19,8 +19,6 @@ typedef struct {
     core_translation_unit_t *unit;
     uint32_t                 line;
     uint32_t                 column;
-    // What the declaration says of the C function, which every declaration
-    // of the symbol must agree on (the axioms know a native by its symbol).
     bool                     pure;
     uint32_t                 effects;
     uint16_t                 read_only;
@@ -29,8 +27,6 @@ typedef struct {
 
 bool             n00bb_ffi_declared_symbol(core_string_t symbol, n00bb_ffi_symbol_t *out);
 n00bb_ffi_t     *n00bb_ffi_new(void);
-// Resolves contracts for the build target named by `profile` (as
-// `--target` spells it), instead of the host.
 void             n00bb_ffi_set_target(n00bb_ffi_t *ffi, core_string_t profile);
 void             n00bb_ffi_free(n00bb_ffi_t *ffi);
 bool             n00bb_ffi_add_contract_dir(n00bb_ffi_t *ffi, core_string_t dir);
@@ -38,7 +34,6 @@ bool             n00bb_ffi_generate(void *ffi, core_translation_unit_t *unit, co
                                     core_string_t module, n00bb_literal_origin_t origin, core_string_t text,
                                     core_buffer_t *source, n00bb_native_declarations_t *natives,
                                     n00bb_line_origins_t *origins);
-// Appends the contract files the literal that generated `module` reads.
 void             n00bb_ffi_inputs(void *ffi, core_string_t module, core_buffer_t *out);
 bool             n00bb_ffi_write_headers(const n00bb_ffi_t *ffi, core_string_t output);
 size_t           n00bb_ffi_shim_count(const n00bb_ffi_t *ffi);

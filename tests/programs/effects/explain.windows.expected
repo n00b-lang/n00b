@@ -39,42 +39,42 @@ builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
   param self      reader, lends
   detail          may_collect allocates_direct
 sys.internal.fs.read_file: (string) -> Array[u8] fail: Errno
-  input           sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_62.wsopen_s_raw (159:35) -> sys.internal.os.__ffi_open___ffi_literal_62._wsopen_s (3:12)
-  blocks          sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_62.wsopen_s_raw (159:35) -> sys.internal.os.__ffi_open___ffi_literal_62._wsopen_s (3:12)
+  input           sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_58.wsopen_s_raw (159:35) -> sys.internal.os.__ffi_open___ffi_literal_58._wsopen_s (3:12)
+  blocks          sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_58.wsopen_s_raw (159:35) -> sys.internal.os.__ffi_open___ffi_literal_58._wsopen_s (3:12)
   allocates       sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> here (105:28)
   panics          here (41:13)
   param path      reader
   detail          may_io may_collect allocates_direct reinterprets
 sys.internal.env.args: () -> List[string]
-  env             sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count (3:12)
-  reads_globals   sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count (3:12)
+  env             sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count (3:12)
+  reads_globals   sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count (3:12)
   allocates       here (16:29)
   panics          here (20:24)
   detail          may_collect allocates_direct reinterprets
 sys.internal.env.exit: (int) -> nil
-  output          sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit (3:5)
+  output          sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit (3:5)
   panics          here (27:27)
-  noreturn        always: sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit (3:5)
+  noreturn        always: sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit (3:5)
   param code      untouched
   detail          may_io
 sys.internal.clock.now_ns: () -> uint
-  clock           sys.internal.os.clock.now_ns (4:12) -> sys.internal.os.__ffi_clock___ffi_literal_35.performance_counter_raw (70:12) -> sys.internal.os.__ffi_clock___ffi_literal_35.QueryPerformanceCounter (3:12)
+  clock           sys.internal.os.clock.now_ns (4:12) -> sys.internal.os.__ffi_clock___ffi_literal_33.performance_counter_raw (70:12) -> sys.internal.os.__ffi_clock___ffi_literal_33.QueryPerformanceCounter (3:12)
   panics          sys.internal.os.clock.now_ns (4:12) -> here (76:26)
   detail          reinterprets
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
-  random          sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_40.gen_random_raw (93:16) -> sys.internal.os.__ffi_random___ffi_literal_40.BCryptGenRandom (3:12)
+  random          sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_38.gen_random_raw (93:16) -> sys.internal.os.__ffi_random___ffi_literal_38.BCryptGenRandom (3:12)
   panics          sys.internal.os.random.random_bytes (5:5) -> here (64:13)
   param buffer    writer
   detail          reinterprets
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
-  random          sys.internal.random.fill (10:5) -> sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_40.gen_random_raw (93:16) -> sys.internal.os.__ffi_random___ffi_literal_40.BCryptGenRandom (3:12)
+  random          sys.internal.random.fill (10:5) -> sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_38.gen_random_raw (93:16) -> sys.internal.os.__ffi_random___ffi_literal_38.BCryptGenRandom (3:12)
   allocates       here (9:28)
   panics          here (14:17)
   param value     writer
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil
-  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_45.write_file_raw (99:20) -> sys.internal.os.__ffi_write___ffi_literal_45.WriteFile (7:12)
-  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_45.write_file_raw (99:20) -> sys.internal.os.__ffi_write___ffi_literal_45.WriteFile (7:12)
+  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_41.write_file_raw (99:20) -> sys.internal.os.__ffi_write___ffi_literal_41.WriteFile (7:12)
+  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_41.write_file_raw (99:20) -> sys.internal.os.__ffi_write___ffi_literal_41.WriteFile (7:12)
   panics          builtin.string.core.__fd_write (6:5) -> here (283:12)
   param s         reader
   detail          may_io reinterprets

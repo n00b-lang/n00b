@@ -737,8 +737,6 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
             core_buffer_puts(b, "%");
             put_text(b, value->name);
             core_buffer_puts(b, ": ");
-            // A by-reference parameter's value is a Ref to the caller's
-            // place; the signature spells the referent type.
             put_type(b, m, th_mode_by_reference(parameter->mode)
                                ? parameter->type : value->type);
             put_annots(b, m, ir_value_annots(value));

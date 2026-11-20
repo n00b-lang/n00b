@@ -1,32 +1,13 @@
-# What the system call wrappers in internal.os share.
-#
-# Effects: only reads and writes of data are `input` and `output`. Calls
-# that manage descriptors or ask about them (open, close, seek, pipe, the
-# terminal queries) are `input`, since they change nothing a program
-# writes to.
-#
-# Linux enters the kernel directly, through writ `syscall` declarations: no
-# libc and no C shim. macOS calls libSystem, which is its only stable
-# kernel interface, and Windows the C runtime's descriptor functions; the
-# bindings read errno right after a failed call. Windows calls Win32 for
-# what the C runtime doesn't cover (the console, randomness).
-#
-# Each wrapper lives in its own module, which declares only the calls it
-# makes, so a module that needs one wrapper doesn't import the rest.
-
 import internal.errno
 
-# The errno a C library call's failure carries.
 func errno_of(failure: Ffi_Error) -> internal.errno.Errno {
     return cast[internal.errno.Errno](failure.code)
 }
 
-# The C address `address` as a reference; it isn't 0.
 func address_at(address: uint) -> Ref[byte] {
     return unsafe_cast[Ref[byte]](unsafe_cast[Foreign[byte]](address))
 }
 
-# The C address `address` as a reference, or nil for 0.
 func address_ref(address: uint) -> Ref[byte]? {
     if address == 0 {
         return nil
@@ -42,8 +23,6 @@ when target_os() == "linux" {
 }
 
 when target_os() == "windows" {
-    # Each C runtime call moves at most this many bytes, which a c_uint
-    # count holds.
     const chunk_limit: uint = 0x40000000
 
     func chunk(count: uint) -> uint {

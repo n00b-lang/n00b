@@ -158,10 +158,6 @@ encode_scalar(ir_module_t *module, n00bb_abi_type_index_t *index,
         else if (machine.width < 128 && magnitude >> machine.width)
             return false;
         ir_uint_t bits = negative ? (~magnitude + 1) : magnitude;
-        // A structural bit integer (`i:10`) is an LLVM `i10`, whose bits
-        // past its width read as zero in memory; storing them sign-extended
-        // lets an optimized load see the wrong value. Named bit integers
-        // live at their full storage width and stay sign-extended.
         if (th_kind_of(th_resolve(type)) == TH_BITINT && machine.width < 128)
             bits &= ((ir_uint_t)1 << machine.width) - 1;
         for (size_t i = 0; i < size_bits / 8; i++) {
@@ -249,9 +245,6 @@ typedef struct {
     core_list_t(n00bb_abi_storage_relocation_t) *tls_fixups;
     core_list_t(n00bb_abi_storage_index_patch_t) *index_patches;
     core_list_t(pending_address_t) *addresses;
-    // The storage kind an inline global's elements follow its array value
-    // in (n00bb_inline_global_count), else 0. Only arrays of plain numbers
-    // are inline, so it only applies to the variable's own array.
     uint32_t inline_kind;
 } array_writer_t;
 
@@ -366,9 +359,6 @@ array_shape_build(th_type *type, const ir_global_init_value_t *value,
     facts->seen = core_alloc_array(bool, facts->rank);
     facts->uniform = core_alloc_array(bool, facts->rank);
     if (!scan_array_shape(value, type, 0, facts)) return false;
-    // A dimension after the first that the declaration leaves without a
-    // size is ragged, even when the rows it starts with happen to be the
-    // same length: each row may later be replaced by one of another length.
     ir_shape_storage_t storage = {0};
     uint32_t limit = declared && ir_shape_storage(declared, &storage)
             && storage.classification_known
@@ -688,8 +678,6 @@ encode_array_items(array_writer_t *writer,
         return true;
     }
     size_t at = packed ? 0 : data_offset + (*next) * stride;
-    // An inline global with no elements given is zeroed; its items are
-    // nil, and zero bytes are any element's zero value.
     if (writer->inline_kind && depth >= shape->rank && value
         && value->kind == IR_GLOBAL_INIT_NIL) {
         (*next)++;
@@ -894,8 +882,6 @@ done:
     return valid;
 }
 
-// Nested sequences of `shape` from dimension `depth` on, with nil items:
-// the zero value of an inline global given no elements.
 static ir_global_init_value_t *
 zero_shape(const ir_shape_t *shape, uint32_t depth)
 {
@@ -1426,8 +1412,6 @@ n00bb_abi_storage_rows_build(
         size_t byte_length = (size_t)(bits / 8 + (bits % 8 != 0));
         uint64_t inline_count = is_array && kind != N00B_ABI_STORAGE_TLS
             ? n00bb_inline_global_count(runtime, global) : 0;
-        // The elements start 16 bytes in, after the array value, so the
-        // storage is aligned for them too.
         const ir_final_layout_t *element_layout = inline_count
             ? ir_layout_final_visible(runtime,
                 n00bb_inline_global_element(global),
@@ -1440,8 +1424,6 @@ n00bb_abi_storage_rows_build(
         }
         if (element_layout && element_layout->alignment_bytes > alignment)
             alignment = element_layout->alignment_bytes;
-        // A thread variable's array, and an inline global's, keeps its
-        // elements after the array value, in the variable's own storage.
         bool elements_follow = is_array
             && (kind == N00B_ABI_STORAGE_TLS || inline_count);
         size_t graph_bytes_placed = phase_graph && elements_follow
@@ -1509,8 +1491,6 @@ n00bb_abi_storage_rows_build(
             }
         }
         else core_buffer_append(buffer, (const char *)bytes, byte_length);
-        // An inline global with no elements given starts zeroed: nested
-        // sequences of its shape, of nil items.
         ir_global_init_value_t *zeros = nullptr;
         const ir_global_init_value_t *elements = initializer;
         if (inline_count && !phase_graph

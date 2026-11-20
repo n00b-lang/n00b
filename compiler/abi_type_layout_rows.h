@@ -31,9 +31,6 @@ typedef struct {
     size_t stream_index_count;
 } n00bb_abi_type_layout_rows_t;
 
-/* Appends finalized physical layouts to type identity rows. `stream_base`
- * reserves earlier U32-stream entries. Record fields use the same finalized
- * layout and the TU's indexed symbol declarations. */
 bool n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_index_t *index,
     ir_module_t *runtime, bool include_external_definitions,

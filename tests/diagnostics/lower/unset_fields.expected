@@ -1,13 +1,13 @@
-tests/diagnostics/lower/unset_fields.n:11:5: warning N00B-N0021: field `c` of `Outer` is set but never read
-tests/diagnostics/lower/unset_fields.n:16:5: warning N00B-N0020: field `count` of `Slots` is read but never set
-tests/diagnostics/lower/unset_fields.n:19:12: note N00B-S0064: parameter `p` could be `view`: `first` never writes anything reachable from it
-tests/diagnostics/lower/unset_fields.n:31:12: error N00B-S0004: `p.b` is read on a path where it has no value
-  tests/diagnostics/lower/unset_fields.n:29:9: note: `p` is declared here
-tests/diagnostics/lower/unset_fields.n:36:12: error N00B-S0004: `p.a` is read on a path where it has no value
-  tests/diagnostics/lower/unset_fields.n:35:9: note: `p` is declared here
-tests/diagnostics/lower/unset_fields.n:43:12: error N00B-S0004: `o.inner.b` is read on a path where it has no value
-  tests/diagnostics/lower/unset_fields.n:40:9: note: `o` is declared here
-tests/diagnostics/lower/unset_fields.n:52:12: error N00B-S0004: `p.a` is read on a path where it has no value
-  tests/diagnostics/lower/unset_fields.n:47:9: note: `p` is declared here
-tests/diagnostics/lower/unset_fields.n:58:12: error N00B-S0004: `s.count` is read on a path where it has no value
-  tests/diagnostics/lower/unset_fields.n:56:9: note: `s` is declared here
+tests/diagnostics/lower/unset_fields.n:8:5: warning N00B-N0021: field `c` of `Outer` is set but never read
+tests/diagnostics/lower/unset_fields.n:13:5: warning N00B-N0020: field `count` of `Slots` is read but never set
+tests/diagnostics/lower/unset_fields.n:16:12: note N00B-S0064: parameter `p` could be `view`: `first` never writes anything reachable from it
+tests/diagnostics/lower/unset_fields.n:28:12: error N00B-S0004: `p.b` is read on a path where it has no value
+  tests/diagnostics/lower/unset_fields.n:26:9: note: `p` is declared here
+tests/diagnostics/lower/unset_fields.n:33:12: error N00B-S0004: `p.a` is read on a path where it has no value
+  tests/diagnostics/lower/unset_fields.n:32:9: note: `p` is declared here
+tests/diagnostics/lower/unset_fields.n:40:12: error N00B-S0004: `o.inner.b` is read on a path where it has no value
+  tests/diagnostics/lower/unset_fields.n:37:9: note: `o` is declared here
+tests/diagnostics/lower/unset_fields.n:49:12: error N00B-S0004: `p.a` is read on a path where it has no value
+  tests/diagnostics/lower/unset_fields.n:44:9: note: `p` is declared here
+tests/diagnostics/lower/unset_fields.n:55:12: error N00B-S0004: `s.count` is read on a path where it has no value
+  tests/diagnostics/lower/unset_fields.n:53:9: note: `s` is declared here

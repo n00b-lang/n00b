@@ -30,7 +30,6 @@
 #define N00BB_RESULT_KEY CORE_STRING_STATIC("n00bb.result")
 #define N00BB_CASE_METHOD CORE_STRING_STATIC("__is")
 #define N00BB_REF_METHOD CORE_STRING_STATIC("__ref")
-// The equality and ordering traits, declared in lib/builtin/compare.n.
 #define N00BB_EQUAL_TRAIT CORE_STRING_STATIC("builtin.compare.Equal")
 #define N00BB_COMPARABLE_TRAIT CORE_STRING_STATIC("builtin.compare.Comparable")
 ir_instr_t *n00bb_declared_result_default(ir_instr_t *write);
@@ -84,8 +83,6 @@ void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
 parse_tree_t *n00bb_pattern_owner(parse_grammar_t *grammar,
                                   parse_tree_t *node);
-// The projections that take a value destructured by `pattern` to `target`,
-// one of the pattern's bindings.
 bool n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *pattern,
                         parse_tree_t *target,
                         core_list_t(n00bb_projection_step_t) *path);
@@ -100,9 +97,6 @@ th_type *n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
 bool cache_record_layout_request(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *declaration);
-// The `align(N)` of record `symbol`, in bytes, or 0 without one. False when
-// N isn't a constant power of two; with `report`, that's reported once and
-// remembered. Without it, N may just not be known yet.
 bool n00bb_record_alignment(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
                             parse_sym_entry_t *symbol, bool report,
@@ -139,12 +133,6 @@ bool function_parameter_named(parse_grammar_t *grammar,
                               size_t *index);
 parse_tree_t *callable_formal_parameters(parse_grammar_t *grammar,
                                          parse_sym_entry_t *symbol);
-// Each of a trait's methods for a bound on `variable`, as a method
-// constraint whose target is the whole method: its receiver is `variable`,
-// and the trait's parameters (the other variables its methods name) are
-// `arguments`, or, with none given, one fresh variable each, shared by all
-// the methods. `*expected` is how many parameters the trait has; false when
-// `arguments` has another count.
 bool n00bb_trait_method_instances(th_ctx *types, parse_sym_entry_t *trait,
                                   th_type *variable,
                                   const core_list_t(th_type_ptr_t) *arguments,
@@ -180,10 +168,6 @@ bool register_user_litmod_alias(void *context, core_translation_unit_t *unit,
                                 parse_tree_t *statement, core_string_t alias,
                                 core_string_t target);
 bool validate_litmod_aliases(core_translation_unit_t *unit);
-// An `alias` written without `type` or `litmod` aliases a literal modifier
-// when its target names one; this turns those into literal modifier aliases
-// before names are declared. After naming, one whose target also names a
-// type is reported as ambiguous.
 bool settle_bare_aliases(parse_grammar_t *grammar,
                          core_translation_unit_t *unit);
 bool check_bare_aliases(parse_grammar_t *grammar,
@@ -349,8 +333,6 @@ typedef struct {
     th_type **types;
     size_t count;
 } n00bb_typecase_arm_types_t;
-// A call to an overloaded function: the functions it names, and the one
-// typing chose for it.
 typedef struct {
     core_list_t(parse_sym_entry_ptr_t) candidates;
     parse_sym_entry_t *chosen;
@@ -363,14 +345,11 @@ typedef struct {
     n00bb_ordered_nodes_t *ordered_nodes;
     n00bb_iteration_plan_t *iteration_plan;
     n00bb_litmod_site_t *literal_site;
-    // A type named where a value goes (`let t: typespec = int`): the type
-    // the `typespec` value describes.
     th_type *type_literal;
     size_t first_link_use_site;
     size_t last_link_use_site;
     bool static_literal;
     bool selected_when_body;
-    // The literal's modifier was unknown or ambiguous, and was reported.
     bool literal_modifier_rejected;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
@@ -393,7 +372,6 @@ typedef struct {
     core_string_t alias;
     core_string_t target;
     core_diag_location_t location;
-    // Written `alias name = target`, with no kind.
     bool bare;
 } n00bb_litmod_alias_t;
 core_list_decl(n00bb_litmod_alias_t);
@@ -493,12 +471,7 @@ typedef struct {
     core_string_t name;
     core_translation_unit_t *unit;
     bool renamed;
-    // The module a module literal generated: its public declarations are
-    // members of the importing module.
     bool injected;
-    // For a module literal: its modifier, the byte span of its text in the
-    // importing module's source and where that text starts, so a cached
-    // build can generate it again.
     core_string_t literal_modifier;
     size_t literal_start;
     size_t literal_end;
@@ -538,8 +511,6 @@ typedef enum : uint8_t {
     N00BB_MARKS_TYPE,
 } n00bb_mark_owner_kind_t;
 
-// A mark annotation and what it is written on, recorded by the front end:
-// a parameter (of `function`), a field (of `record`), or a record type.
 typedef struct {
     parse_tree_t *annotation;
     n00bb_mark_owner_kind_t kind;
@@ -555,18 +526,12 @@ typedef struct {
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(n00bb_mark_annotation_t) mark_annotations;
-    // The parameters, fields and record types enclosing the walk.
     core_list_t(parse_tree_ptr_t) mark_owners;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
-    // Calls, `ref`s and unwraps, classified once names are resolved
-    // (n00bb_classify_calls).
     core_list_t(parse_tree_ptr_t) call_nodes;
-    // The constructs a value statement may give the value of, innermost
-    // last, and how many effect queries enclose the walk.
     core_list_t(parse_tree_ptr_t) value_owners;
     size_t effect_query_depth;
     size_t pattern_depth;
-    // The function definitions enclosing the walk, innermost last.
     core_list_t(parse_tree_ptr_t) function_defs;
     core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
@@ -585,7 +550,6 @@ typedef struct {
     core_dict_t constructor_types;
     core_dict_t integer_tracked_symbols;
     core_dict_t dispatch_calls;
-    // Each overloaded call's dispatch to its n00bb_overload_site_t.
     core_dict_t overload_sites;
     core_list_t(parse_tree_ptr_t) integer_shift_sites;
     core_dict_t integer_shift_seen;
@@ -750,18 +714,11 @@ parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
                                              parse_tree_t *node,
                                              th_type *expected);
 void cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node);
-// Declares a cached module's module literals' names into it, once its
-// interface is restored; its generated modules' interfaces come first.
 bool n00bb_inject_interface_literals(core_translation_unit_t *unit);
 bool register_native_declarations(parse_annot_result_t *annotations,
                                   th_ctx *types,
                                   n00bb_native_declarations_t natives);
-// Notes what the analyses know about natives: pure, or their declared
-// effects.
 void n00bb_note_native_axioms(n00bb_native_declarations_t natives);
-// Notes the union arms an FFI contract gives the records of `module`, the
-// module its literal generates, before any module that uses them is typed
-// (the generated module may come from the cache, or be checked alongside).
 bool n00bb_note_native_union_arms(core_string_t module,
                                   n00bb_native_declarations_t natives);
 bool register_builtin_symbols(parse_annot_result_t *annotations,
@@ -888,8 +845,6 @@ bool n00bb_unit_type_reaches_shared_state(n00bb_tu_state_t *state,
                                           th_type *type);
 typedef bool (*n00bb_semantic_unit_hook_t)(void *context,
     core_translation_unit_t *unit);
-// `restore` runs as each module's walk ends; `finish` runs once every module
-// of its import cycle has been walked and restored.
 typedef struct {
     n00bb_semantic_unit_hook_t restore;
     n00bb_semantic_unit_hook_t finish;
@@ -911,8 +866,6 @@ bool callback_protocol_name(core_string_t type_name, core_string_t marker,
 n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
 n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
-// True when the literal's modifier was unknown or ambiguous; the error is
-// already reported, so lowering should stop rather than drop the modifier.
 bool n00bb_literal_modifier_rejected(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_explicit_literal_site(parse_grammar_t *grammar,
                                                  core_translation_unit_t *unit,
@@ -984,10 +937,7 @@ parse_sym_entry_t *formal_rest_symbol(parse_grammar_t *grammar,
 void record_function_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *func,
     n00bb_tu_state_t *state);
-// Set on a function whose body may fail: it has a `fail` statement, a
-// postfix `!` or a `with` statement outside a `try` body.
 #define N00BB_FUNCTION_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.may-fail")
-// Notes, while walking a function's body, that `node` may make it fail.
 void note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node);
 bool collect_array_dimension_nodes(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, parse_tree_t *node,
@@ -1130,7 +1080,6 @@ first_token_text(parse_tree_t *node)
                                      : (core_string_t){0};
 }
 
-// Boolean literal spellings, including the `True` / `False` syntax skin.
 static inline bool
 n00bb_true_spelling(core_string_t spelling)
 {

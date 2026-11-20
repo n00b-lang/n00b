@@ -650,16 +650,11 @@ n00bb_comptime_run(n00bb_link_analysis_t *analysis,
 
 typedef struct {
     core_dict_t counts;
-    // Writes that can run at run time, per global.
     core_dict_t writes;
-    // Whether the initializer being touched has effects the summaries
-    // can't see; the units whose initializers did.
     bool opaque;
     core_list_t(core_translation_unit_ptr_t) opaque_units;
 } touches_t;
 
-// Whether initializers that may write `unit`'s globals have unknown
-// effects: its own, or one of a unit that imports it.
 static bool
 unit_opaque(const touches_t *touches, core_translation_unit_t *unit)
 {
@@ -697,8 +692,6 @@ touch_write(touches_t *touches, const ir_global_t *global)
     core_dict_put(&touches->writes, identity, count + 1);
 }
 
-// The blocks of `function` that can run at run time: a branch on
-// `comptime()` only takes its runtime side.
 static bool *
 runtime_blocks(ir_func_t *function)
 {
@@ -777,8 +770,6 @@ touch_function(ir_summaries_t *summaries, ir_func_t *function,
                     ir_operand_referenced_value(&in->operands[k]);
                 if (!value || value->kind != IR_VAL_GLOBAL) continue;
                 touch(touches, value->global, 1);
-                // A copy of a global reads it; anything else that names it
-                // may write it.
                 bool read = in->op == IR_OP_COPY
                     || (in->op == IR_OP_GLOBAL_STORE && k == 1);
                 if (!read && runtime && runtime[b])
@@ -1092,9 +1083,6 @@ prunable_store(purity_t *purity, ir_module_t *module,
         || !identity->has_static_initializer
         || identity->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
-        // Comptime's value is the starting value unless the runtime
-        // initializer writes the variable again: this store is its only
-        // runtime write. Reads see the comptime value.
         || (uintptr_t)core_dict_get(&touches->writes, identity, nullptr) != 1
         || !always_runs(function, in->block, true)
         || !always_runs(function, in->block, false)) return false;

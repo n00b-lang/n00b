@@ -211,15 +211,12 @@ record Shaped_Holder {
 
 var shaped_grid: Array[int][shape_extent()]
 
-// Dimensions without a size are ragged: with no initializer, each of their
-// arrays is zero-sized until one is assigned.
 var ragged_rows: Array[int][2][]
 require ragged_rows.len() == 2 and ragged_rows[0].len() == 0
 ragged_rows[1] = [1, 2, 3]
 require ragged_rows[1].len() == 3 and ragged_rows[1][2] == 3
 require ragged_rows[0].len() == 0
 
-// Rows the same length to start with still stay ragged.
 var even_rows: Array[int][2][] = [[1], [2]]
 even_rows[1] = [4, 5, 6]
 require even_rows[1].len() == 3 and even_rows[0][0] == 1
@@ -233,7 +230,6 @@ func ragged_local() -> int {
 
 require ragged_local() == 5
 
-// A ragged array given a literal of rows, inside a function.
 func ragged_literal() -> int {
     var rows: Array[int][2][] = [[1], [2]]
     rows[1] = [4, 5, 6]
@@ -243,8 +239,6 @@ func ragged_literal() -> int {
 
 require ragged_literal() == 6 + 1 + 3 + 2
 
-// A bounded `let` array gets its storage where it's declared; it is shared,
-// so its elements may be set. One assignment may still replace it.
 func let_storage() -> int {
     let cells: Array[int][3]
     cells[1] = 4
@@ -262,8 +256,6 @@ func let_replaced() -> int {
 require let_storage() == 6
 require let_replaced() == 2
 
-// Without an initializer, an array's elements start zeroed, which is a value
-// for these.
 open enum Zero_Code: i32 { ok = 1, bad = 2 }
 enum Zero_Color { red = 0, green = 1 }
 flagset Zero_Perm { read, write }
@@ -302,7 +294,6 @@ zero_nodes[1].tags[0] = 4
 require zero_nodes[0].v == 0 and zero_nodes[1].tags[0] == 4
 require zero_nodes[0] != zero_nodes[1]
 
-// Each zeroed object is a fresh one; its fixed-size array fields are inline.
 func zero_objects() -> int {
     var nodes: Array[Zero_Node][3]
     nodes[1].v = 4
@@ -317,8 +308,6 @@ func zero_objects() -> int {
 
 require zero_objects() == 0 + 4 + 5 + 8 + 2 + 5 + 3
 
-// A module array sized when the program runs is allocated by its module's
-// initializer.
 func zero_extent() -> int {
     return 3
 }
@@ -333,8 +322,6 @@ require runtime_cells.len() == 3 and runtime_cells[1] == 5
 require runtime_replaced[2] == 9 and runtime_grid[2][1] == 4
 require runtime_grid[0][0] == 0
 
-// A `let` array without a size takes its length from its assignment; where
-// that hasn't run, it holds that many zeroes.
 func let_sized(c: bool) -> int {
     let arr: Array[int]
     if c {
@@ -345,9 +332,6 @@ func let_sized(c: bool) -> int {
 
 require let_sized(false) == 3 and let_sized(true) == 4
 
-// Slices: `:` and `until` exclude the end and `to` includes it; either
-// bound may be left out, and negative bounds count from the end. Bounds
-// that meet, even at the end, give an empty slice.
 var sliced: Array[int] = [10, 20, 30, 40, 50]
 let cut = sliced[1:3]
 let through = sliced[1 to 3]
@@ -364,7 +348,6 @@ require back[0] == 40 and last_two[0] == 40 and inner.len() == 3
 require inner[2] == 40 and from_end.len() == 3 and from_end[0] == 30
 require everything.len() == 5
 require sliced[2:2].len() == 0 and sliced[5:5].len() == 0
-// A slice is a copy.
 sliced[1] = 99
 require cut[0] == 20
 

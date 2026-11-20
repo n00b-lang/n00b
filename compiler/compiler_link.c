@@ -216,8 +216,6 @@ record_scope_for_type(n00bb_link_analysis_t *analysis, th_type *type,
     return scope;
 }
 
-// Lowering read field `name` of `receiver` at `node`, a field use name
-// resolution could not type. The field is found once the IR is typed.
 void
 n00bb_note_lowered_field_use(n00bb_link_analysis_t *analysis,
                              parse_tree_t *node, ir_value_t *receiver,
@@ -248,8 +246,6 @@ lowered_field(n00bb_link_analysis_t *analysis,
     return field && field->is_field ? field : nullptr;
 }
 
-// Binds the field uses lowering read through values whose types are now
-// inferred (see n00bb_note_lowered_field_use).
 bool
 bind_field_member_uses(n00bb_link_analysis_t *analysis)
 {
@@ -411,8 +407,6 @@ diagnose_reserved_declarations(core_translation_unit_t *unit,
             if (!member && (system || (symbol->kind == PARSE_SYM_FUNCTION
                     && n00bb_language_hook(environment, symbol->name))))
                 continue;
-            // The import the compiler makes for a module literal is named
-            // by the compiler, in the reserved space, so no code can name it.
             bool literal_import = false;
             for (size_t i = 0; symbol->kind == PARSE_SYM_MODULE
                  && i < state->import_aliases.len; i++)
@@ -644,13 +638,10 @@ report_unknown_type(core_translation_unit_t *unit, parse_scope_t *scope,
         (void)n00bb_explain_hidden_name(diagnostics, unit, scope, name, true);
 }
 
-// A use of an alias with type parameters, applied to arguments: the use
-// takes the applied type where its type is composed, not the alias's own.
 static bool
 applied_generic_alias(parse_grammar_t *grammar, th_ctx *types,
                       parse_sym_entry_t *symbol, parse_tree_t *reference)
 {
-    // A qualified name (`coll.Bag`) is nested in its member chain.
     parse_tree_t *core = reference ? parse_tree_parent(reference) : nullptr;
     while (core && !nt_is(grammar, core, CORE_STRING_STATIC("base-tspec-core"))
            && (nt_is(grammar, core, CORE_STRING_STATIC("member-chain"))
@@ -712,9 +703,6 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                 && resolution.target.symbol->kind != PARSE_SYM_MODULE;
             bool bound_trait = value_reference
                 && is_trait_type_symbol(grammar, resolution.target.symbol);
-            // A type the module brings in from another is bound when names
-            // resolve, after its module's own type references got their
-            // types: the reference still holds the placeholder it got then.
             th_type *pending = parse_tree_type(reference);
             bool brought_type = value_reference && !bound_trait
                 && is_named_type_symbol(grammar, resolution.target.symbol);
@@ -773,9 +761,6 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     reference)
                 : symbol->type;
             th_type *previous_type = parse_tree_type(reference);
-            // A generic alias applied to arguments already holds the
-            // applied type; filling it from the alias's own type would bind
-            // the alias's parameters.
             if (applied_generic_alias(grammar, state->types, symbol,
                                       reference)) {
                 refresh_cached_type_path(grammar, unit, reference);
@@ -1129,8 +1114,6 @@ function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
     }
     push_scope_functions(symbol->scope, symbol->name, lookup.origin_module,
                          nullptr, nullptr, &candidates);
-    // A function defined twice is reported where it is defined; calls see
-    // its first definition.
     size_t distinct = 0;
     for (size_t i = 0; i < candidates.len; i++)
         if (!earlier_same_parameters(state, canonical_symbol(
@@ -1141,8 +1124,6 @@ function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
     size_t scoped = candidates.len;
     push_import_functions(state->unit,
         lookup.name.data ? lookup.name : symbol->name, false, &candidates);
-    // This module's function hides an imported one that takes the same
-    // parameters.
     size_t kept = scoped;
     for (size_t i = scoped; i < candidates.len; i++) {
         parse_sym_entry_t *imported = candidates.data[i];
@@ -1259,8 +1240,6 @@ member_name_node(parse_tree_t *node)
     return count >= 3 ? core_tree_child(node, count - 1) : node;
 }
 
-// Modules of one package can import each other in cycles, so the walk
-// remembers which modules it has already searched.
 static parse_sym_entry_t *
 hidden_declaration_in(core_translation_unit_t *imported, core_string_t member,
                       bool type_member,
@@ -2125,8 +2104,6 @@ report_brought(core_translation_unit_t *unit, parse_tree_t *node,
     return diagnostics;
 }
 
-// Functions of one name from this module and from brings are overloads of
-// each other: a call chooses among them. Any other pair conflicts.
 static bool
 overloads_of_each_other(const parse_sym_entry_t *first,
                         const parse_sym_entry_t *second)
@@ -2354,8 +2331,6 @@ check_import_brings(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
-// A bare name with no value of that name, that names a type: it stands for
-// that type's `typespec` descriptor.
 static bool
 bind_type_literal(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                   n00bb_link_use_site_t *site)
@@ -2584,7 +2559,6 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                      && !site->trait_reference && !site->constructor_call
                      && !is_type_reference_node(grammar, site->node)
                      && bind_type_literal(grammar, state, site)) {
-                // A type named where a value goes is a `typespec` literal.
             }
             else if (!site->symbol && !site->dotted_path
                      && !names_imported_module(grammar, site->node)
@@ -3551,8 +3525,6 @@ has_declared_bounds(parse_sym_entry_t *symbol)
     return bounded;
 }
 
-// Literal modifiers of different kinds share names; their kind tells them
-// apart.
 static bool
 registered_literal_modifier(n00bb_tu_state_t *state,
                             parse_sym_entry_t *symbol)
@@ -3567,8 +3539,6 @@ registered_literal_modifier(n00bb_tu_state_t *state,
     return false;
 }
 
-// A function declared before `symbol` in its scope, with its name and its
-// parameter types, when neither has `where` bounds.
 static parse_sym_entry_t *
 earlier_same_parameters(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
 {
@@ -3599,7 +3569,6 @@ register_link_declaration(core_link_unit_t *link,
                           core_dict_t *declarations_by_symbol,
                           parse_sym_entry_t *symbol)
 {
-    // A module literal's member is declared by the literal's own module.
     if (n00bb_injected_member(symbol)) return true;
     core_buffer_t key = {0};
     if (!append_link_symbol_key(grammar, unit, symbol, &key)) {
@@ -3639,9 +3608,6 @@ register_link_declaration(core_link_unit_t *link,
         : nullptr;
     bool alias_declaration = aliased != nullptr;
     if (aliased) metadata.contract = core_link_declaration_contract(aliased);
-    // Overloads differ in their parameter types (or `where` bounds); two
-    // functions that differ only in return type, failure type or parameter
-    // modes are one function defined twice.
     parse_sym_entry_t *same_parameters = state && !state->interface_module
         ? earlier_same_parameters(state, symbol) : nullptr;
     if (same_parameters) {
@@ -4339,8 +4305,6 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &selected)
                         == TH_ENV_METHOD_FOUND;
-                // With a `__cmp` and no `__equal`, equality comes from
-                // `__cmp`, and a hash of the fields would disagree with it.
                 bool custom_cmp = !custom_equal && candidate &&
                     th_env_method_resolve(probe, candidate,
                         N00BB_COMPARABLE_TRAIT,
@@ -4633,8 +4597,6 @@ classified_names_direct(parse_tree_t *node)
     return false;
 }
 
-// Marks `node`, and the nodes it is made of alone, as naming something
-// called or referenced rather than read as a value.
 static void
 mark_names_called(parse_tree_t *node)
 {
@@ -4647,8 +4609,6 @@ mark_names_called(parse_tree_t *node)
     }
 }
 
-// The function `operand` names, when it names one: directly, or as a
-// module's member.
 static parse_sym_entry_t *
 named_function(parse_grammar_t *grammar, core_translation_unit_t *unit,
                parse_tree_t *operand)
@@ -4664,8 +4624,6 @@ named_function(parse_grammar_t *grammar, core_translation_unit_t *unit,
         ? target : nullptr;
 }
 
-// Whether `node` is a `ref` or unwrap (`!`) operator, which name
-// resolution classifies like a call.
 bool
 n00bb_call_operator_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
@@ -4755,9 +4713,6 @@ classify_call(parse_grammar_t *grammar, core_translation_unit_t *unit,
     mark_names_called(callee);
 }
 
-// Records, for every call, `ref` and unwrap, what name resolution found it
-// refers to (the call_* facts on its node), so that lowering reads those
-// facts instead of working them out from the shape of the tree.
 bool
 n00bb_classify_calls(parse_grammar_t *grammar,
                      core_translation_unit_t *const *units, size_t count)

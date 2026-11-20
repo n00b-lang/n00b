@@ -675,8 +675,6 @@ plan_inputs(builder_t *b)
     }
 }
 
-// Whether `expr` is `ret OP v`, or `v OP ret`, where `v` doesn't mention
-// the result.
 static bool
 compares_result(const builder_t *b, uint32_t expr, const char *op)
 {
@@ -697,11 +695,6 @@ compares_result(const builder_t *b, uint32_t expr, const char *op)
     return false;
 }
 
-// The return value is no result of its own when it is a status: an enum
-// the outcomes test (`-> c_int as kv_status`), or a value every success
-// pins to one value (`error ret != Z_OK`, `success when ret == K`). A
-// value the outcomes only test, as `error ret == -1` does, is still the
-// call's result.
 static bool
 status_only(const builder_t *b)
 {
@@ -729,8 +722,6 @@ status_only(const builder_t *b)
             return false;
         }
     }
-    // With no success outcome written, the implicit one is what the
-    // failures leave.
     return tested && (enumerated || success_seen || pinned_by_failure);
 }
 

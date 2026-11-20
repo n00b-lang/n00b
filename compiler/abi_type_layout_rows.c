@@ -174,8 +174,6 @@ trace_need(trace_source_t *source, uint32_t type_index)
                 break;
             }
             source->need[type_index] = TRACE_ACTIVE;
-            // The owner's layout, not the declared types: an inline array's
-            // declared type is `Array[T]`, but its storage is the elements.
             for (size_t i = 0; i < layout->n_members; i++) {
                 const ir_final_member_layout_t *member = &layout->members[i];
                 th_type *stored = member->inline_element_count
@@ -223,8 +221,6 @@ trace_need(trace_source_t *source, uint32_t type_index)
         }
         break;
     case N00B_ABI_TYPE_VARIABLE:
-        /* These need representation-specific tracing before a parent map
-         * can safely include them. */
         result = TRACE_UNKNOWN;
         break;
     default:

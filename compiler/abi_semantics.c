@@ -28,7 +28,6 @@ table(n00bb_abi_merged_rows_t *rows, uint32_t kind)
     return (n00bb_abi_merged_table_t *)n00bb_abi_merged_table(rows, kind);
 }
 
-// The row of `type`'s first component, when it has one of `kind`.
 static n00b_abi_type_v1 *
 first_component(n00bb_abi_merged_table_t *types,
                 const n00bb_abi_merged_table_t *stream,
@@ -44,7 +43,6 @@ first_component(n00bb_abi_merged_table_t *types,
     return component && component->kind == kind ? component : nullptr;
 }
 
-// The record row of an object's fields: an object is a reference to them.
 static n00b_abi_type_v1 *
 object_fields_row(n00bb_abi_merged_rows_t *merged,
                   n00bb_abi_merged_table_t *types,
@@ -665,8 +663,6 @@ n00bb_abi_link_semantic_rows(
                                          &function_index);
         if (!valid) break;
         row->finalizer_function_index = function_index;
-        // An object's storage is its fields record, so that is the row the
-        // collector finds in a dead object's header.
         n00b_abi_type_v1 *fields = object_fields_row(merged, types, row);
         if (fields) fields->finalizer_function_index = function_index;
     }

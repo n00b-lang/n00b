@@ -337,8 +337,6 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
         ir_splace_t       places[2];
         uint32_t          count = ir_summary_path_places(
             ir_summary_function(summary), path, places);
-        // A write to heap memory reached from a global or a parameter is a
-        // write to that root as well: whoever holds the root sees it.
         bool shared_root = path->root == IR_SPLACE_GLOBAL
             || path->root == IR_SPLACE_THREAD
             || path->root == IR_SPLACE_PARAM;

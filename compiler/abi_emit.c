@@ -1472,8 +1472,6 @@ collect_imported_symbol_types(core_link_unit_t *link,
         th_type *type = core_link_declaration_binding(target,
             CORE_STRING_STATIC("n00bb.semantic.type"));
         if (!type) return false;
-        // An imported generic alias is expanded where it's applied; its own
-        // type, which names its parameters, is no part of this module.
         if (kind == N00B_ABI_SYMBOL_TYPE
             && th_kind_of(th_resolve(type)) != TH_TRAIT
             && !th_is_closed(types, type))
@@ -1583,10 +1581,6 @@ collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
     if (!type_owner) return true;
     for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        // Only a nominal type has a declaration. A type variable has none;
-        // looking one up finds whichever declaration in the program uses a
-        // variable like it, which would make this module's object depend on
-        // what it's built with.
         th_kind kind = type ? th_kind_of(th_resolve(type)) : TH_VAR;
         if (kind != TH_NAMED && kind != TH_TRAIT) continue;
         parse_sym_entry_t *owner = type_owner(context, type);
@@ -1671,8 +1665,6 @@ append_imported_symbol_requirements(core_link_unit_t *link,
             &requirements[next].full_path);
         core_buffer_release(&path);
         core_string_t reason = {};
-        // A generic alias's type names its parameters, as an imported
-        // function's names its type variables.
         bool binds = kind == N00B_ABI_SYMBOL_FUNCTION
             || (kind == N00B_ABI_SYMBOL_TYPE
                 && th_kind_of(th_resolve(type)) != TH_TRAIT
@@ -1751,7 +1743,6 @@ recursive_scc_fragment(core_link_unit_t *link,
             break;
         }
         core_string_t name = member->module.identifier;
-        /* A source edit conservatively invalidates the entire cycle. */
         valid = append_scc_input(&input, name)
             && append_scc_source(&input, &member->source);
         for (size_t j = 0; valid

@@ -9,10 +9,6 @@
 #include <unistd.h>
 #endif
 
-// Thread control and the stack queries are n00b code now; their tests are
-// tests/programs/os/os_threads.n. This checks what the runtime keeps in C.
-
-// The page size, from the platform: the runtime's own is n00b code now.
 static size_t page_size(void)
 {
 #if defined(_WIN32)

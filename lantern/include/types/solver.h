@@ -28,9 +28,6 @@ typedef enum : uint8_t {
     TY_PRED_REFERENT,
     TY_PRED_ONE_OF,
     TY_PRED_CONDITION,
-    // A call's outcome (`result`) used where its value is expected (`other`),
-    // waiting on its failure type (`subject`): a call whose callee turns out
-    // not to fail is its value.
     TY_PRED_OUTCOME_VALUE,
 } ty_pred_kind_t;
 
@@ -76,10 +73,6 @@ typedef core_string_t (*ty_param_name_fn)(void *context, const ir_instr_t *at,
                                           th_type *receiver,
                                           core_string_t method, size_t index);
 
-// An overloaded call names several functions. Asked about the dispatch at
-// `at`, with `call` the shape of its arguments, the hook says that the call
-// is not overloaded, that it must wait for its arguments' types, that it
-// chose a function (setting `signature`), or that no function fits.
 typedef enum : uint8_t {
     TY_OVERLOAD_NONE,
     TY_OVERLOAD_WAIT,

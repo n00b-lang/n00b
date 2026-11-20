@@ -325,7 +325,6 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
     return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
 
-// Enums and flagsets are equal when their values are.
 static ir_func_t *
 n00bb_scalar_equal_function(ir_lower_context_t *context, th_type *receiver)
 {
@@ -557,8 +556,6 @@ n00bb_adapter_tail(dispatch_adapter_t *adapter, uint64_t missing)
     ir_value_t *outcome = ok ? call->dest : nullptr;
     ir_value_t *value = outcome;
     if (ok && fails) {
-        // Each combination of omitted parameters has its own tail, so the
-        // blocks are named apart.
         ir_block_t *ok_block = n00bb_branch_block(context, context->user,
                                                   "adapter_ok");
         ir_block_t *error_block = n00bb_branch_block(context, context->user,
@@ -647,7 +644,6 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
         char buffer[32];
         core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
                                                "arg%zu", i);
-        // A by-reference parameter's value is a Ref to the caller's place.
         bool by_reference = th_mode_by_reference(parameter->mode);
         th_ctx *types = ir_module_types(adapter->owner);
         ir_value_t *value = ir_param_add(adapter, name, by_reference
@@ -699,8 +695,6 @@ n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
                                                                  symbol);
                 ir_func_t *target = link_ir_function_for_symbol(analysis,
                                                                 implementation);
-                // An adapter only forwards to its target, so it fails as
-                // the target does, once the target's failure is inferred.
                 th_type *adapter_type = adapter && adapter->type
                     ? th_resolve(adapter->type) : nullptr;
                 th_type *target_type = target && target->type

@@ -263,8 +263,6 @@ require wide_class(Wide.w9) == 3
 require wide_class(Wide.w0 - Wide.w0) == 4
 require wide_class(Wide.w1) == 5
 
-// Every operand of `and` and `or` is a condition, the last one too, also
-// where the result is a value: a flagset is true when any flag is set.
 func both_set(a: Access) -> bool {
     return a.see and a.edit
 }
@@ -482,9 +480,6 @@ func loads() -> bool {
 
 require loads()
 
-// Only an object has a finalizer. An object whose storage stays in the frame
-// is finalized when the frame returns or fails, latest first; one whose
-// storage moves to the heap is finalized by the collector.
 object Fin_Value {
     v: int
 }
@@ -575,7 +570,6 @@ func fin_caught() -> int {
     }
 }
 
-// Copying a handle shares the object, so it is still finalized once.
 func fin_shared() -> int {
     let f = new[Fin_Value](1)
     let g = f
@@ -607,8 +601,6 @@ func fin_generic() -> int {
     return w.item
 }
 
-// The outer object stays in the frame; the inner one escapes into its field,
-// so the collector finalizes it.
 func fin_nested() -> int {
     let o = new[Fin_Outer](5)
     return o.inner.v
@@ -830,8 +822,6 @@ require ref_through_handle() == 420
 require ref_created() == 46
 require ref_viewed(new[Ref_Store](8)) == 8
 require ref_generic() == 60
-// These leave objects on the heap, for the collector to finalize whenever it
-// runs, so they come last and check only what the frame finalized.
 require fin_nested() == 5 and fin_outer_done
 let fin_kept: Fin_Value = fin_returned()
 require fin_kept.v == 5
@@ -844,8 +834,6 @@ require lease_list_break()
 require lease_list_cursor() == 9
 require lease_rows_append() == 4
 require lease_dict_writes() == 60
-// `new` on a type with no `__init` gives zeroed storage; any user type may
-// define an `__init`.
 record Ctor_Point {
     x: int
     y: int
@@ -909,9 +897,6 @@ require ctor_shape() == 7
 let ctor_perm = new[Ctor_Perm](true)
 require ctor_perm.read and ctor_perm.write
 
-// A place is whatever storage an expression was read from, however it is
-// written: grouping parentheses, `__value`, elements a container reaches
-// through `__read`, and fields of objects held by a `let`.
 record Place_Point {
     n: int
     q: Array[int][3]

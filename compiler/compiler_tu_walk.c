@@ -183,9 +183,6 @@ value_owner_node(parse_grammar_t *grammar, parse_tree_t *node)
         || NT_IS(grammar, node, "block-value-expr");
 }
 
-// Records the control-flow shape of `node` that lowering reads: which
-// expression it wraps, `and`/`or` junctions, comparisons, labels, which
-// construct a value statement belongs to, and effect-query operands.
 static void
 record_control_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                      parse_tree_t *node, bool entering)
@@ -686,8 +683,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     "could not cache a top-level statement node");
                 return;
             }
-            // A module-level `when` leaves its chosen branch in place; the
-            // branch's own top-level statements are recorded one by one.
             if (!NT_IS(grammar, statement, "top-when-body"))
                 core_list_push(state->module_top_level_statements, statement);
         }
@@ -1404,9 +1399,6 @@ order_component_bodies(core_list_t(core_translation_unit_ptr_t) *members)
     core_list_free(ordered);
 }
 
-// Puts one namespace of a literal's generated declarations into `unit`'s
-// module scope: each public one becomes a member of the module, standing
-// for the generated declaration.
 static bool
 inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
                          parse_scope_t *into, parse_scope_t *from,
@@ -1417,12 +1409,8 @@ inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
     for (parse_sym_entry_t *symbol = from ? from->first_in_scope : nullptr;
          symbol; symbol = symbol->next_in_scope) {
         parse_sym_entry_t *origin = canonical_symbol(symbol);
-        // Hooks (`__init`, `__finalize`, ...) are found through their type,
-        // never by name in a module, so they don't become members.
         bool hook = core_string_starts_with(symbol->name,
                                             CORE_STRING_STATIC("__"));
-        // A cached module's declarations come from its interface, which
-        // has no syntax: every one of them is declared.
         if (!origin || (!symbol->decl_node && !from_interface)
             || symbol_is_private(origin)
             || symbol->kind == PARSE_SYM_MODULE || hook) continue;
@@ -1430,8 +1418,6 @@ inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
                                                              symbol->name);
         if (existing && canonical_symbol(existing) == origin) continue;
         if (existing) {
-            // Reported at the literal that brings the name in: the other
-            // declaration may be in another literal's generated module.
             core_diag_location_t at = alias->literal_line
                 ? (core_diag_location_t){
                       .line = alias->literal_line,
@@ -1458,8 +1444,6 @@ inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
             || !parse_sym_set_binding(binding,
                    CORE_STRING_STATIC(N00BB_INJECTED_MEMBER_KEY), origin))
             return false;
-        // A declaration from an interface has no syntax: its export origin
-        // is what marks it a declaration, for the member too.
         void *export_origin = parse_sym_binding(origin,
             CORE_STRING_STATIC("n00bb.export-origin"));
         if (export_origin && !parse_sym_set_binding(binding,
@@ -1470,9 +1454,6 @@ inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
     return ok;
 }
 
-// A module literal's generated module can share a component with the module
-// it's written in, so its declarations may get their types only after the
-// members standing for them are made: copy the facts again once they have.
 static void
 refresh_literal_members(core_translation_unit_t *unit)
 {
@@ -1486,10 +1467,6 @@ refresh_literal_members(core_translation_unit_t *unit)
                 copy_export_binding_facts(symbol, canonical_symbol(symbol));
 }
 
-// A module literal's declarations are members of the module it's written
-// in (see module_literal_statement in preprocessor.c): the bound API is
-// named like the module's own declarations, and is exported, or not, by
-// the same rules.
 static bool
 inject_literal_declarations(core_translation_unit_t *unit)
 {
@@ -1508,7 +1485,6 @@ inject_literal_declarations(core_translation_unit_t *unit)
                                                  : nullptr;
         if (!values) continue;
         bool from_interface = generated->interface_module;
-        // The module may declare no types of its own yet.
         parse_symtab_ns(symtab, CORE_STRING_STATIC("type"));
         ok = inject_literal_namespace(unit, symtab, scope, values,
                                       from_interface, alias) && ok;
@@ -1528,8 +1504,6 @@ annotate_component(parse_grammar_t *grammar, th_ctx *types,
                    core_list_t(core_translation_unit_ptr_t) *members,
                    const n00bb_semantic_hooks_t *hooks)
 {
-    // Before anything is declared, a bare `alias` naming a literal modifier
-    // becomes a literal modifier alias.
     for (size_t i = 0; i < members->len; i++)
         if (!settle_bare_aliases(grammar, members->data[i])) return false;
     for (size_t i = 0; i < members->len; i++)
@@ -1559,8 +1533,6 @@ annotate_component(parse_grammar_t *grammar, th_ctx *types,
         if (members->len > 1 && !refresh_component_export_bindings(
                 members->data, members->len)) return false;
     }
-    // Package exports resolve once every member is declared: a package can
-    // export a whole module that comes later in the cycle.
     for (size_t i = 0; i < members->len; i++)
         if (!finish_unit(members->data[i], hooks)) return false;
     return members->len == 1

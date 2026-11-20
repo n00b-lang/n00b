@@ -14,8 +14,6 @@ typedef pwz_res_t *pwz_res_ptr_t;
 core_list_decl(pwz_exp_ptr_t);
 core_list_decl(pwz_res_ptr_t);
 
-// An ambiguity's alternatives: the list lives in the parse arena, its
-// items on the heap, so the parser keeps every one to free them.
 typedef core_list_t(pwz_res_ptr_t) *pwz_res_list_ptr_t;
 core_list_decl(pwz_res_list_ptr_t);
 
@@ -133,10 +131,6 @@ struct pwz_exp_t {
     };
 };
 
-// A node of the parse forest the derivation builds. It is kept apart from
-// the grammar's pwz_exp_t so that it fits in 16 bytes: a parse allocates
-// several per token and keeps them until the tree is built. Only a packed
-// node (PWZ_ALT, nt_id -1) uses `alts`; its name comes from nt_id.
 struct pwz_res_t {
     pwz_exp_kind_t  kind;
     pwz_list_role_t list_role;

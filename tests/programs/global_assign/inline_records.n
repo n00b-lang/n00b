@@ -1,6 +1,3 @@
-# Inline module arrays of records, strings and optionals: their elements
-# hold references the collector finds through the array value, so strings
-# made at runtime and kept only there survive allocation pressure.
 record Point {
     x: i32
     y: i32

@@ -28,8 +28,6 @@ void core_snapshot_inventory_free(core_snapshot_inventory_t *inventory);
 bool core_snapshot_inventory_enable_cache(
     core_snapshot_inventory_t *inventory, core_string_t cache_root,
     uint64_t filter_revision);
-// Never scans `directory` (an absolute path) for sources: a tool's own cache
-// or build output can sit under a root, and walking it costs every refresh.
 bool core_snapshot_inventory_skip(core_snapshot_inventory_t *inventory,
                                   core_string_t directory);
 

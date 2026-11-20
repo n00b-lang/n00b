@@ -200,8 +200,6 @@ call_operand_type(ir_value_t *value, th_ctx *types)
         ? source->type : value->type;
 }
 
-// The type an argument gives its formal: a by-reference formal is passed
-// the Ref to a place of the formal's type.
 static th_type *
 formal_argument_type(const th_param *formal, th_type *argument)
 {
@@ -716,9 +714,6 @@ heap_finalizer_instance(finalize_state_t *finalize, ir_func_t *caller,
 static bool resolve_open_reference(finalize_state_t *finalize,
                                    ir_instr_t *call);
 
-// Resolves the open reference hooks in `caller`, and makes each generic
-// object's finalizer concrete for the instances `caller` uses, which the
-// collector's finalizer dispatch calls.
 static bool
 specialize_finalizers(finalize_state_t *finalize, ir_func_t *caller)
 {
@@ -889,12 +884,8 @@ bind_trait_method(const n00bb_trait_binder_t *binder, ir_func_t *caller,
             if ((closed && !ir_instr_set_call_signature(call, target->type))
                 || !n00bb_bind_call_target(caller, call, target, false))
                 return false;
-            // A method with type variables of its own (not the receiver's)
-            // takes them from the arguments.
             if (!closed && !concrete_call_signature(call, target, types, true))
                 return false;
-            // The caller's variables a trait's signature left open (its
-            // copy's own) take the bound method's types.
             n00bb_bind_caller_variables(types, site,
                                         ir_instr_call_signature(call));
             th_type *signature = closed ? nullptr
@@ -1006,7 +997,6 @@ missing_implementation(const n00bb_trait_binder_t *binder,
                selection->operands[1].name))
         return false;
     if (!report) return true;
-    // Messages name the trait as written, not by its qualified name.
     core_string_t trait = n00bb_name_leaf(selection->operands[0].name);
     core_buffer_t used = {0};
     core_buffer_append_string(&used, trait);
@@ -1126,7 +1116,6 @@ lower_primitive_trait_call(const n00bb_trait_binder_t *binder,
         return false;
     bool flagset = binder && binder->flagset
         && binder->flagset(binder->context, receiver->type);
-    // `Integer.from_bits` on `i:N` / `u:N` has no body; it is a cast.
     th_bitint_flavor flavor = TH_BITINT_BITS;
     bool bit_integer_from_bits = !flagset
         && core_string_eq(method, CORE_STRING_STATIC("from_bits"))
@@ -1167,9 +1156,6 @@ lower_primitive_trait_call(const n00bb_trait_binder_t *binder,
                 ? ir_value_replacement(&replacements,
                                        ir_operand_value(&call->operands[2]))
                 : nullptr;
-            // A result still typed by the requirement's open signature is
-            // the receiver's type, so an operator applied to it is lowered
-            // in turn (`a + b + a`).
             th_type *result = th_is_closed(ir_module_types(module),
                                            call->dest->type)
                 ? call->dest->type : receiver->type;

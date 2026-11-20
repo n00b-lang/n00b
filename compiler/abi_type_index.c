@@ -382,8 +382,6 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
         th_type *type = ir_type_at(module, i);
         if (!type) return false;
         th_type *resolved = th_resolve(type);
-        /* Inference-only call shapes remain interned; symbol closure still
-         * collects and rejects any incomplete shape that is reachable. */
         if (th_kind_of(resolved) == TH_FUNCTION
             && !th_func_error(resolved)) continue;
         if (th_is_closed(types, type)
@@ -533,8 +531,6 @@ append_call_specialization(n00bb_abi_type_index_t *index,
 {
     if (instruction->op != IR_OP_CALL || !instruction->n_operands)
         return true;
-    // A cached module's function is a declaration here; the types its body
-    // builds for this call are in the cached body.
     ir_value_t *callee = ir_operand_value(&instruction->operands[0]);
     ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
         ? n00bb_cached_body(callee->owner) : nullptr;

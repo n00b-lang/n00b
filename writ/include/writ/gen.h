@@ -62,10 +62,6 @@ struct writ_n00b_type_t {
     const writ_n00b_type_t *item;
 };
 
-// What the callee does through a pointer argument that goes to C or the
-// kernel as it is. It may read and write unless the contract says
-// otherwise: an explicit `in` only reads, and an explicit `out` only writes
-// (it fills the storage without reading what was there).
 typedef uint8_t writ_n00b_access_t;
 enum {
     WRIT_N00B_ACCESS_ANY,
@@ -77,8 +73,6 @@ typedef struct {
     writ_str_t                     name;
     writ_str_t                     symbol;
     const writ_n00b_type_t *const *params;
-    // One entry per parameter, or null when every argument is
-    // WRIT_N00B_ACCESS_ANY.
     const writ_n00b_access_t      *param_access;
     size_t                         params_count;
     const writ_n00b_type_t        *result;
@@ -92,9 +86,6 @@ typedef struct {
     writ_str_t symbol;
 } writ_n00b_export_t;
 
-// How far a generated `layout(c)` record's foreign pointer field reaches:
-// the C data it points to holds `count_field` items, or runs to an item
-// equal to `sentinel`.
 typedef uint8_t writ_n00b_extent_t;
 enum {
     WRIT_N00B_EXTENT_NONE,
@@ -102,11 +93,6 @@ enum {
     WRIT_N00B_EXTENT_UNTIL,
 };
 
-// What the contract knows about one field of a generated `layout(c)`
-// record that the n00b source can't say: the extent of a foreign pointer,
-// and whether the field is an arm of a C union. A union's arms are emitted
-// as private fields that share the union's storage; the arm is live while
-// `tag_field` holds `tag`.
 typedef struct {
     writ_str_t         record;
     writ_str_t         field;

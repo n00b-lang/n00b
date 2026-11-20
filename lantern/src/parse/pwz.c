@@ -587,8 +587,6 @@ build_exp_graph(parse_pwz_parser_t *p, parse_grammar_t *g,
     p->start_exp = p->nt_exps[start];
 }
 
-// Frees the items of every ambiguity's alternatives, whose lists live in the
-// parse arena; called before the arena is freed or reset.
 static void
 free_ambiguities(parse_pwz_parser_t *p)
 {

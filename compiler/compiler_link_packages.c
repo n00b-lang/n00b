@@ -658,8 +658,6 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                     CORE_STRING_STATIC("n00b.type-typevars"));
             n00bb_record_layout_request_t *layout = parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.record-layout-request"));
-            // The policy, then for `align(N)` N as 4 little-endian bytes.
-            // The layout pass reports an invalid `align(N)`.
             uint32_t alignment = 0;
             bool aligned = !layout || !n00bb_record_request_aligned(layout)
                 || n00bb_record_alignment(grammar, unit, symbol, false,
@@ -820,8 +818,6 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
     for (size_t s = 0; ok && s < module_level_scopes.len; s++) {
         for (parse_sym_entry_t *symbol = module_level_scopes.data[s]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope) {
-            // The generated module exports the declarations its members
-            // stand for.
             if (n00bb_injected_member(symbol)) continue;
             if (symbol->kind == PARSE_SYM_VARIABLE && symbol->type
                 && symbol_binding_node(symbol)) {
@@ -1408,8 +1404,6 @@ register_package_module_metadata(n00bb_link_analysis_t *analysis)
                     CORE_STRING_STATIC("n00b.module-import-aliases"), 1, aliases.data,
                     aliases.byte_len);
             core_buffer_release(&aliases);
-            // Where each module literal is, so a cached build generates
-            // its module again: modifier, name, module, span and position.
             core_buffer_t literals = {0};
             uint32_t literal_count = 0;
             for (size_t i = 0; i < state->import_aliases.len; i++)
@@ -2014,8 +2008,6 @@ interface_module_declares(core_translation_unit_t *unit,
                           parse_sym_entry_t *symbol)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    // A module literal's names are members of the module it's in, though
-    // they're declared in the module it generated.
     if (state && state->interface_module && n00bb_injected_member(symbol))
         return true;
     n00bb_export_origin_t *origin = state && state->interface_module
