@@ -1125,28 +1125,34 @@ append_storage_section(const core_target_desc_t *target, uint32_t kind,
 }
 
 static bool
+publish_direct_layout_or_report(core_translation_unit_t *unit,
+                                ir_module_t *module, th_type *type,
+                                const core_target_desc_t *target)
+{
+    bool handled = false;
+    if (type && n00bb_abi_publish_direct_layout(module, type, target,
+                                                &handled)) return true;
+    core_string_t printed = type
+        ? th_print(ir_module_types(module), type)
+        : CORE_STRING_STATIC("<missing type>");
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, "could not publish ABI layout for %.*s",
+                       (int)printed.u8_bytes, printed.data);
+    bool result = abi_unit_error(unit, core_buffer_string(&message));
+    core_buffer_release(&message);
+    return result;
+}
+
+static bool
 publish_catalog_direct_layouts(core_translation_unit_t *unit,
                                n00bb_abi_type_index_t *index,
                                ir_module_t *module,
                                const core_target_desc_t *target)
 {
-    for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
-        th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        bool handled = false;
-        if (!type || !n00bb_abi_publish_direct_layout(module, type,
-                target, &handled)) {
-            core_string_t printed = type
-                ? th_print(ir_module_types(module), type)
-                : CORE_STRING_STATIC("<missing type>");
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "could not publish ABI layout for %.*s",
-                (int)printed.u8_bytes, printed.data);
-            bool result = abi_unit_error(unit, core_buffer_string(&message));
-            core_buffer_release(&message);
-            return result;
-        }
-    }
+    for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++)
+        if (!publish_direct_layout_or_report(unit, module,
+                n00bb_abi_type_index_at(index, (uint32_t)i), target))
+            return false;
     return true;
 }
 
@@ -1160,27 +1166,51 @@ layout_index_types(core_translation_unit_t *unit,
 {
     th_ctx *types = ir_module_types(module);
     size_t missing = SIZE_MAX, before;
+    // The types the direct layouts are published for once the module has
+    // laid out what it can: every one still missing a layout. (A type that
+    // has one was published already, and publishing it again would only
+    // check it.)
+    core_list_t(uint32_t) unpublished = core_list_new(uint32_t);
+    bool valid = true;
     // A type's layout can wait on its components', in either direction
     // (a record on its fields, a reference's on what it refers to).
     do {
         before = missing;
         missing = 0;
-        for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
+        unpublished.len = 0;
+        for (size_t i = 0; i < n00bb_abi_type_index_count(index); i++) {
             th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
+            if (!type) {
+                core_list_push(unpublished, (uint32_t)i);
+                continue;
+            }
             // An open record can have a layout too, when every field's
             // representation is the same whatever its variables are.
-            if (!type || (!th_is_closed(types, type)
-                          && th_kind_of(th_resolve(type)) != TH_NAMED)
-                || ir_layout_final(module, type, target->triple)) continue;
+            bool open = !th_is_closed(types, type)
+                && th_kind_of(th_resolve(type)) != TH_NAMED;
+            if (!open && ir_layout_final(module, type, target->triple))
+                continue;
+            core_list_push(unpublished, (uint32_t)i);
+            // The reserved type is published, not laid out.
+            if (open || !i) continue;
             ir_type_intern(module, type);
             missing++;
         }
-        if (!missing) return true;
-        if (!layout(layout_context, module)
-            || !publish_catalog_direct_layouts(unit, index, module, target))
-            return false;
-    } while (missing < before);
-    return true;
+        if (!missing) break;
+        valid = layout(layout_context, module);
+        for (size_t u = 0; valid && u < unpublished.len; u++) {
+            th_type *type = n00bb_abi_type_index_at(index,
+                                                    unpublished.data[u]);
+            bool open = type && !th_is_closed(types, type)
+                && th_kind_of(th_resolve(type)) != TH_NAMED;
+            if (type && !open
+                && ir_layout_final(module, type, target->triple)) continue;
+            valid = publish_direct_layout_or_report(unit, module, type,
+                                                    target);
+        }
+    } while (valid && missing < before);
+    core_list_free(unpublished);
+    return valid;
 }
 
 static bool
