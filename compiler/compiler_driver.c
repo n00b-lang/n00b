@@ -15,7 +15,6 @@ extern char **environ;
 double n00bb_profile_seconds(void);
 
 #include "driver.h"
-#include "handoff.h"
 #include "lib/os.h"
 #include "lib/process.h"
 #include "compiler_cli.h"
@@ -4454,38 +4453,6 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     return ok;
 }
 
-static void
-exec_compiler(core_string_t compiler, char **argv)
-{
-    char *native = core_string_to_cstr(compiler);
-    if (!native) return;
-    n00bb_handoff_pass();
-    fflush(stdout);
-    fflush(stderr);
-    char *invoked = argv[0];
-    argv[0] = native;
-    core_process_exec(&(core_process_spec_t){.arguments = argv});
-    argv[0] = invoked;
-    core_free(native);
-}
-
-static void
-restart_excluding_cached(char **argv, core_string_t argv0,
-                         const core_buffer_t *stale)
-{
-    n00bb_handoff_t *handoff = n00bb_handoff();
-    core_buffer_t excluded = {0};
-    core_buffer_append_string(&excluded, handoff->cache_exclude);
-    if (handoff->cache_exclude.u8_bytes) core_buffer_putc(&excluded, ',');
-    core_buffer_append(&excluded, stale->data, stale->byte_len);
-    n00bb_handoff_set(&handoff->cache_exclude, core_buffer_string(&excluded));
-    core_buffer_release(&excluded);
-    core_string_t compiler = core_os_executable_path(argv0);
-    if (!compiler.data) return;
-    exec_compiler(compiler, argv);
-    core_free(compiler.data);
-}
-
 static char **
 check_arguments_for(int argc, char **argv, parse_cmdr_result_t *args,
                     int32_t input_count, int32_t kept)
@@ -5732,14 +5699,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             core_diagnostics_merge(cli_diagnostics,
                                    core_link_unit_diagnostics(link));
     }
-    core_buffer_t refreeze = {0};
-    n00bb_cache_refreeze_modules(cache, &refreeze);
-    if (refreeze.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "comptime_main changes the state of cached modules"));
-        restart_excluding_cached(argv, argv0, &refreeze);
-    }
-    core_buffer_release(&refreeze);
 
     core_link_unit_free(link);
     th_env_free(environment);

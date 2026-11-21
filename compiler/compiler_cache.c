@@ -11,7 +11,7 @@
 
 #include "cache_location.h"
 #include "compiler_cache.h"
-#include "handoff.h"
+#include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_tu.h"
 #include "config.h"
@@ -664,7 +664,7 @@ struct n00bb_cache_t {
     core_list_t(cache_instance_t) instances;
     n00bb_cache_locate_fn locate;
     void *locate_context;
-    core_buffer_t refreeze;
+    bool unrecorded;
     core_buffer_t unstored;
     core_buffer_t libraries;
 };
@@ -887,7 +887,8 @@ still_located(const n00bb_cache_t *cache, core_string_t name,
 }
 
 static bool
-entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
+entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry,
+            bool program)
 {
     bool ok = entry->members.len != 0;
     core_buffer_t freshness = {0};
@@ -903,10 +904,11 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         if (generated)
             generated_source_bytes(path,
                 core_buffer_string(&member->inputs), &made);
-        ok = module_has_key(cache, member->name, entry->key)
-            && (!cache->root_path.data
-                || !core_string_eq(member->path, cache->root_path))
-            && still_located(cache, name, path)
+        bool root = cache->root_path.data
+            && core_string_eq(member->path, cache->root_path);
+        ok = (program || (module_has_key(cache, member->name, entry->key)
+                          && !root))
+            && (root || still_located(cache, name, path))
             && (generated || read_file(path, &source, &source_bytes));
         const void *bytes = generated ? (made.data ? made.data : "")
                                       : (source ? (const void *)source : "");
@@ -1397,6 +1399,43 @@ member_names(const cache_entry_t *entry, core_buffer_t *out)
 
 static bool take_fill_lock(n00bb_cache_t *cache);
 
+static uint64_t
+record_key(const n00bb_cache_t *cache)
+{
+    core_buffer_t root = {0};
+    core_buffer_puts(&root, "n00b.comptime.record.v1");
+    core_put_text(&root, cache->root_path);
+    uint64_t key = scc_key(cache, buffer_hash(&root), nullptr, 0, nullptr, 0);
+    core_buffer_release(&root);
+    return key;
+}
+
+static const cache_section_t *
+read_record(n00bb_cache_t *cache, cache_entry_t *record)
+{
+    uint8_t *bytes = nullptr;
+    size_t length = 0;
+    bool starts = !cache_check_only
+        && read_file(cache->root_path, &bytes, &length)
+        && core_string_find(core_string_borrow((const char *)bytes, length),
+               CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)) >= 0;
+    core_free(bytes);
+    bytes = nullptr;
+    core_buffer_t path = {0};
+    object_path_in(cache->directory, record->key, &path);
+    const cache_section_t *changed = starts
+            && read_file(core_buffer_string(&path), &bytes, &length)
+            && entry_parse(record, bytes, length)
+            && entry_fresh(cache, record, true)
+        ? phase_section(record, CORE_STRING_STATIC("changed"),
+                        (core_string_t){0})
+        : nullptr;
+    core_free(bytes);
+    core_buffer_release(&path);
+    cache->unrecorded = starts && !changed;
+    return changed;
+}
+
 n00bb_cache_t *
 n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                  core_string_t triple,
@@ -1445,13 +1484,17 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     core_buffer_append_string(&cache->libraries, libraries);
     read_module_keys(cache);
     read_reachable_entries(cache);
-    core_string_t excluded = n00bb_handoff()->cache_exclude;
+    cache_entry_t record = {.key = record_key(cache)};
+    const cache_section_t *rebuilt = read_record(cache, &record);
     for (size_t e = 0; e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
-        entry->fresh = entry_fresh(cache, entry);
-        entry->excluded = entry_excluded(entry, excluded)
+        entry->fresh = entry_fresh(cache, entry, false);
+        entry->excluded = cache->unrecorded || (rebuilt
+                && entry_excluded(entry, core_string_borrow(
+                       (const char *)rebuilt->data, rebuilt->length)))
             || entry_uses_library(cache, entry);
     }
+    entry_release(&record);
     for (size_t e = 0; e < cache->entries.len; e++)
         (void)entry_validate(cache, &cache->entries.data[e]);
     for (size_t e = 0; e < cache->entries.len; e++) {
@@ -1528,7 +1571,6 @@ n00bb_cache_free(n00bb_cache_t *cache)
         sections_release(&cache->instances.data[i].sections);
     core_list_free(cache->instances);
     core_buffer_release(&cache->flags);
-    core_buffer_release(&cache->refreeze);
     core_buffer_release(&cache->unstored);
     core_buffer_release(&cache->libraries);
     core_free(cache->directory.data);
@@ -1646,14 +1688,6 @@ n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
 }
 
 void
-n00bb_cache_log_restart(core_string_t reason)
-{
-    core_string_t phase = phase_name();
-    cache_log("%.*s restart %.*s", (int)phase.u8_bytes, phase.data,
-              (int)reason.u8_bytes, reason.data);
-}
-
-void
 n00bb_cache_log_runtime_object(core_string_t module)
 {
     core_string_t phase = phase_name();
@@ -1725,27 +1759,11 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
 }
 
 void
-n00bb_cache_note_refreeze(n00bb_cache_t *cache, core_string_t module)
-{
-    if (!cache || !module.u8_bytes) return;
-    if (cache->refreeze.byte_len) core_buffer_putc(&cache->refreeze, ',');
-    core_buffer_append_string(&cache->refreeze, module);
-}
-
-void
 n00bb_cache_skip_store(n00bb_cache_t *cache, core_string_t module)
 {
     if (!cache || !module.u8_bytes) return;
     if (cache->unstored.byte_len) core_buffer_putc(&cache->unstored, ',');
     core_buffer_append_string(&cache->unstored, module);
-}
-
-void
-n00bb_cache_refreeze_modules(const n00bb_cache_t *cache, core_buffer_t *out)
-{
-    if (cache && cache->refreeze.byte_len)
-        core_buffer_append(out, cache->refreeze.data,
-                           cache->refreeze.byte_len);
 }
 
 bool
@@ -2185,6 +2203,83 @@ snapshot_summaries(const cache_snapshot_t *snapshot, uint8_t phase,
     return false;
 }
 
+static void
+put_members(core_buffer_t *manifest, const cache_scc_t *scc)
+{
+    core_put_u64(manifest, scc->key);
+    core_put_u64(manifest, scc->freshness);
+    core_put_u32(manifest, (uint32_t)scc->members.len);
+    for (size_t m = 0; m < scc->members.len; m++) {
+        core_translation_unit_t *unit = scc->members.data[m];
+        core_string_t path = core_source_file_path(&unit->source);
+        core_string_t canonical = canonical_path(path);
+        core_put_bytes(manifest, unit->module.identifier.data,
+                  unit->module.identifier.u8_bytes);
+        core_put_text(manifest, canonical);
+        core_free(canonical.data);
+        core_put_u64(manifest, core_xxh3_64bits_raw(
+            core_source_file_contents(&unit->source).data,
+            core_source_file_size(&unit->source)));
+        core_put_u32(manifest,
+                (uint32_t)core_translation_unit_import_count(unit));
+        for (size_t i = 0; i < core_translation_unit_import_count(unit);
+             i++) {
+            core_string_t name =
+                core_translation_unit_import(unit, i)->module.identifier;
+            core_put_bytes(manifest, name.data, name.u8_bytes);
+        }
+        core_string_t owner = {0}, owner_path = {0};
+        core_string_t owner_canonical = {0};
+        if (n00bb_source_file_generated_owner(&unit->source, &owner,
+                                              &owner_path))
+            owner_canonical = canonical_path(owner_path);
+        core_put_u32(manifest, owner_canonical.data ? 1 : 0);
+        if (owner_canonical.data) {
+            core_put_text(manifest, owner);
+            core_put_text(manifest, owner_canonical);
+            core_put_text(manifest,
+                n00bb_source_file_generated_inputs(&unit->source));
+        }
+        core_free(owner_canonical.data);
+    }
+}
+
+static void
+store_record(const n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
+{
+    cache_scc_t program = {
+        .key = record_key(cache),
+        .members = core_list_new(core_translation_unit_ptr_t),
+    };
+    bool complete = true;
+    for (size_t s = 0; s < sccs->len; s++) {
+        complete &= !sccs->data[s].cached;
+        for (size_t m = 0; m < sccs->data[s].members.len; m++)
+            core_list_push(program.members, sccs->data[s].members.data[m]);
+    }
+    qsort(program.members.data, program.members.len,
+          sizeof(*program.members.data), compare_units);
+    scc_freshness(&program);
+    core_buffer_t manifest = {0}, serialized = {0}, path = {0};
+    put_members(&manifest, &program);
+    for (int i = 0; i < 3; i++) core_put_u32(&manifest, 0);
+    core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
+    object_path_in(cache->directory, program.key, &path);
+    if (complete && sections_set(&sections, CORE_STRING_STATIC("manifest"),
+                                 manifest.data, manifest.byte_len)
+        && sections_set(&sections, CORE_STRING_STATIC("changed"),
+                        cache->unstored.data, cache->unstored.byte_len)) {
+        sections_serialize(&sections, &serialized);
+        (void)core_os_write_file_atomic(core_buffer_string(&path),
+                                        serialized.data, serialized.byte_len);
+    }
+    sections_release(&sections);
+    core_buffer_release(&serialized);
+    core_buffer_release(&path);
+    core_buffer_release(&manifest);
+    core_list_free(program.members);
+}
+
 static bool
 store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
           const core_list_t(cache_scc_t) *sccs,
@@ -2193,42 +2288,7 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
 {
     core_string_t phase = phase_name();
     core_buffer_t manifest = {0};
-    core_put_u64(&manifest, scc->key);
-    core_put_u64(&manifest, scc->freshness);
-    core_put_u32(&manifest, (uint32_t)scc->members.len);
-    for (size_t m = 0; m < scc->members.len; m++) {
-        core_translation_unit_t *unit = scc->members.data[m];
-        core_string_t path = core_source_file_path(&unit->source);
-        core_string_t canonical = canonical_path(path);
-        core_put_bytes(&manifest, unit->module.identifier.data,
-                  unit->module.identifier.u8_bytes);
-        core_put_text(&manifest, canonical);
-        core_free(canonical.data);
-        core_put_u64(&manifest, core_xxh3_64bits_raw(
-            core_source_file_contents(&unit->source).data,
-            core_source_file_size(&unit->source)));
-        core_put_u32(&manifest,
-                (uint32_t)core_translation_unit_import_count(unit));
-        for (size_t i = 0; i < core_translation_unit_import_count(unit);
-             i++) {
-            core_string_t name =
-                core_translation_unit_import(unit, i)->module.identifier;
-            core_put_bytes(&manifest, name.data, name.u8_bytes);
-        }
-        core_string_t owner = {0}, owner_path = {0};
-        core_string_t owner_canonical = {0};
-        if (n00bb_source_file_generated_owner(&unit->source, &owner,
-                                              &owner_path))
-            owner_canonical = canonical_path(owner_path);
-        core_put_u32(&manifest, owner_canonical.data ? 1 : 0);
-        if (owner_canonical.data) {
-            core_put_text(&manifest, owner);
-            core_put_text(&manifest, owner_canonical);
-            core_put_text(&manifest,
-                n00bb_source_file_generated_inputs(&unit->source));
-        }
-        core_free(owner_canonical.data);
-    }
+    put_members(&manifest, scc);
     put_links(&manifest, sccs, &scc->imports, false);
     put_links(&manifest, sccs, &scc->inlined, true);
     const core_buffer_t *ir = &snapshot->ir;
@@ -2772,6 +2832,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         if (object && ok)
             log_instance(CORE_STRING_STATIC("store"), item);
     }
+    if (ok && cache->unrecorded) store_record(cache, sccs);
     release_fill_lock();
     return ok;
 }

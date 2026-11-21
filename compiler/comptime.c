@@ -519,11 +519,8 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         for (size_t k = 0; owner && k < kept.len; k++)
             frozen |= kept.data[k] == owner;
         bool started = ok && starts && owner != unit;
-        bool refreezes = started
-            && n00bb_cache_has_module(analysis->cache, path);
         if (started) n00bb_cache_skip_store(analysis->cache, path);
-        if (refreezes) n00bb_cache_note_refreeze(analysis->cache, path);
-        if (ok && !frozen && !refreezes && n00bb_report(diagnostics, unit,
+        if (ok && !frozen && n00bb_report(diagnostics, unit,
                 N00B_DIAG_COMPTIME_IMPORT_CHANGE_DROPPED,
                 (core_diag_location_t){0},
                 N00B_TEXT_COMPTIME_IMPORT_CHANGE_DROPPED,

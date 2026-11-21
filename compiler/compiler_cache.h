@@ -63,12 +63,8 @@ const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
                                     size_t index);
 bool n00bb_cache_has_module(const n00bb_cache_t *cache,
                             core_string_t module);
-void n00bb_cache_log_restart(core_string_t reason);
 void n00bb_cache_log_runtime_object(core_string_t module);
-void n00bb_cache_note_refreeze(n00bb_cache_t *cache, core_string_t module);
 void n00bb_cache_skip_store(n00bb_cache_t *cache, core_string_t module);
-void n00bb_cache_refreeze_modules(const n00bb_cache_t *cache,
-                                  core_buffer_t *out);
 typedef bool (*n00bb_cache_module_used_fn)(void *context,
                                            core_string_t module);
 bool n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,

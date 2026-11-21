@@ -21,6 +21,8 @@ text="$programs/text/text_suite.n"
 threads="$programs/buffer/buffer_thread_slice.n"
 stack="$programs/cache_barrier/stack_caller.n"
 heap="$programs/cache_barrier/heap_caller.n"
+imports="$tmp/imports"
+starter="$imports/starter.n"
 
 image() {
     "$llvm/llvm-objdump" -s "$1" | awk '
@@ -134,6 +136,39 @@ filled_by_records() {
     run library.cross br library record_root
 }
 
+reuses() {
+    cell=$1 log=$2 built="$tmp/$3/image"
+    echo "$cell" >>"$tmp/cells"
+    if [ -s "$built" ] && grep -q "reuse scc builtin" "$log" \
+        && ! grep -q "reuse scc shared" "$log"; then
+        echo "pass $cell"
+    else
+        echo "FAIL $cell"
+        echo "$cell" >>"$tmp/failed"
+    fi
+}
+
+comptime_main_cache() {
+    cp -R "$programs/comptime/imports" "$imports"
+    export N00B_PATH="$imports"
+    run build.starter.off off build "$starter"
+    run build.starter.fill sf build "$starter"
+    export N00B_CACHE_LOG="$tmp/starter.warm.log"
+    run build.starter.warm sf build "$starter"
+    unset N00B_CACHE_LOG
+    run build.changer.fill cf build "$imports/changer.n"
+    run build.starter.cross cf build "$starter"
+    export N00B_CACHE_LOG="$tmp/starter.cross.log"
+    run build.starter.cross-again cf build "$starter"
+    unset N00B_CACHE_LOG
+    echo >>"$starter"
+    run build.starter.edited cf build "$starter"
+    export N00B_CACHE_LOG="$tmp/starter.edited.log"
+    run build.starter.edited-again cf build "$starter"
+    unset N00B_CACHE_LOG
+    run build.starter.edited-off off build "$starter"
+}
+
 library_cache() {
     run library.fill lr library record_root
     run library.warm lr library record_root
@@ -175,6 +210,7 @@ else
     library_cache &
     filled_by_stack_caller &
     syntax_settings &
+    comptime_main_cache &
     wait
     for setting in default no-warnings function-fn block-colon; do
         same "check.syntax-warnings.$setting" "syntax.off.$setting" \
@@ -205,6 +241,20 @@ else
     same build.heap_caller.cross-stack-caller build.heap.off build.heap.cross
     same build.hello-function-summaries.cross-records build.summaries.off \
         build.summaries.cross
+    same build.starter.fill build.starter.off build.starter.fill
+    same build.starter.warm build.starter.off build.starter.warm
+    same build.starter.cross-changer build.starter.off build.starter.cross
+    same build.starter.cross-changer-again build.starter.off \
+        build.starter.cross-again
+    same build.starter.edited build.starter.edited-off build.starter.edited
+    same build.starter.edited-again build.starter.edited-off \
+        build.starter.edited-again
+    reuses build.starter.warm-reuses-cache "$tmp/starter.warm.log" \
+        build.starter.warm
+    reuses build.starter.cross-reuses-cache "$tmp/starter.cross.log" \
+        build.starter.cross-again
+    reuses build.starter.edited-reuses-cache "$tmp/starter.edited.log" \
+        build.starter.edited-again
     same library.record_root.fill library.off library.fill
     same library.record_root.warm library.off library.warm
     same library.record_root.cross-records library.off library.cross
