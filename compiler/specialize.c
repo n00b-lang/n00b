@@ -334,7 +334,7 @@ concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types,
 static ir_func_t *
 instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
             core_list_t(type_binding_t) *bindings, th_ctx *types,
-            core_buffer_t *failure)
+            core_buffer_t *failure, core_list_t(uint32_t) *outcomes)
 {
     core_string_t owner = ir_module_name(target->owner);
     core_buffer_t identity = {0};
@@ -383,7 +383,7 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
             (int)printed.u8_bytes, printed.data,
             (int)reason.u8_bytes, reason.data);
     }
-    if (copy) n00bb_fold_static_branches(copy, target, context);
+    if (copy) n00bb_fold_static_branches(copy, outcomes);
     return copy;
 }
 
@@ -499,10 +499,11 @@ retarget_reference(specialize_state_t *state, ir_func_t *caller,
                                     types);
     if (!copy) {
         core_list_t(type_binding_t) bindings = {0};
+        core_list_t(uint32_t) outcomes = {0};
         bool matched = match_type(types, target->type, signature, &bindings)
             && bindings.len;
         copy = matched ? instantiate(state->context, target, signature,
-            &bindings, types, state->failure) : nullptr;
+            &bindings, types, state->failure, &outcomes) : nullptr;
         core_list_free(bindings);
         if (!matched) return true;
         if (!copy) return false;
@@ -510,7 +511,7 @@ retarget_reference(specialize_state_t *state, ir_func_t *caller,
             ((specialization_t){.source = target, .copy = copy,
                                 .signature = signature, .parent = parent}));
         core_list_push(*state->instances,
-            ((n00bb_specialization_t){target, copy, signature}));
+            ((n00bb_specialization_t){target, copy, signature, outcomes}));
         core_list_push(*state->functions, copy);
     }
     core_list_push(*state->requests,
@@ -630,17 +631,18 @@ concrete_instance(finalize_state_t *finalize, ir_module_t *requester,
         th_hash(types, actual), types) : nullptr;
     if (copy || !actual) return copy;
     core_list_t(type_binding_t) bindings = {0};
+    core_list_t(uint32_t) outcomes = {0};
     bool matched = match_type(types, target->type, actual, &bindings)
         && bindings.len;
     copy = matched ? instantiate(finalize->state->context, target, actual,
-        &bindings, types, finalize->state->failure) : nullptr;
+        &bindings, types, finalize->state->failure, &outcomes) : nullptr;
     core_list_free(bindings);
     if (!copy) return nullptr;
     add_specialization(specializations,
         ((specialization_t){.source = target, .copy = copy,
                             .signature = actual, .parent = SIZE_MAX}));
     core_list_push(*finalize->state->instances,
-        ((n00bb_specialization_t){target, copy, actual}));
+        ((n00bb_specialization_t){target, copy, actual, outcomes}));
     core_list_push(*finalize->state->functions, copy);
     core_list_push(*finalize->state->requests,
         ((n00bb_specialization_request_t){requester, copy}));
@@ -1226,12 +1228,13 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
             || find_instance(&specializations, target,
                              th_hash(types, actual), types)) continue;
         core_list_t(type_binding_t) bindings = {0};
+        core_list_t(uint32_t) outcomes = {0};
         bool identity = th_hash(types, actual) == th_hash(types, target->type);
         bool matched = identity
             || (match_type(types, target->type, actual, &bindings)
                 && bindings.len);
         ir_func_t *copy = matched ? instantiate(context, target, actual,
-            &bindings, types, failure) : nullptr;
+            &bindings, types, failure, &outcomes) : nullptr;
         core_list_free(bindings);
         valid = !matched || copy != nullptr;
         if (!copy) continue;
@@ -1239,7 +1242,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
             ((specialization_t){.source = target, .copy = copy,
                                 .signature = actual, .parent = SIZE_MAX}));
         core_list_push(*instances,
-            ((n00bb_specialization_t){target, copy, actual}));
+            ((n00bb_specialization_t){target, copy, actual, outcomes}));
         core_list_push(*functions, copy);
     }
     for (size_t index = 0; valid; index++) {
@@ -1351,8 +1354,9 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 ir_func_t *copy = find_instance(&specializations, target,
                     th_hash(types, actual), types);
                 if (!copy) {
+                    core_list_t(uint32_t) outcomes = {0};
                     copy = instantiate(context, target, actual, &bindings,
-                                       types, failure);
+                                       types, failure, &outcomes);
                     valid = copy != nullptr;
                     if (valid) {
                         add_specialization(&specializations,
@@ -1362,7 +1366,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                                 .site = call->span}));
                         core_list_push(*instances,
                             ((n00bb_specialization_t){target, copy,
-                                                      actual}));
+                                                      actual, outcomes}));
                         core_list_push(*functions, copy);
                     }
                 }

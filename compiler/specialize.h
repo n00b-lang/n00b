@@ -14,6 +14,7 @@ typedef struct {
     ir_func_t *generic;
     ir_func_t *instance;
     th_type *signature;
+    core_list_t(uint32_t) outcomes;
 } n00bb_specialization_t;
 core_list_decl(n00bb_specialization_t);
 
