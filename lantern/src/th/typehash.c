@@ -1009,9 +1009,10 @@ static void enc_node(th_enc *e, core_buffer_t *b, const th_type *t)
 }
 
 typedef struct {
-    core_dict_t seen;
-    th_path    path;
-    th_ctx    *ctx;
+    th_path  path;
+    th_ctx  *ctx;
+    void   (*visit)(void *state, th_type *var);
+    void    *state;
 } th_norm;
 
 static void norm_walk(th_norm *s, th_type *t);
@@ -1121,15 +1122,7 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
 
     switch (t->kind) {
     case TH_VAR:
-        if (core_dict_contains(&s->seen, t)) {
-            return nullptr;
-        }
-
-        t->var.index     = core_dict_len(&s->seen);
-        t->var.has_index = true;
-
-        core_dict_put(&s->seen, t, t);
-
+        s->visit(s->state, t);
         return nullptr;
 
     case TH_NAMED:
@@ -1267,6 +1260,24 @@ static void norm_walk(th_norm *s, th_type *root)
     core_list_free(st);
 }
 
+void th_walk_vars(th_ctx *ctx, th_type *t,
+                  void (*visit)(void *state, th_type *var), void *state)
+{
+    th_norm s = {.ctx = ctx, .visit = visit, .state = state};
+
+    pm_init(&s.path);
+    norm_walk(&s, t);
+    pm_free(&s.path);
+}
+
+static void index_var(void *seen, th_type *t)
+{
+    if (core_dict_contains(seen, t)) return;
+    t->var.index     = core_dict_len(seen);
+    t->var.has_index = true;
+    core_dict_put(seen, t, t);
+}
+
 void th_normalize(th_type *t)
 {
     th_type *resolved = th_resolve(t);
@@ -1275,14 +1286,12 @@ void th_normalize(th_type *t)
         || (resolved->kind == TH_NAMED && !resolved->named.nargs))
         return;
 
-    th_ctx  tmp = {0};
-    th_norm s   = {.ctx = &tmp};
+    th_ctx      tmp = {0};
+    core_dict_t seen;
 
-    core_dict_init(&s.seen, nullptr, nullptr);
-    pm_init(&s.path);
-    norm_walk(&s, t);
-    core_dict_free(&s.seen);
-    pm_free(&s.path);
+    core_dict_init(&seen, nullptr, nullptr);
+    th_walk_vars(&tmp, t, index_var, &seen);
+    core_dict_free(&seen);
 }
 
 bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
