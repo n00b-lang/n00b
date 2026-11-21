@@ -602,7 +602,9 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     if (!m || !named || !def || th_kind_of(named) != TH_NAMED) {
         return false;
     }
-    if (!th_type_define_owned(m->ctx->types, named, def, m)) return false;
+    if (!th_type_define_owned(m->ctx->types, named, def,
+                              th_named_nargs(named) ? nullptr : m))
+        return false;
 
     ir_type_intern(m, named);
     ir_type_intern(m, def);
@@ -628,12 +630,7 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
     }
 
     th_type *definition = th_type_definition(m->ctx->types, named);
-    if (definition) {
-        if (th_is_closed(m->ctx->types, named)
-            && !th_type_definition_owner(m->ctx->types, named)
-            && !ir_type_define(m, named, definition)) return nullptr;
-        return definition;
-    }
+    if (definition) return definition;
     ir_typeslot_t *slot = type_find(m, ir_type_id(m, named));
     return slot ? slot->def : nullptr;
 }
