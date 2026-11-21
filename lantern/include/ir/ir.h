@@ -524,7 +524,6 @@ th_type *ir_type_intern(ir_module_t *m, th_type *t);
 bool     ir_module_reintern_types(ir_module_t *m);
 th_ctx   *ir_module_types(ir_module_t *m);
 ir_ctx_t *ir_module_ctx(ir_module_t *m);
-th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 bool     ir_type_is_call_outcome(th_type *type);
 bool     ir_callable_returns_value(ir_module_t *m, th_type *callable);

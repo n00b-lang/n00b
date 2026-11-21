@@ -4,7 +4,6 @@ IR_DIAG(BAD_ANNOT_KEY,     "IR-E0004", ERROR,   "annotation key is not namespace
 IR_DIAG(AUTHORED_ANNOT,    "IR-W0005", WARNING, "pass contradicted an authored annotation")
 IR_DIAG(UNKNOWN_OPCODE,    "IR-E0006", ERROR,   "unknown opcode")
 IR_DIAG(MISSING_PROFILE,   "IR-E0007", ERROR,   "extension opcode needs its profile")
-IR_DIAG(PARSE,             "IR-E0009", ERROR,   "parse error")
 IR_DIAG(TYPE_LITERAL,      "IR-E0015", ERROR,   "literal is not representable in its type")
 IR_DIAG(VERIFY_PARSED,     "IR-E0019", ERROR,   "module is not structurally well formed")
 IR_DIAG(VERIFY_TYPED,      "IR-E0020", ERROR,   "module is not fully typed")

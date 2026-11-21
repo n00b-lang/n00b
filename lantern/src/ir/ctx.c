@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
-#include "ir/typelang.h"
 #include "ir/walk.h"
 #include "parse/annot_walk.h"
 
@@ -713,20 +712,6 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
         && !ir_type_define(m, outcome, existing ? existing : definition))
         return nullptr;
     return ir_type_intern(m, outcome);
-}
-
-th_type *ir_type_parse(ir_module_t *m, core_string_t text)
-{
-    if (!m || !text.data) {
-        return nullptr;
-    }
-
-    core_string_t err = {};
-    th_type      *t   = ir_typelang_parse(m->ctx->types, text, &err);
-
-    core_free(err.data);
-
-    return t ? ir_type_intern(m, t) : nullptr;
 }
 
 uint64_t ir_type_id(ir_module_t *m, th_type *t)

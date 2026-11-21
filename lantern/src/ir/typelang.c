@@ -20,16 +20,6 @@
 
 #include "typelang_bnf.h"
 
-static core_string_t msg(core_string_t what)
-{
-    core_buffer_t *b = core_buffer_empty();
-
-    core_buffer_puts(b, "typelang: ");
-    core_buffer_append_string(b, what);
-
-    return core_buffer_take_string(b);
-}
-
 static parse_grammar_t *grammar;
 static int64_t          tid_ident;
 static int64_t          tid_int;
@@ -69,13 +59,6 @@ static parse_grammar_t *load_grammar(void)
     return grammar;
 }
 
-void ir_typelang_shutdown(void)
-{
-    if (grammar) {
-        parse_grammar_free(grammar);
-        grammar = nullptr;
-    }
-}
 
 static bool after_tick(parse_scanner_t *s)
 {
@@ -1079,26 +1062,23 @@ static bool install(parse_tree_walk_t *w, parse_grammar_t *g, bctx *c)
 static th_type *lower(bctx *c, parse_tree_t *tree)
 {
     parse_tree_walk_t *w = parse_tree_walk_new(c->g, c);
+    parse_nonterm_t   *union_type =
+        parse_find_nonterm(c->g, CORE_STRING_STATIC("union-type"));
 
-    if (!ir_typelang_install(w, c->g, (ir_typelang_lower_t *)c)) {
-        c->err = CORE_STRING_STATIC("could not install typelang reducers");
-        parse_tree_walk_free(w);
-        return nullptr;
+    if (union_type) {
+        parse_walk_reduce_leaf_in(w, parse_nt_unit(c->g, union_type->name),
+                                  r_int_leaf_or_str, c);
     }
-
-    tl_node *reduced = parse_tree_walk_reduce(w, tree);
-    th_type *out     = as_type(reduced);
+    th_type *out = install(w, c->g, c)
+        ? as_type(parse_tree_walk_reduce(w, tree)) : nullptr;
 
     parse_tree_walk_free(w);
 
     return out;
 }
-static th_type *run(th_ctx *ctx, core_string_t src, core_string_t *err)
-{
-    if (err) {
-        *err = (core_string_t){};
-    }
 
+static th_type *run(th_ctx *ctx, core_string_t src)
+{
     parse_grammar_t *g = load_grammar();
 
     if (!g || !src.data) {
@@ -1122,12 +1102,6 @@ static th_type *run(th_ctx *ctx, core_string_t src, core_string_t *err)
 
         out = lower(&c, parse_pwz_get_tree(p));
 
-        if (!out && err) {
-            *err = msg(c.err.data
-                           ? c.err
-                           : CORE_STRING_STATIC("cannot build this type"));
-        }
-
         for (size_t i = 0; i < c.free_vars.len; i++) {
             core_dict_string_key_free(c.free_vars.data[i].name);
         }
@@ -1135,67 +1109,12 @@ static th_type *run(th_ctx *ctx, core_string_t src, core_string_t *err)
         core_dict_free(&c.fv_index);
         core_list_free(c.free_vars);
         core_list_free(c.binders);
-    } else if (err) {
-        *err = msg(CORE_STRING_STATIC("cannot parse a type here"));
     }
 
     parse_pwz_free(p);
     scan_token_stream_free(ts);
 
     return out;
-}
-
-ir_typelang_lower_t *ir_typelang_lower_new(th_ctx *ctx)
-{
-    bctx *c = core_alloc(bctx);
-
-    c->th = ctx;
-    c->g  = load_grammar();
-
-    core_dict_init_string(&c->fv_index);
-
-    return (ir_typelang_lower_t *)c;
-}
-
-bool ir_typelang_install(parse_tree_walk_t *w, parse_grammar_t *g,
-                         ir_typelang_lower_t *l)
-{
-    bctx *c = (bctx *)l;
-
-    parse_nonterm_t *union_type =
-        parse_find_nonterm(g, CORE_STRING_STATIC("union-type"));
-    if (union_type) {
-        parse_walk_reduce_leaf_in(w, parse_nt_unit(g, union_type->name),
-                                  r_int_leaf_or_str, c);
-    }
-    bool ok = install(w, g, c);
-    return ok;
-}
-
-th_type *ir_typelang_type_of(void *reduced) { return as_type(reduced); }
-
-void ir_typelang_lower_free(ir_typelang_lower_t *l)
-{
-    bctx *c = (bctx *)l;
-
-    if (!c) {
-        return;
-    }
-
-    for (size_t i = 0; i < c->free_vars.len; i++) {
-        core_dict_string_key_free(c->free_vars.data[i].name);
-    }
-
-    core_dict_free(&c->fv_index);
-    core_list_free(c->free_vars);
-    core_list_free(c->binders);
-    core_free(c);
-}
-
-th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
-                           core_string_t *err)
-{
-    return src.data ? run(ctx, src, err) : nullptr;
 }
 
 th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
@@ -1209,10 +1128,7 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
         return known;
     }
 
-    core_string_t err = {};
-    th_type      *t   = ir_typelang_parse(types, spec, &err);
-
-    core_free(err.data);
+    th_type *t = run(types, spec);
 
     if (t && th_is_closed(types, t)) {
         th_remember_text_type(types, spec, t);

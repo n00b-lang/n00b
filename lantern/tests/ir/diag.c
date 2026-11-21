@@ -315,8 +315,10 @@ static void test_span_fallback(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
     ir_module_t *m   = mod(ctx);
-    th_type     *t   = ir_type_parse(m, S("i32"));
-    th_type     *ft  = ir_type_parse(m, S("(i32) -> i32"));
+    th_type     *t   = th_name(ir_module_types(m), S("i32"));
+    th_type     *ft  = th_func(ir_module_types(m), t,
+                               &(th_param){.mode = TH_IN, .type = t}, 1,
+                               nullptr, nullptr, 0);
     ir_func_t   *f   = ir_func_add(m, S("f"), ft, IR_LINK_EXTERNAL);
     ir_block_t  *b   = ir_block_add(f, S("entry"));
     ir_instr_t  *in  = ir_instr_add(b, IR_OP_ADD);

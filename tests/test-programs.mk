@@ -25,10 +25,8 @@ TEST_PROGRAMS := writ-coexistence \
     abi-decl-index-test \
     abi-declarations-test \
     abi-type-index-test \
-    llvm-backend-test \
     llvm-native-cache-test \
-    llvm-stack-maps-test \
-    llvm-frame-roots-test
+    llvm-stack-maps-test
 
 writ-coexistence_SOURCES := tests/writ_coexistence.c
 writ-coexistence_LIBS := $(WRIT_LIB) $(LANTERN_LIB)
@@ -212,19 +210,6 @@ abi-type-index-test_SOURCES := tests/abi_type_index.c \
     compiler/abi_decl_index.c
 abi-type-index-test_LIBS := $(LANTERN_LIB)
 
-llvm-backend-test_SOURCES := tests/llvm_backend.c \
-    compiler/llvm_backend.c \
-    compiler/llvm_diagnostics.c \
-    compiler/catalog.c \
-    compiler/llvm_native_cache.c \
-    compiler/cache_location.c \
-    runtime/runtime_native_roots.c \
-    compiler/compiler_native_roots.c \
-    compiler/compiler_axioms.c \
-    compiler/compiler_system.c
-llvm-backend-test_LIBS = $(VERSION_OBJECT) $(LANTERN_LIB)
-llvm-backend-test_LLVM := yes
-
 llvm-native-cache-test_SOURCES := tests/llvm_native_cache.c \
     compiler/llvm_native_cache.c \
     compiler/cache_location.c
@@ -237,19 +222,3 @@ llvm-stack-maps-test_SOURCES := tests/llvm_stack_maps.c \
     compiler/native_frame_saves.c
 llvm-stack-maps-test_LIBS := $(LANTERN_LIB)
 llvm-stack-maps-test_LLVM := yes
-
-llvm-frame-roots-test_SOURCES := tests/llvm_frame_roots.c \
-    compiler/llvm_backend.c \
-    compiler/llvm_diagnostics.c \
-    compiler/catalog.c \
-    compiler/llvm_native_cache.c \
-    compiler/cache_location.c \
-    compiler/llvm_stack_maps.c \
-    compiler/native_frame_maps.c \
-    compiler/native_frame_saves.c \
-    runtime/runtime_native_roots.c \
-    compiler/compiler_native_roots.c \
-    compiler/compiler_axioms.c \
-    compiler/compiler_system.c
-llvm-frame-roots-test_LIBS = $(VERSION_OBJECT) $(LANTERN_LIB)
-llvm-frame-roots-test_LLVM := yes

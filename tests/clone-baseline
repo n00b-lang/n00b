@@ -303,22 +303,6 @@ d2ced9715908fca0	2	pending	lantern/src/diag/diagnostics.c
 e4754220834440b5	2	pending	lantern/src/diag/diagnostics.c
 ab557d6e455d6d61	2	pending	lantern/src/ir/archive.c
 ac4debc5ab13a45d	2	pending	lantern/src/ir/archive.c
-0130c4f52ebc7399	2	pending	lantern/src/ir/build.c
-132f29e11fe2f405	2	pending	lantern/src/ir/build.c
-139387900eaa4643	2	pending	lantern/src/ir/build.c
-2de55985a083d1c7	2	pending	lantern/src/ir/build.c
-30a6738a81fc93da	2	pending	lantern/src/ir/build.c
-315d96b59c87b71b	2	pending	lantern/src/ir/build.c
-35096df7992b962b	2	pending	lantern/src/ir/build.c
-48f7e6ccad4c182d	2	pending	lantern/src/ir/build.c
-4d6f28185e595440	2	pending	lantern/src/ir/build.c
-5c7fe2c5e1355491	2	pending	lantern/src/ir/build.c
-865de43749f45cab	2	pending	lantern/src/ir/build.c
-c6ede0699c848ff6	2	pending	lantern/src/ir/build.c
-e73c1234fdfef151	2	pending	lantern/src/ir/build.c
-047217608c4fd541	3	false-positive	lantern/src/ir/cli.c:363 command registration stubs that differ only in the callbacks they install
-2adfba9a9e6a4a67	2	false-positive	lantern/src/ir/cli.c:363 command registration stubs that differ only in the callbacks they install
-b3c583434be4e042	3	false-positive	lantern/src/ir/cli.c:363 command registration stubs that differ only in the callbacks they install
 5411f6e9b224071c	2	pending	lantern/src/ir/ctx.c
 608548599418f2d2	2	pending	lantern/src/ir/ctx.c
 6ffd56283930562b	2	pending	lantern/src/ir/ctx.c
