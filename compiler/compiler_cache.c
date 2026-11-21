@@ -153,18 +153,6 @@ sections_parse(const uint8_t *data, size_t length,
     return !in.failed;
 }
 
-static void
-sections_remove(core_list_t(cache_section_t) *sections, core_string_t name)
-{
-    for (size_t i = 0; i < sections->len; i++) {
-        if (!core_string_eq(sections->data[i].name, name)) continue;
-        core_free(sections->data[i].name.data);
-        free(sections->data[i].data);
-        core_list_delete(*sections, i);
-        return;
-    }
-}
-
 static bool cache_check_only;
 
 void
@@ -179,20 +167,6 @@ objects_optional(void)
     return cache_check_only;
 }
 
-static core_string_t
-object_kind(void)
-{
-    return n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
-        ? CORE_STRING_STATIC("bitcode") : CORE_STRING_STATIC("native");
-}
-
-static core_string_t
-runtime_object_kind(void)
-{
-    return n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
-        ? CORE_STRING_STATIC("runtime-bitcode")
-        : CORE_STRING_STATIC("runtime-native");
-}
 
 static core_string_t
 phase_name(void)
@@ -566,7 +540,6 @@ typedef struct {
     ir_module_t *module;
     core_string_t owner;
     core_string_t owner_path;
-    uint64_t owner_hash;
     core_buffer_t inputs;
 } cache_member_t;
 core_list_decl(cache_member_t);
@@ -598,7 +571,6 @@ typedef struct {
     bool fresh;
     bool excluded;
     bool loaded;
-    bool alternate;
     entry_state_t state;
     entry_state_t load;
     th_env *interface;
@@ -703,7 +675,8 @@ scc_key(const n00bb_cache_t *cache, uint64_t freshness,
         const uint64_t *inlined, size_t inlined_count)
 {
     core_buffer_t key = {0};
-    core_buffer_puts(&key, "n00b.scc.key.v5");
+    core_buffer_puts(&key, "n00b.scc.key.v6");
+    core_put_text(&key, phase_name());
     core_put_u64(&key, freshness);
     core_put_u32(&key, (uint32_t)import_count);
     for (size_t i = 0; i < import_count; i++) core_put_u64(&key, imports[i]);
@@ -735,20 +708,12 @@ section_named(const core_list_t(cache_section_t) *sections,
     return nullptr;
 }
 
-static void
-phase_name_into(core_buffer_t *out, core_string_t kind)
-{
-    core_buffer_append_string(out, phase_name());
-    core_buffer_putc(out, '.');
-    core_buffer_append_string(out, kind);
-}
-
 static const cache_section_t *
 phase_section(const cache_entry_t *entry, core_string_t kind,
               core_string_t module)
 {
     core_buffer_t name = {0};
-    phase_name_into(&name, kind);
+    core_buffer_append_string(&name, kind);
     if (module.data) {
         core_buffer_putc(&name, '.');
         core_buffer_append_string(&name, module);
@@ -815,11 +780,8 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
     entry->references = core_list_new(core_string_t);
     entry->sections = core_list_new(cache_section_t);
     if (!sections_parse(data, length, &entry->sections)) return false;
-    core_buffer_t manifest_name = {0};
-    phase_name_into(&manifest_name, CORE_STRING_STATIC("manifest"));
     const cache_section_t *manifest = section_named(&entry->sections,
-        core_buffer_string(&manifest_name));
-    core_buffer_release(&manifest_name);
+        CORE_STRING_STATIC("manifest"));
     if (!manifest) return false;
     core_byte_cursor_t r = core_cursor(manifest->data, manifest->length);
     uint64_t key = core_cursor_u64(&r);
@@ -839,16 +801,7 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
         if (core_cursor_u32(&r)) {
             member.owner = read_text(&r);
             member.owner_path = read_text(&r);
-            member.owner_hash = core_cursor_u64(&r);
-            uint32_t inputs = core_cursor_u32(&r);
-            for (uint32_t i = 0; !r.failed && i < inputs; i++) {
-                core_string_t path = read_text(&r);
-                if (path.data) {
-                    core_buffer_append_string(&member.inputs, path);
-                    core_buffer_putc(&member.inputs, '\n');
-                }
-                core_free(path.data);
-            }
+            core_buffer_append_string(&member.inputs, core_cursor_text(&r));
         }
         core_list_push(entry->members, member);
     }
@@ -946,7 +899,6 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         bool generated = member->owner.data != nullptr;
         core_string_t name = generated ? member->owner : member->name;
         core_string_t path = generated ? member->owner_path : member->path;
-        uint64_t hash = generated ? member->owner_hash : member->source_hash;
         core_buffer_t made = {0};
         if (generated)
             generated_source_bytes(path,
@@ -959,7 +911,6 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         const void *bytes = generated ? (made.data ? made.data : "")
                                       : (source ? (const void *)source : "");
         size_t length = generated ? made.byte_len : source_bytes;
-        ok = ok && core_xxh3_64bits_raw(bytes, length) == hash;
         if (ok) {
             freshness_member(&freshness, member->name.data,
                              member->name.u8_bytes, bytes, length);
@@ -1067,7 +1018,8 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
                          (core_string_t){0});
     for (size_t m = 0; ok && !objects_optional() && m < entry->members.len;
          m++)
-        ok = phase_section(entry, object_kind(), entry->members.data[m].name)
+        ok = phase_section(entry, CORE_STRING_STATIC("object"),
+                           entry->members.data[m].name)
             && phase_section(entry, CORE_STRING_STATIC("abi"),
                              entry->members.data[m].name);
     uint64_t *imports = core_alloc_array(uint64_t,
@@ -1123,12 +1075,11 @@ next_key_line(const uint8_t *bytes, size_t length, size_t *at, uint64_t *key,
         size_t end   = start;
         while (end < length && bytes[end] != '\n') end++;
         *at = end + 1;
-        bool paired = end - start == 33 && bytes[start + 16] == ' ';
-        if (!paired && end - start != 16) continue;
+        if (end - start != 33 || bytes[start + 16] != ' ') continue;
         *key = core_string_strtoull(
             core_string_borrow((const char *)bytes + start, 16), 16);
-        *compiler = paired ? core_string_strtoull(
-            core_string_borrow((const char *)bytes + start + 17, 16), 16) : 0;
+        *compiler = core_string_strtoull(
+            core_string_borrow((const char *)bytes + start + 17, 16), 16);
         return true;
     }
     return false;
@@ -1215,49 +1166,6 @@ object_path(const n00bb_cache_t *cache, uint64_t key, core_buffer_t *path)
     object_path_in(cache->shared, key, path);
 }
 
-static bool
-in_phase(core_string_t name)
-{
-    core_string_t phase = phase_name();
-    return name.u8_bytes > phase.u8_bytes
-        && core_string_starts_with(name, phase)
-        && name.data[phase.u8_bytes] == '.';
-}
-
-static void
-drop_phase_sections(core_list_t(cache_section_t) *sections)
-{
-    core_list_t(cache_section_t) kept = core_list_new(cache_section_t);
-    for (size_t i = 0; i < sections->len; i++) {
-        if (!in_phase(sections->data[i].name)) {
-            core_list_push(kept, sections->data[i]);
-            continue;
-        }
-        core_free(sections->data[i].name.data);
-        free(sections->data[i].data);
-    }
-    core_list_free(*sections);
-    *sections = kept;
-}
-
-static bool
-sections_equal(const cache_section_t *left, const cache_section_t *right)
-{
-    return left && right && left->length == right->length
-        && (!left->length || !memcmp(left->data, right->data, left->length));
-}
-
-static const cache_section_t *
-phase_section_in(const core_list_t(cache_section_t) *sections,
-                 core_string_t kind)
-{
-    core_buffer_t name = {0};
-    phase_name_into(&name, kind);
-    const cache_section_t *section = section_named(sections,
-        core_buffer_string(&name));
-    core_buffer_release(&name);
-    return section;
-}
 
 static bool
 reference_holds(n00bb_cache_t *cache, const cache_entry_t *entry,
@@ -1550,10 +1458,8 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
         cache_entry_t *entry = &cache->entries.data[e];
         for (size_t m = 0; entry->state == ENTRY_VALID
              && m < entry->members.len; m++)
-            if (selected_entry(cache, entry->members.data[m].name) != entry) {
+            if (selected_entry(cache, entry->members.data[m].name) != entry)
                 entry->state = ENTRY_INVALID;
-                entry->alternate = true;
-            }
     }
     bool changed = true;
     while (changed) {
@@ -1867,7 +1773,8 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
     const cache_member_t *member = module.data
         ? loaded_member(cache, module, &entry) : nullptr;
     const cache_section_t *code = member
-        ? phase_section(entry, object_kind(), member->name) : nullptr;
+        ? phase_section(entry, CORE_STRING_STATIC("object"), member->name)
+        : nullptr;
     const cache_section_t *abi = member
         ? phase_section(entry, CORE_STRING_STATIC("abi"), member->name)
         : nullptr;
@@ -1876,7 +1783,7 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
         : nullptr;
     if (!code || !abi || !mutators) return false;
     const cache_section_t *runtime = phase_section(entry,
-        runtime_object_kind(), member->name);
+        CORE_STRING_STATIC("runtime-object"), member->name);
     *object = (n00bb_cache_module_object_t){
         .module = member->name,
         .object = code->data, .object_bytes = code->length,
@@ -2166,16 +2073,9 @@ module_section_name(core_buffer_t *out, core_string_t kind,
                     core_string_t module)
 {
     out->byte_len = 0;
-    phase_name_into(out, kind);
+    core_buffer_append_string(out, kind);
     core_buffer_putc(out, '.');
     core_buffer_append_string(out, module);
-}
-
-static void
-phase_section_name(core_buffer_t *out, core_string_t kind)
-{
-    out->byte_len = 0;
-    phase_name_into(out, kind);
 }
 
 static void
@@ -2322,27 +2222,10 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             owner_canonical = canonical_path(owner_path);
         core_put_u32(&manifest, owner_canonical.data ? 1 : 0);
         if (owner_canonical.data) {
-            core_string_t inputs =
-                n00bb_source_file_generated_inputs(&unit->source);
-            core_buffer_t made = {0};
-            generated_source_bytes(owner_canonical, inputs, &made);
             core_put_text(&manifest, owner);
             core_put_text(&manifest, owner_canonical);
-            core_put_u64(&manifest, core_xxh3_64bits_raw(
-                made.data ? made.data : "", made.byte_len));
-            core_buffer_release(&made);
-            uint32_t count = 0;
-            for (size_t c = 0; c < inputs.u8_bytes; c++)
-                if (inputs.data[c] == '\n') count++;
-            core_put_u32(&manifest, count);
-            size_t at = 0;
-            while (inputs.data && at < inputs.u8_bytes) {
-                size_t end = at;
-                while (end < inputs.u8_bytes && inputs.data[end] != '\n')
-                    end++;
-                core_put_text(&manifest, core_string_slice(inputs, at, end - at));
-                at = end + 1;
-            }
+            core_put_text(&manifest,
+                n00bb_source_file_generated_inputs(&unit->source));
         }
         core_free(owner_canonical.data);
     }
@@ -2368,41 +2251,22 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     core_buffer_t path = {0};
     object_path_in(root, scc->key, &path);
     core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
-    uint8_t *existing = nullptr;
-    size_t existing_bytes = 0;
-    if (read_file(core_buffer_string(&path), &existing, &existing_bytes)
-        && !sections_parse(existing, existing_bytes, &sections)) {
-        sections_release(&sections);
-        sections = core_list_new(cache_section_t);
-    }
-    core_free(existing);
-    const cache_section_t new_ir = {
-        .data = (uint8_t *)ir->data, .length = ir->byte_len,
-    };
-    if (!sections_equal(phase_section_in(&sections, CORE_STRING_STATIC("ir")),
-                        &new_ir))
-        drop_phase_sections(&sections);
     core_buffer_t name = {0};
-    phase_section_name(&name, CORE_STRING_STATIC("manifest"));
-    bool ok = sections_set(&sections, core_buffer_string(&name),
-                           manifest.data, manifest.byte_len);
-    phase_section_name(&name, CORE_STRING_STATIC("ir"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name), ir->data,
-                            ir->byte_len);
+    bool ok = sections_set(&sections, CORE_STRING_STATIC("manifest"),
+                           manifest.data, manifest.byte_len)
+        && sections_set(&sections, CORE_STRING_STATIC("ir"), ir->data,
+                        ir->byte_len);
     core_buffer_t table = {0};
-    ok = ok && th_type_writer_finish(snapshot->types, &table);
-    phase_section_name(&name, CORE_STRING_STATIC("types"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name),
-                            (const uint8_t *)table.data, table.byte_len);
+    ok = ok && th_type_writer_finish(snapshot->types, &table)
+        && sections_set(&sections, CORE_STRING_STATIC("types"), table.data,
+                        table.byte_len)
+        && sections_set(&sections, CORE_STRING_STATIC("interface"),
+                        scc->interface, scc->interface_bytes);
     core_buffer_release(&table);
-    phase_section_name(&name, CORE_STRING_STATIC("interface"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name),
-                            scc->interface, scc->interface_bytes);
     if (objects) {
         core_buffer_t requests = {0};
         scc_requests(analysis, scc, &requests);
-        phase_section_name(&name, CORE_STRING_STATIC("requests"));
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
+        ok = ok && sections_set(&sections, CORE_STRING_STATIC("requests"),
                                 requests.data, requests.byte_len);
         core_buffer_release(&requests);
     }
@@ -2413,24 +2277,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         bool present = object && object->object && object->abi;
         ok = present || objects_optional();
         if (!ok) break;
-        if (present) {
-            module_section_name(&name, object_kind(), module);
-            ok = sections_set(&sections, core_buffer_string(&name),
-                              object->object, object->object_bytes);
-            module_section_name(&name, CORE_STRING_STATIC("abi"), module);
-            ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                    object->abi, object->abi_bytes);
-            module_section_name(&name, CORE_STRING_STATIC("mutators"), module);
-            ok = ok && sections_set(&sections, core_buffer_string(&name),
-                object->mutators ? object->mutators : (const uint8_t *)"",
-                object->mutators_bytes);
-            module_section_name(&name, runtime_object_kind(), module);
-            if (object->runtime_object)
-                ok = ok && sections_set(&sections,
-                    core_buffer_string(&name), object->runtime_object,
-                    object->runtime_object_bytes);
-            else sections_remove(&sections, core_buffer_string(&name));
-        }
         core_buffer_t warnings = {0};
         core_translation_unit_t *root = analysis->units.len
             ? analysis->units.data[0] : nullptr;
@@ -2438,38 +2284,43 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                                              scc->members.data[m]))
             put_warnings(&warnings, scc->members.data[m]);
         else core_put_u32(&warnings, 0);
-        module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                warnings.data ? (const uint8_t *)warnings.data
-                                              : (const uint8_t *)"",
-                                warnings.byte_len);
-        core_buffer_release(&warnings);
-        const core_buffer_t *unused =
-            &tu_state(scc->members.data[m])->unused_facts;
-        module_section_name(&name, CORE_STRING_STATIC("unused"), module);
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                unused->data ? (const uint8_t *)unused->data
-                                             : (const uint8_t *)"",
-                                unused->byte_len);
-        const core_buffer_t *sites =
-            &tu_state(scc->members.data[m])->declaration_sites;
-        module_section_name(&name, CORE_STRING_STATIC("sites"), module);
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                sites->data ? (const uint8_t *)sites->data
-                                            : (const uint8_t *)"",
-                                sites->byte_len);
-        for (uint8_t p = 0; ok && p < N00BB_PHASE_FINAL; p++) {
+        n00bb_tu_state_t *state = tu_state(scc->members.data[m]);
+        struct { core_string_t kind; const void *data; size_t length; }
+            parts[7 + N00BB_PHASE_FINAL] = {
+            {CORE_STRING_STATIC("object"), present ? object->object : nullptr,
+             present ? object->object_bytes : 0},
+            {CORE_STRING_STATIC("abi"), present ? object->abi : nullptr,
+             present ? object->abi_bytes : 0},
+            {CORE_STRING_STATIC("mutators"), !present ? nullptr
+                : object->mutators ? object->mutators : (const uint8_t *)"",
+             present ? object->mutators_bytes : 0},
+            {CORE_STRING_STATIC("runtime-object"),
+             present ? object->runtime_object : nullptr,
+             present ? object->runtime_object_bytes : 0},
+            {CORE_STRING_STATIC("warnings"), warnings.data ? warnings.data : "",
+             warnings.byte_len},
+            {CORE_STRING_STATIC("unused"), state->unused_facts.data
+                ? state->unused_facts.data : "", state->unused_facts.byte_len},
+            {CORE_STRING_STATIC("sites"), state->declaration_sites.data
+                ? state->declaration_sites.data : "",
+             state->declaration_sites.byte_len},
+        };
+        for (uint8_t p = 0; p < N00BB_PHASE_FINAL; p++) {
             const uint8_t *stored = nullptr;
             size_t stored_bytes = 0;
-            module_section_name(&name, summary_sections[p], module);
-            if (snapshot_summaries(snapshot, p, module, &stored,
-                                   &stored_bytes))
-                ok = sections_set(&sections, core_buffer_string(&name),
-                                  stored_bytes ? stored
-                                               : (const uint8_t *)"",
-                                  stored_bytes);
-            else sections_remove(&sections, core_buffer_string(&name));
+            bool found = snapshot_summaries(snapshot, p, module, &stored,
+                                            &stored_bytes);
+            parts[7 + p] = (typeof(parts[0])){summary_sections[p],
+                found ? (stored ? (const void *)stored : "") : nullptr,
+                stored_bytes};
         }
+        for (size_t s = 0; ok && s < sizeof(parts) / sizeof(*parts); s++) {
+            if (!parts[s].data) continue;
+            module_section_name(&name, parts[s].kind, module);
+            ok = sections_set(&sections, core_buffer_string(&name),
+                              parts[s].data, parts[s].length);
+        }
+        core_buffer_release(&warnings);
     }
     core_buffer_release(&name);
     core_buffer_t serialized = {0};
@@ -2756,15 +2607,10 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
     if (!cache || !item || !object) return false;
     const ir_module_t *module = item->instance->owner;
     const cache_instance_t *found = loaded_instance(cache, module);
-    core_buffer_t name = {0};
-    phase_section_name(&name, object_kind());
     uint64_t key = 0;
     if (!found) {
         if (!prepare_sccs(cache, link, analysis)
-            || !instance_key(cache, item, &key)) {
-            core_buffer_release(&name);
-            return false;
-        }
+            || !instance_key(cache, item, &key)) return false;
         core_buffer_t path = {0};
         object_path(cache, key, &path);
         uint8_t *bytes = nullptr;
@@ -2774,12 +2620,11 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
         };
         bool ok = read_file(core_buffer_string(&path), &bytes, &length)
             && sections_parse(bytes, length, &loaded.sections)
-            && section_named(&loaded.sections, core_buffer_string(&name));
+            && section_named(&loaded.sections, CORE_STRING_STATIC("object"));
         core_free(bytes);
         core_buffer_release(&path);
         if (!ok) {
             sections_release(&loaded.sections);
-            core_buffer_release(&name);
             return false;
         }
         core_list_push(cache->instances, loaded);
@@ -2787,11 +2632,9 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
         log_instance(CORE_STRING_STATIC("reuse"), item);
     }
     const cache_section_t *code = section_named(&found->sections,
-        core_buffer_string(&name));
-    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
+        CORE_STRING_STATIC("object"));
     const cache_section_t *mutators = section_named(&found->sections,
-        core_buffer_string(&name));
-    core_buffer_release(&name);
+        CORE_STRING_STATIC("mutators"));
     if (!code || !mutators) return false;
     *object = (n00bb_cache_module_object_t){
         .module = ir_module_name(module),
@@ -2810,23 +2653,11 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     core_buffer_t path = {0};
     object_path(cache, key, &path);
     core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
-    uint8_t *existing = nullptr;
-    size_t existing_bytes = 0;
-    if (read_file(core_buffer_string(&path), &existing, &existing_bytes)
-        && !sections_parse(existing, existing_bytes, &sections)) {
-        sections_release(&sections);
-        sections = core_list_new(cache_section_t);
-    }
-    core_free(existing);
-    core_buffer_t name = {0};
-    phase_section_name(&name, object_kind());
-    bool ok = sections_set(&sections, core_buffer_string(&name),
-                           object->object, object->object_bytes);
-    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name),
-        object->mutators ? object->mutators : (const uint8_t *)"",
-        object->mutators_bytes);
-    core_buffer_release(&name);
+    bool ok = sections_set(&sections, CORE_STRING_STATIC("object"),
+                           object->object, object->object_bytes)
+        && sections_set(&sections, CORE_STRING_STATIC("mutators"),
+            object->mutators ? object->mutators : (const uint8_t *)"",
+            object->mutators_bytes);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);
     ok = ok && core_os_write_file_atomic(core_buffer_string(&path), serialized.data,
