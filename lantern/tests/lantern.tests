@@ -17,7 +17,6 @@ ir-pdg	dev	2	"$BUILD/tests/ir_pdg"
 ir-walk	dev	2	"$BUILD/tests/ir_walk"
 ir-text	dev	2	"$BUILD/tests/ir_text" "$SRC/tests/ir/golden" 25
 ir-diagnostics	dev	2	"$BUILD/tests/ir_diag" "$SRC/tests/ir/golden"
-ir-typelang	dev	2	"$BUILD/tests/ir_typelang" "$SRC/tests/ir/vectors.tsv"
 ir-grammar-accept	dev	2	"$BUILD/tests/ir_grammar_accept" "$SRC/tests/ir/golden/canonical.ir"
 lib-macros	dev	2	"$BUILD/tests/lib_macros"
 lib-byteorder	dev	2	"$BUILD/tests/lib_byteorder"

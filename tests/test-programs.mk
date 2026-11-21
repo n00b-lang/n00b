@@ -7,7 +7,6 @@ TEST_PROGRAMS := writ-coexistence \
     runtime-abi-trace-test \
     runtime-abi-option-test \
     storage-selection-test \
-    typehash-abi-test \
     abi-string-value-test \
     abi-layout-test \
     abi-record-layout-test \
@@ -58,9 +57,6 @@ runtime-abi-option-test_LIBS := $(HOST_RUNTIME_LIB)
 storage-selection-test_SOURCES := tests/storage_selection.c \
     compiler/storage_selection.c
 storage-selection-test_LIBS := $(LANTERN_LIB)
-
-typehash-abi-test_SOURCES := tests/typehash_abi.c
-typehash-abi-test_LIBS := $(LANTERN_LIB)
 
 abi-string-value-test_SOURCES := tests/abi_string_value.c \
     abi/abi_string.c

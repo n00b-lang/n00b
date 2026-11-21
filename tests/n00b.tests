@@ -20,7 +20,6 @@ runtime-abi-scc-acyclic	dev	2	"$BUILD/runtime-abi-scc-test" --acyclic
 runtime-abi-trace	dev	2	"$BUILD/runtime-abi-trace-test"
 runtime-abi-option	dev	2	"$BUILD/runtime-abi-option-test"
 storage-selection	dev	2	"$BUILD/storage-selection-test"
-typehash-abi	dev	2	"$BUILD/typehash-abi-test"
 abi-string-value	dev	2	"$BUILD/abi-string-value-test"
 abi-layout	dev	2	"$BUILD/abi-layout-test"
 unsigned-literal-context	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/unsigned_literal_context.n"

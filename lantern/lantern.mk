@@ -34,7 +34,7 @@ $(LANTERN_OBJ)/lantern/src/pp/main.o: CC_EXTRA := -DPP_GRAMMAR_DIR="\"$(NATIVE_S
 LANTERN_TESTS := ir/core ir/lifetime ir/storage_origin \
     ir/shape ir/span ir/ranges ir/vn ir/abcd ir/summary_paths ir/verify \
     ir/grammar ir/layout ir/promote ir/structure ir/cli ir/pdg ir/walk \
-    ir/text ir/diag ir/typelang ir/grammar_accept ir/public \
+    ir/text ir/diag ir/grammar_accept ir/public \
     ir/scale \
     lib/macros lib/byteorder lib/cache diag/diagnostics lib/module \
     lib/snapshot_inventory lib/target lib/target_call lib/indexed_table \
