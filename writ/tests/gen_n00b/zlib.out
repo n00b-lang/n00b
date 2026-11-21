@@ -708,12 +708,6 @@ record Stream layout(c) {
     reserved: u64
 }
 
-const ZLIB_VERSION: string = "1.2.12"
-const ZLIB_VERNUM: i32 = 4800
-const ZLIB_VER_MAJOR: i32 = 1
-const ZLIB_VER_MINOR: i32 = 2
-const ZLIB_VER_REVISION: i32 = 12
-const ZLIB_VER_SUBREVISION: i32 = 0
 const Z_NO_FLUSH: i32 = 0
 const Z_PARTIAL_FLUSH: i32 = 1
 const Z_SYNC_FLUSH: i32 = 2
@@ -744,6 +738,7 @@ const Z_TEXT: i32 = 1
 const Z_UNKNOWN: i32 = 2
 const Z_DEFLATED: i32 = 8
 const Z_NULL: i32 = 0
+const ZLIB_VERSION: string = "1"
 
 private func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     let value: Ffi_Bytes = bytes.__value
@@ -947,54 +942,49 @@ func inflate_init(modify strm: Stream) fail: Ffi_Error {
     }
 }
 2	contracts/zlib/aarch64-apple-darwin.writ:8:1	z_stream
-19	contracts/zlib/aarch64-apple-darwin.writ:26:1	ZLIB_VERSION
-20	contracts/zlib/aarch64-apple-darwin.writ:27:1	ZLIB_VERNUM
-21	contracts/zlib/aarch64-apple-darwin.writ:28:1	ZLIB_VER_MAJOR
-22	contracts/zlib/aarch64-apple-darwin.writ:29:1	ZLIB_VER_MINOR
-23	contracts/zlib/aarch64-apple-darwin.writ:30:1	ZLIB_VER_REVISION
-24	contracts/zlib/aarch64-apple-darwin.writ:31:1	ZLIB_VER_SUBREVISION
-25	contracts/zlib/aarch64-apple-darwin.writ:32:1	Z_NO_FLUSH
-26	contracts/zlib/aarch64-apple-darwin.writ:33:1	Z_PARTIAL_FLUSH
-27	contracts/zlib/aarch64-apple-darwin.writ:34:1	Z_SYNC_FLUSH
-28	contracts/zlib/aarch64-apple-darwin.writ:35:1	Z_FULL_FLUSH
-29	contracts/zlib/aarch64-apple-darwin.writ:36:1	Z_FINISH
-30	contracts/zlib/aarch64-apple-darwin.writ:37:1	Z_BLOCK
-31	contracts/zlib/aarch64-apple-darwin.writ:38:1	Z_TREES
-32	contracts/zlib/aarch64-apple-darwin.writ:39:1	Z_OK
-33	contracts/zlib/aarch64-apple-darwin.writ:40:1	Z_STREAM_END
-34	contracts/zlib/aarch64-apple-darwin.writ:41:1	Z_NEED_DICT
-35	contracts/zlib/aarch64-apple-darwin.writ:42:1	Z_ERRNO
-36	contracts/zlib/aarch64-apple-darwin.writ:43:1	Z_STREAM_ERROR
-37	contracts/zlib/aarch64-apple-darwin.writ:44:1	Z_DATA_ERROR
-38	contracts/zlib/aarch64-apple-darwin.writ:45:1	Z_MEM_ERROR
-39	contracts/zlib/aarch64-apple-darwin.writ:46:1	Z_BUF_ERROR
-40	contracts/zlib/aarch64-apple-darwin.writ:47:1	Z_VERSION_ERROR
-41	contracts/zlib/aarch64-apple-darwin.writ:48:1	Z_NO_COMPRESSION
-42	contracts/zlib/aarch64-apple-darwin.writ:49:1	Z_BEST_SPEED
-43	contracts/zlib/aarch64-apple-darwin.writ:50:1	Z_BEST_COMPRESSION
-44	contracts/zlib/aarch64-apple-darwin.writ:51:1	Z_DEFAULT_COMPRESSION
-45	contracts/zlib/aarch64-apple-darwin.writ:52:1	Z_FILTERED
-46	contracts/zlib/aarch64-apple-darwin.writ:53:1	Z_HUFFMAN_ONLY
-47	contracts/zlib/aarch64-apple-darwin.writ:54:1	Z_RLE
-48	contracts/zlib/aarch64-apple-darwin.writ:55:1	Z_FIXED
-49	contracts/zlib/aarch64-apple-darwin.writ:56:1	Z_DEFAULT_STRATEGY
-50	contracts/zlib/aarch64-apple-darwin.writ:57:1	Z_BINARY
-51	contracts/zlib/aarch64-apple-darwin.writ:58:1	Z_TEXT
-52	contracts/zlib/aarch64-apple-darwin.writ:59:1	Z_UNKNOWN
-53	contracts/zlib/aarch64-apple-darwin.writ:60:1	Z_DEFLATED
-54	contracts/zlib/aarch64-apple-darwin.writ:61:1	Z_NULL
-69	contracts/zlib/aarch64-apple-darwin.writ:63:1	zlibVersion
-89	contracts/zlib/aarch64-apple-darwin.writ:64:1	deflate
-111	contracts/zlib/aarch64-apple-darwin.writ:65:1	deflateEnd
-129	contracts/zlib/aarch64-apple-darwin.writ:66:1	inflate
-160	contracts/zlib/aarch64-apple-darwin.writ:67:1	inflateEnd
-173	contracts/zlib/aarch64-apple-darwin.writ:68:1	compress2
-189	contracts/zlib/aarch64-apple-darwin.writ:69:1	compressBound
-194	contracts/zlib/aarch64-apple-darwin.writ:70:1	uncompress
-210	contracts/zlib/aarch64-apple-darwin.writ:71:1	adler32
-221	contracts/zlib/aarch64-apple-darwin.writ:72:1	crc32
-232	contracts/zlib/aarch64-apple-darwin.writ:75:1	deflateInit
-245	contracts/zlib/aarch64-apple-darwin.writ:77:1	inflateInit
+19	contracts/zlib/aarch64-apple-darwin.writ:26:1	Z_NO_FLUSH
+20	contracts/zlib/aarch64-apple-darwin.writ:27:1	Z_PARTIAL_FLUSH
+21	contracts/zlib/aarch64-apple-darwin.writ:28:1	Z_SYNC_FLUSH
+22	contracts/zlib/aarch64-apple-darwin.writ:29:1	Z_FULL_FLUSH
+23	contracts/zlib/aarch64-apple-darwin.writ:30:1	Z_FINISH
+24	contracts/zlib/aarch64-apple-darwin.writ:31:1	Z_BLOCK
+25	contracts/zlib/aarch64-apple-darwin.writ:32:1	Z_TREES
+26	contracts/zlib/aarch64-apple-darwin.writ:33:1	Z_OK
+27	contracts/zlib/aarch64-apple-darwin.writ:34:1	Z_STREAM_END
+28	contracts/zlib/aarch64-apple-darwin.writ:35:1	Z_NEED_DICT
+29	contracts/zlib/aarch64-apple-darwin.writ:36:1	Z_ERRNO
+30	contracts/zlib/aarch64-apple-darwin.writ:37:1	Z_STREAM_ERROR
+31	contracts/zlib/aarch64-apple-darwin.writ:38:1	Z_DATA_ERROR
+32	contracts/zlib/aarch64-apple-darwin.writ:39:1	Z_MEM_ERROR
+33	contracts/zlib/aarch64-apple-darwin.writ:40:1	Z_BUF_ERROR
+34	contracts/zlib/aarch64-apple-darwin.writ:41:1	Z_VERSION_ERROR
+35	contracts/zlib/aarch64-apple-darwin.writ:42:1	Z_NO_COMPRESSION
+36	contracts/zlib/aarch64-apple-darwin.writ:43:1	Z_BEST_SPEED
+37	contracts/zlib/aarch64-apple-darwin.writ:44:1	Z_BEST_COMPRESSION
+38	contracts/zlib/aarch64-apple-darwin.writ:45:1	Z_DEFAULT_COMPRESSION
+39	contracts/zlib/aarch64-apple-darwin.writ:46:1	Z_FILTERED
+40	contracts/zlib/aarch64-apple-darwin.writ:47:1	Z_HUFFMAN_ONLY
+41	contracts/zlib/aarch64-apple-darwin.writ:48:1	Z_RLE
+42	contracts/zlib/aarch64-apple-darwin.writ:49:1	Z_FIXED
+43	contracts/zlib/aarch64-apple-darwin.writ:50:1	Z_DEFAULT_STRATEGY
+44	contracts/zlib/aarch64-apple-darwin.writ:51:1	Z_BINARY
+45	contracts/zlib/aarch64-apple-darwin.writ:52:1	Z_TEXT
+46	contracts/zlib/aarch64-apple-darwin.writ:53:1	Z_UNKNOWN
+47	contracts/zlib/aarch64-apple-darwin.writ:54:1	Z_DEFLATED
+48	contracts/zlib/aarch64-apple-darwin.writ:55:1	Z_NULL
+49	contracts/zlib.writ:14:1	ZLIB_VERSION
+64	contracts/zlib/aarch64-apple-darwin.writ:57:1	zlibVersion
+84	contracts/zlib/aarch64-apple-darwin.writ:58:1	deflate
+106	contracts/zlib/aarch64-apple-darwin.writ:59:1	deflateEnd
+124	contracts/zlib/aarch64-apple-darwin.writ:60:1	inflate
+155	contracts/zlib/aarch64-apple-darwin.writ:61:1	inflateEnd
+168	contracts/zlib/aarch64-apple-darwin.writ:62:1	compress2
+184	contracts/zlib/aarch64-apple-darwin.writ:63:1	compressBound
+189	contracts/zlib/aarch64-apple-darwin.writ:64:1	uncompress
+205	contracts/zlib/aarch64-apple-darwin.writ:65:1	adler32
+216	contracts/zlib/aarch64-apple-darwin.writ:66:1	crc32
+227	contracts/zlib/aarch64-apple-darwin.writ:69:1	deflateInit
+240	contracts/zlib/aarch64-apple-darwin.writ:71:1	inflateInit
 library z
 load static
 extern __zlibVersion zlib_n00b_zlibVersion (ref[uint]) -> i32 fail: nil

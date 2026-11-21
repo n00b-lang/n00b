@@ -46,6 +46,7 @@ const Z_TEXT: i32 = 1
 const Z_UNKNOWN: i32 = 2
 const Z_DEFLATED: i32 = 8
 const Z_NULL: i32 = 0
+const ZLIB_VERSION: string = "1"
 
 private func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     let value: Ffi_Bytes = bytes.__value

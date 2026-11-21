@@ -712,7 +712,7 @@ walk(CXCursor cursor, CXCursor parent, CXClientData data)
             if (type.length && claim(im, name)) {
                 writ_emit_line(&im->values, "var %.*s: %.*s", S(name), S(type));
             }
-        } else if (kind == CXCursor_MacroDefinition) {
+        } else if (kind == CXCursor_MacroDefinition && selected(im, name)) {
             emit_macro(im, cursor, false);
         }
         break;
