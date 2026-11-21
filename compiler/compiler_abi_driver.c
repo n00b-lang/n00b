@@ -3052,7 +3052,9 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
             valid = false;
             break;
         }
-        modules[i] = state->ir_module;
+        ir_module_t *body = interface_body_module(analysis,
+                                                  unit->module.identifier);
+        modules[i] = body ? body : state->ir_module;
     }
     if (!analysis->link_types) analysis->link_types = th_ctx_new();
     n00bb_abi_semantics_t semantics = {
