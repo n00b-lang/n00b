@@ -29,7 +29,6 @@ exempt incremental-cache-shapes 31
 exempt incremental-cache-instances 38
 exempt incremental-cache-contexts 40
 exempt incremental-cache-lto 70
-exempt cache-matrix 35
 exempt bitcode-build-time 28
 exempt langtools-suite 95
 exempt resharp-import 600

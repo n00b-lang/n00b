@@ -103,7 +103,6 @@ filled_by_hello() {
     run check.hello.fill h check "$hello"
     run check.hello.warm h check "$hello"
     run check.records.cross h check "$records"
-    [ "$scope" = pr ] && return
     run check.text.cross h check "$text"
     run check.text.warm h check "$text"
     run check.threads.cross-hello h check "$threads"
@@ -116,7 +115,6 @@ filled_by_records() {
     run check.records.fill r check "$records"
     run check.records.warm r check "$records"
     run check.hello.cross r check "$hello"
-    [ "$scope" = pr ] && return
     run check.threads.cross-records r check "$threads"
     run build.records.fill br build "$records"
     run build.records.warm br build "$records"
@@ -130,9 +128,11 @@ library_cache() {
     run library.warm lr library record_root
 }
 
-built_hello() {
-    run build.hello.fill bh build "$hello"
-    run build.hello.warm bh build "$hello"
+pr_cells() {
+    run check.hello.fill h check "$hello"
+    run check.hello.warm h check "$hello"
+    run check.records.cross h check "$records"
+    run check.records.fill r check "$records"
 }
 
 syntax_settings() {
@@ -154,14 +154,9 @@ syntax_settings() {
 }
 
 if [ "$scope" = pr ]; then
-    filled_by_hello
-    filled_by_records
-    built_hello
+    pr_cells
     same check.hello.warm check.hello.fill check.hello.warm
-    same check.hello.cross-records check.hello.fill check.hello.cross
-    same check.records.warm check.records.fill check.records.warm
     same check.records.cross-hello check.records.fill check.records.cross
-    same build.hello.warm build.hello.fill build.hello.warm
 else
     cold &
     filled_by_hello &
