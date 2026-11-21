@@ -524,7 +524,7 @@ static void collect_tvar_names(parse_grammar_t *g, parse_tree_t *n,
         return;
     }
 
-    if (parse_tree_is_nt(g, n, CORE_STRING_STATIC("one-type"))) {
+    if (parse_tree_is_nt(g, n, CORE_STRING_STATIC("base-type"))) {
         return;
     }
 
@@ -669,23 +669,6 @@ static uint8_t sugar_attrs(parse_grammar_t *g, int32_t alt)
     return 0;
 }
 
-static void *r_ind_tail(parse_reduce_t *r)
-{
-    bctx                *c   = r->thunk;
-    parse_reduce_list_t *opt = parse_reduce_as_list(kid(r, 1));
-    tl_node             *n   = node_new(c, TL_ATTR);
-
-    for (size_t i = 0; opt && i < opt->n; i++) {
-        tl_node *a = opt->v[i];
-
-        if (a && a->kind == TL_ATTR) {
-            n->attr |= a->attr;
-        }
-    }
-
-    return n;
-}
-
 static void *r_indirection(parse_reduce_t *r)
 {
     bctx    *c        = r->thunk;
@@ -697,17 +680,10 @@ static void *r_indirection(parse_reduce_t *r)
         return nullptr;
     }
 
-    uint8_t attrs =
-        sugar_attrs(r->grammar, rule_of(core_tree_child(r->node, 0)));
-    parse_reduce_list_t *tail = parse_reduce_as_list(kid(r, 3));
-
-    for (size_t i = 0; tail && i < tail->n; i++) {
-        tl_node *a = tail->v[i];
-
-        if (a && a->kind == TL_ATTR) {
-            attrs = a->attr;
-        }
-    }
+    tl_node *tail  = kid(r, 4);
+    uint8_t  attrs = tail && tail->kind == TL_ATTR
+        ? tail->attr
+        : sugar_attrs(r->grammar, rule_of(core_tree_child(r->node, 0)));
 
     return node_type(c, th_ind(c->th, attrs, referent));
 }
@@ -736,30 +712,17 @@ static void *r_sequence(parse_reduce_t *r)
     return node_type(c, th_array(c->th, elem));
 }
 
-static void *r_anon_site(parse_reduce_t *r)
+static core_string_t label_of(parse_reduce_t *r)
 {
-    bctx         *c    = r->thunk;
-    core_string_t path = parse_tree_leaf_text(core_tree_child(r->node, 1));
-    tl_node      *line = kid(r, 3);
-    tl_node      *col  = kid(r, 5);
+    tl_node *label = kid(r, 0);
 
-    if (!path.data || !line || !col) {
-        c->err = CORE_STRING_STATIC(
-            "an anonymous site needs a path, a line and a column");
-
-        return nullptr;
-    }
-
-    th_type *named = th_name(c->th, th_anon_name(c->th, path, line->u,
-                                                 col->u));
-
-    return node_type(c, named);
+    return label && label->kind == TL_NAME ? label->name : (core_string_t){};
 }
 
 static void *r_field(parse_reduce_t *r)
 {
     bctx         *c    = r->thunk;
-    core_string_t name = parse_tree_leaf_text(core_tree_child(r->node, 0));
+    core_string_t name = label_of(r);
     th_type      *type = kid_type(r, 2);
 
     if (!name.data || !type) {
@@ -776,46 +739,29 @@ static void *r_field(parse_reduce_t *r)
     return n;
 }
 
-static size_t collect(parse_reduce_t *r, tl_kind want, tl_node **out,
-                      size_t max)
+static void *collect(parse_reduce_t *r, tl_kind want)
 {
-    size_t   n     = 0;
-    tl_node *first = kid(r, 0);
+    parse_reduce_list_t *rest  = parse_reduce_as_list(kid(r, 1));
+    parse_reduce_list_t *list  = parse_reduce_list_new((rest ? rest->n : 0) + 1);
+    tl_node             *first = kid(r, 0);
+    size_t               n     = 0;
 
-    if (first && first->kind == want && n < max) {
-        out[n++] = first;
+    if (first && first->kind == want) {
+        list->v[n++] = first;
     }
+    for (size_t i = 0; rest && i < rest->n; i++) {
+        tl_node *e = rest->v[i];
 
-    parse_reduce_list_t *rest = parse_reduce_as_list(kid(r, 1));
-
-    if (rest) {
-        for (size_t i = 0; i < rest->n && n < max; i++) {
-            tl_node *e = rest->v[i];
-
-            if (e && e->kind == want) {
-                out[n++] = e;
-            }
+        if (e && e->kind == want) {
+            list->v[n++] = e;
         }
     }
-
-    return n;
-}
-
-static void *r_field_list(parse_reduce_t *r)
-{
-    parse_reduce_list_t *source = parse_reduce_as_list(kid(r, 1));
-    size_t               n      = source ? source->n : 0;
-    tl_node            **got    = core_alloc_array(tl_node *, n + 1);
-    n                           = collect(r, TL_MEMBER, got, n + 1);
-    parse_reduce_list_t *list   = parse_reduce_list_new(n);
-
-    for (size_t i = 0; i < n; i++) {
-        list->v[i] = got[i];
-    }
-    core_free(got);
+    list->n = n;
 
     return list;
 }
+
+static void *r_field_list(parse_reduce_t *r) { return collect(r, TL_MEMBER); }
 
 static void *r_field_body(parse_reduce_t *r)
 {
@@ -842,21 +788,7 @@ static void *r_field_body(parse_reduce_t *r)
     return node_type(c, rec);
 }
 
-static void *r_tuple_args(parse_reduce_t *r)
-{
-    parse_reduce_list_t *source = parse_reduce_as_list(kid(r, 1));
-    size_t               n      = source ? source->n : 0;
-    tl_node            **got    = core_alloc_array(tl_node *, n + 1);
-    n                           = collect(r, TL_TYPE, got, n + 1);
-    parse_reduce_list_t *list   = parse_reduce_list_new(n);
-
-    for (size_t i = 0; i < n; i++) {
-        list->v[i] = got[i];
-    }
-    core_free(got);
-
-    return list;
-}
+static void *r_tuple_args(parse_reduce_t *r) { return collect(r, TL_TYPE); }
 
 static void *r_tuple(parse_reduce_t *r)
 {
@@ -954,21 +886,10 @@ static void *r_param(parse_reduce_t *r)
         }
     }
 
-    core_string_t named = parse_tree_leaf_text(core_tree_child(r->node, 0));
+    core_string_t named = label_of(r);
 
-    if (rule_of(r->node) == 1) {
-        for (size_t i = 0; i < core_tree_num_children(r->node); i++) {
-            core_string_t s = parse_tree_leaf_text(core_tree_child(r->node, i));
-
-            if (s.data &&
-                parse_tree_leaf_tid(core_tree_child(r->node, i)) == tid_ident) {
-                named = s;
-                break;
-            }
-        }
-
-        n->param.name = named.data ? core_string_dup(named)
-                                   : (core_string_t){};
+    if (rule_of(r->node) == 1 && named.data) {
+        n->param.name = core_string_dup(named);
     }
 
     n->param.mode = mode;
@@ -976,21 +897,7 @@ static void *r_param(parse_reduce_t *r)
     return n;
 }
 
-static void *r_param_list(parse_reduce_t *r)
-{
-    parse_reduce_list_t *source = parse_reduce_as_list(kid(r, 1));
-    size_t               n      = source ? source->n : 0;
-    tl_node            **got    = core_alloc_array(tl_node *, n + 1);
-    n                           = collect(r, TL_PARAM, got, n + 1);
-    parse_reduce_list_t *list   = parse_reduce_list_new(n);
-
-    for (size_t i = 0; i < n; i++) {
-        list->v[i] = got[i];
-    }
-    core_free(got);
-
-    return list;
-}
+static void *r_param_list(parse_reduce_t *r) { return collect(r, TL_PARAM); }
 
 static void *r_function(parse_reduce_t *r)
 {
@@ -1132,10 +1039,7 @@ static bool install(parse_tree_walk_t *w, parse_grammar_t *g, bctx *c)
         if (!reg(w, g, c, CORE_STRING_STATIC(nt), fn))                         \
             ok = false;                                                        \
     } while (0)
-    REG("type", r_pass);
-    REG("one-type", r_pass);
     REG("base-type", r_pass);
-    REG("record", r_pass);
     REG("paren-form", r_paren_form);
     REG("union-type", r_union);
     REG("isect-type", r_isect);
@@ -1148,12 +1052,10 @@ static bool install(parse_tree_walk_t *w, parse_grammar_t *g, bctx *c)
     REG("binder", r_binder);
     REG("bitint", r_bitint);
     REG("indirection", r_indirection);
-    REG("ind-tail", r_ind_tail);
     REG("type-app", r_type_app);
     REG("ind-attr", r_ind_attr);
     REG("ind-attrs", r_ind_attrs);
     REG("sequence", r_sequence);
-    REG("anon-site", r_anon_site);
     REG("field", r_field);
     REG("field-list", r_field_list);
     REG("field-body", r_field_body);

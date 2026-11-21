@@ -144,7 +144,7 @@ def families(clones):
             parent[find(a)] = find(b)
     first = {}
     for place in places:
-        first.setdefault(find(place), f"{place[0]}:{place[1]}")
+        first.setdefault(find(place), place[0])
     return {key: first[find(key)] for key in clones}
 
 

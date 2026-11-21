@@ -252,9 +252,12 @@ core_string_t th_strdup(th_ctx *ctx, core_string_t s);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);
-void th_erase_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
-th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n);
-void th_full_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
+bool th_encode_to(th_ctx *ctx, const th_type *t, core_buffer_t *out,
+                  bool erase);
+th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n,
+                       bool erase);
+void th_walk_vars(th_ctx *ctx, th_type *t,
+                  void (*visit)(void *state, th_type *var), void *state);
 void th_env_release_contents(th_env *env);
 
 static inline const th_type *th_resolve_c(const th_type *t) {

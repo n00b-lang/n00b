@@ -89,8 +89,7 @@ typedef enum : uint8_t {
 typedef enum : uint8_t {
     TH_ARG_TYPE = 0,
     TH_ARG_UINT,
-    TH_ARG_SINT,
-    TH_ARG_STR,
+    TH_ARG_STR = 3,
 } th_argkind;
 
 typedef struct th_ctx  th_ctx;
@@ -212,7 +211,6 @@ typedef struct {
     union {
         th_type *type;
         uint64_t u;
-        int64_t  s;
         core_string_t str;
     };
 } th_arg;
@@ -371,8 +369,6 @@ core_string_t th_print(th_ctx *ctx, th_type *type);
 core_string_t th_print_with_options(th_ctx *ctx, th_type *type,
                                     const th_print_options_t *options);
 uint64_t th_arm_tag(core_string_t name);
-core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
-                           uint64_t col);
 
 th_kind th_kind_of(const th_type *type);
 bool    th_is_scheme(const th_type *type);

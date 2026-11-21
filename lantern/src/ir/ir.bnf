@@ -167,6 +167,10 @@
 
 <typelang-type> ::= <union-type>
 
+<qualified-name> @nospace ::= %"set" (%"." <name-segment>)*
+<qualified-name> @nospace ::= %"dict" (%"." <name-segment>)*
+<name-segment> ::= %"set" | %"dict" | %"in"
+
 <name> ::= %IDENTIFIER
          | %"module" | %"profile" | %"target" | %"meta" | %"type"
          | %"layout" | %"size" | %"align" | %"stride" | %"bits"

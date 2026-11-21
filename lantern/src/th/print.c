@@ -94,21 +94,6 @@ static core_string_t mode_name(const pctx *c, th_mode m)
     return CORE_STRING_STATIC("");
 }
 
-typedef struct {
-    char  *key;
-    size_t keylen;
-    size_t index;
-} ordered;
-
-static int cmp_ordered(const void *a, const void *b)
-{
-    const ordered *x = a, *y = b;
-    th_slice       sx = {.p = (uint8_t *)x->key, .n = x->keylen};
-    th_slice       sy = {.p = (uint8_t *)y->key, .n = y->keylen};
-
-    return th_cmp_slice(&sx, &sy);
-}
-
 typedef enum {
     W_TYPE,
     W_LIT,
@@ -151,9 +136,6 @@ static void emit_arg_scalar(core_buffer_t *b, const th_arg *a)
     case TH_ARG_UINT:
         core_buffer_printf(b, "%" PRIu64, a->u);
         break;
-    case TH_ARG_SINT:
-        core_buffer_printf(b, "%" PRId64, a->s);
-        break;
     case TH_ARG_STR:
         core_buffer_puts(b, "\"");
         core_buffer_append_string(b, a->str);
@@ -192,73 +174,13 @@ static void emit_seqtail(core_buffer_t *b, const th_type *t)
     }
 }
 
-static size_t *sorted_members(pctx *c, const th_type *t)
-{
-    size_t   n = t->record.n;
-    ordered *o = core_alloc_array(ordered, n);
-    size_t  *ix = core_alloc_array(size_t, n);
-
-    for (size_t i = 0; i < n; i++) {
-        core_string_t nm  = t->record.members[i].name;
-        size_t        len = nm.u8_bytes;
-        uint8_t       hdr[8];
-        core_buffer_t key = {0};
-        core_buffer_t enc = {0};
-
-        for (int k = 0; k < 8; k++) {
-            hdr[k] = (uint8_t)(len >> (56 - 8 * k));
-        }
-        core_buffer_append(&key, (const char *)hdr, 8);
-        core_buffer_append_string(&key, nm);
-
-        th_full_encode(c->ctx, t->record.members[i].type, &enc);
-        core_buffer_append(&key, enc.data, enc.byte_len);
-        core_buffer_release(&enc);
-
-        o[i].key    = key.data;
-        o[i].keylen = key.byte_len;
-        o[i].index  = i;
-    }
-    qsort(o, n, sizeof(ordered), cmp_ordered);
-
-    for (size_t i = 0; i < n; i++) {
-        ix[i] = o[i].index;
-        core_free(o[i].key);
-    }
-    core_free(o);
-
-    return ix;
-}
-
-static size_t *sorted_arms(pctx *c, const th_type *t)
-{
-    size_t   n = t->sum.n;
-    ordered *o = core_alloc_array(ordered, n);
-    size_t  *ix = core_alloc_array(size_t, n);
-
-    for (size_t i = 0; i < n; i++) {
-        core_buffer_t enc = {0};
-
-        th_full_encode(c->ctx, t->sum.arms[i], &enc);
-        o[i].key    = enc.data;
-        o[i].keylen = enc.byte_len;
-        o[i].index  = i;
-    }
-    qsort(o, n, sizeof(ordered), cmp_ordered);
-
-    for (size_t i = 0; i < n; i++) {
-        ix[i] = o[i].index;
-        core_free(o[i].key);
-    }
-    core_free(o);
-
-    return ix;
-}
-
 static void plan_record(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_type *t)
 {
-    size_t  n  = t->record.n;
-    size_t *ix = sorted_members(c, t);
+    size_t     n  = t->record.n;
+    th_member *ms = core_alloc_array(th_member, n);
+
+    memcpy(ms, t->record.members, n * sizeof(th_member));
+    qsort(ms, n, sizeof(th_member), th_cmp_member);
 
     core_buffer_append_string(b, source_spelling(c)
         ? CORE_STRING_STATIC("Tuple[") : CORE_STRING_STATIC("("));
@@ -266,23 +188,21 @@ static void plan_record(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const 
                                 : CORE_STRING_STATIC(")"));
 
     for (size_t k = n; k-- > 0;) {
-        const th_member *m = &t->record.members[ix[k]];
-
-        wtype(w, m->type);
+        wtype(w, ms[k].type);
         wlit(w, ": ");
-        wtext(w, m->name);
+        wtext(w, ms[k].name);
 
         if (k) {
             wlit(w, ", ");
         }
     }
-    core_free(ix);
+    core_free(ms);
 }
 
 static void plan_sum(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_type *t)
 {
-    size_t      n  = t->sum.n;
-    size_t     *ix = sorted_arms(c, t);
+    size_t        n    = t->sum.n;
+    th_type     **arms = th_sort_arms(c->ctx, t->sum.arms, n, false);
     core_string_t op = t->sum.comb == TH_UNION ? CORE_STRING_STATIC(" | ")
                                                : CORE_STRING_STATIC(" & ");
 
@@ -290,13 +210,13 @@ static void plan_sum(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_
     wlit(w, ")");
 
     for (size_t k = n; k-- > 0;) {
-        wtype(w, t->sum.arms[ix[k]]);
+        wtype(w, arms[k]);
 
         if (k) {
             wtext(w, op);
         }
     }
-    core_free(ix);
+    core_free(arms);
 }
 
 static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_type *t)

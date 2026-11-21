@@ -35,6 +35,44 @@ static size_t occurrences(core_string_t hay, core_string_t needle)
     return count;
 }
 
+static void expect_round_trip(th_ctx *th, th_type *t)
+{
+    core_string_t printed = th_print(th, t);
+    core_string_t err     = {};
+    th_type      *back    = ir_typelang_parse(th, printed, &err);
+
+    if (!back || th_hash(th, back) != th_hash(th, t)) {
+        printf("FAIL  %.*s does not read back to the same type (%.*s)\n",
+               PS(printed), PS(or_else(err, S("different hash"))));
+        fails++;
+    }
+    core_free(err.data);
+}
+
+static void test_keyword_labels_round_trip(void)
+{
+    static const core_string_t words[] = {
+        S("set"), S("dict"), S("in"), S("out"), S("inout"), S("consume"),
+        S("view"), S("t"), S("i"), S("u"), S("bits"), S("bitint"),
+        S("ubitint"), S("ptr"), S("ref"), S("mutref"), S("own"), S("gcref"),
+        S("tmpref"), S("nullable"), S("reseatable"), S("indexable"),
+        S("owning"), S("exclusive"), S("temporary"), S("foreign"),
+        S("array"), S("fail"), S("variant"), S("forall"), S("x")};
+    ir_ctx_t *ctx = ir_ctx_new();
+    th_ctx   *th  = ir_ctx_types(ctx);
+    th_type  *i64 = th_name(th, S("i64"));
+
+    for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+        th_member  field = {.name = words[i], .type = i64};
+        th_kwparam kw    = {.name = words[i], .mode = TH_OUT, .type = i64};
+        th_param   pos   = {.mode = TH_VIEW, .type = i64};
+
+        expect_round_trip(th, th_record(th, &field, 1));
+        expect_round_trip(th, th_func(th, i64, &pos, 1, nullptr, &kw, 1));
+    }
+    ir_ctx_free(ctx);
+}
+
 static void check_line(core_string_t line, int lineno)
 {
     int64_t tab1 = core_string_find_byte(line, '\t');
@@ -110,6 +148,7 @@ static void check_line(core_string_t line, int lineno)
                PS(or_else(th_last_error(th), S("-"))));
         fails++;
     }
+    expect_round_trip(th, t);
 
     ir_ctx_free(ctx);
 }
@@ -426,6 +465,7 @@ int main(int argc, char **argv)
     test_n00b_function_failure_channel();
     test_consume_parameter_mode();
     test_keyword_name_segments();
+    test_keyword_labels_round_trip();
     test_nonsense_is_refused();
     ir_typelang_shutdown();
 

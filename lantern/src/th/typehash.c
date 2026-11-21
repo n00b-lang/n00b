@@ -700,10 +700,6 @@ static bool enc_plan(th_enc *e, eframe *f)
                 u8(&s->pre, 1);
                 u64(&s->pre, a->u);
                 break;
-            case TH_ARG_SINT:
-                u8(&s->pre, 2);
-                u64(&s->pre, (uint64_t)a->s);
-                break;
             case TH_ARG_STR:
                 u8(&s->pre, 3);
                 str(&s->pre, a->str);
@@ -1009,29 +1005,23 @@ static void enc_node(th_enc *e, core_buffer_t *b, const th_type *t)
 }
 
 typedef struct {
-    core_dict_t seen;
-    th_path    path;
-    th_ctx    *ctx;
+    th_path  path;
+    th_ctx  *ctx;
+    void   (*visit)(void *state, th_type *var);
+    void    *state;
 } th_norm;
 
 static void norm_walk(th_norm *s, th_type *t);
 
-void th_erase_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out)
+bool th_encode_to(th_ctx *ctx, const th_type *t, core_buffer_t *out,
+                  bool erase)
 {
-    th_enc e = {.ctx = ctx, .erase = true, .ok = true};
+    th_enc e = {.ctx = ctx, .erase = erase, .ok = true};
 
     pm_init(&e.path);
     enc_node(&e, out, t);
     pm_free(&e.path);
-}
-
-void th_full_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out)
-{
-    th_enc e = {.ctx = ctx, .ok = true};
-
-    pm_init(&e.path);
-    enc_node(&e, out, t);
-    pm_free(&e.path);
+    return e.ok;
 }
 
 typedef struct {
@@ -1046,14 +1036,15 @@ static int cmp_armkey(const void *a, const void *b)
     return th_cmp_slice(&x->key, &y->key);
 }
 
-th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n)
+th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n,
+                       bool erase)
 {
     th_armkey    *ak = core_alloc_array(th_armkey, n);
     core_buffer_t *tb = core_alloc_array(core_buffer_t, n);
     th_type     **ar = core_alloc_array(th_type *, n);
 
     for (size_t i = 0; i < n; i++) {
-        th_erase_encode(ctx, arms[i], &tb[i]);
+        th_encode_to(ctx, arms[i], &tb[i], erase);
         ak[i].key.p = (uint8_t *)tb[i].data;
         ak[i].key.n = tb[i].byte_len;
         ak[i].arm   = arms[i];
@@ -1075,7 +1066,7 @@ static th_type **norm_children_sum(th_norm *s, th_type *t, size_t *out)
 {
     *out = t->sum.n;
 
-    return th_sort_arms(s->ctx, t->sum.arms, t->sum.n);
+    return th_sort_arms(s->ctx, t->sum.arms, t->sum.n, true);
 }
 
 static int cmp_length_first(core_string_t x, core_string_t y)
@@ -1121,15 +1112,7 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
 
     switch (t->kind) {
     case TH_VAR:
-        if (core_dict_contains(&s->seen, t)) {
-            return nullptr;
-        }
-
-        t->var.index     = core_dict_len(&s->seen);
-        t->var.has_index = true;
-
-        core_dict_put(&s->seen, t, t);
-
+        s->visit(s->state, t);
         return nullptr;
 
     case TH_NAMED:
@@ -1267,6 +1250,24 @@ static void norm_walk(th_norm *s, th_type *root)
     core_list_free(st);
 }
 
+void th_walk_vars(th_ctx *ctx, th_type *t,
+                  void (*visit)(void *state, th_type *var), void *state)
+{
+    th_norm s = {.ctx = ctx, .visit = visit, .state = state};
+
+    pm_init(&s.path);
+    norm_walk(&s, t);
+    pm_free(&s.path);
+}
+
+static void index_var(void *seen, th_type *t)
+{
+    if (core_dict_contains(seen, t)) return;
+    t->var.index     = core_dict_len(seen);
+    t->var.has_index = true;
+    core_dict_put(seen, t, t);
+}
+
 void th_normalize(th_type *t)
 {
     th_type *resolved = th_resolve(t);
@@ -1275,14 +1276,12 @@ void th_normalize(th_type *t)
         || (resolved->kind == TH_NAMED && !resolved->named.nargs))
         return;
 
-    th_ctx  tmp = {0};
-    th_norm s   = {.ctx = &tmp};
+    th_ctx      tmp = {0};
+    core_dict_t seen;
 
-    core_dict_init(&s.seen, nullptr, nullptr);
-    pm_init(&s.path);
-    norm_walk(&s, t);
-    core_dict_free(&s.seen);
-    pm_free(&s.path);
+    core_dict_init(&seen, nullptr, nullptr);
+    th_walk_vars(&tmp, t, index_var, &seen);
+    core_dict_free(&seen);
 }
 
 bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
@@ -1290,42 +1289,7 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
     th_normalize(t);
     ctx->scratch.byte_len = 0;
 
-    th_type *resolved = th_resolve(t);
-    if (resolved && (resolved->kind == TH_BITINT
-                     || resolved->kind == TH_BOUND
-                     || (resolved->kind == TH_NAMED
-                         && !resolved->named.nargs))) {
-        core_buffer_t *encoded = &ctx->scratch;
-        u8(encoded, (uint8_t)(resolved->kind + 1));
-        switch (resolved->kind) {
-        case TH_NAMED:
-            u8(encoded, resolved->named.is_variant ? 1 : 0);
-            if (!name(ctx, encoded, resolved->named.name)) return false;
-            u64(encoded, 0);
-            break;
-        case TH_BITINT:
-            u64(encoded, resolved->bitint.width);
-            u8(encoded, resolved->bitint.flavor);
-            break;
-        case TH_BOUND:
-            u64(encoded, resolved->bound.distance);
-            u64(encoded, resolved->bound.position);
-            break;
-        default:
-            break;
-        }
-        *out = (const uint8_t *)encoded->data;
-        *len = encoded->byte_len;
-        return true;
-    }
-
-    th_enc e = {.ctx = ctx, .ok = true};
-
-    pm_init(&e.path);
-    enc_node(&e, &ctx->scratch, t);
-    pm_free(&e.path);
-
-    if (!e.ok) {
+    if (!th_encode_to(ctx, t, &ctx->scratch, false)) {
         return false;
     }
     *out = (const uint8_t *)ctx->scratch.data;
@@ -1451,40 +1415,6 @@ uint64_t th_arm_tag(core_string_t n)
     uint64_t t = XXH3_128bits(n.data, n.u8_bytes).low64;
 
     return t ? t : 1;
-}
-
-core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
-                           uint64_t col)
-{
-    size_t       plen = path.u8_bytes;
-    uint8_t      head[8];
-    XXH3_state_t st;
-
-    for (int i = 0; i < 8; i++) {
-        head[i] = (uint8_t)(plen >> (56 - 8 * i));
-    }
-
-    XXH3_128bits_reset(&st);
-    XXH3_128bits_update(&st, head, sizeof head);
-    XXH3_128bits_update(&st, path.data, plen);
-
-    uint64_t at[2] = {line, col};
-
-    for (int k = 0; k < 2; k++) {
-        for (int i = 0; i < 8; i++) {
-            head[i] = (uint8_t)(at[k] >> (56 - 8 * i));
-        }
-        XXH3_128bits_update(&st, head, sizeof head);
-    }
-
-    uint64_t d = XXH3_128bits_digest(&st).low64;
-
-    d = d ? d : 1;
-
-    char *s = th_alloc(ctx, 32);
-    int   n = snprintf(s, 32, "_anon_%016llx", (unsigned long long)d);
-
-    return core_string_borrow(s, n > 0 ? (size_t)n : 0);
 }
 
 static th_type *node(th_ctx *ctx, th_kind k)
@@ -1924,7 +1854,7 @@ th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n)
     core_dict_init(&seen, enc_hash, enc_eq);
 
     for (size_t i = 0; i < fn; i++) {
-        th_erase_encode(ctx, flat.data[i], &enc[un]);
+        th_encode_to(ctx, flat.data[i], &enc[un], true);
 
         if (core_dict_contains(&seen, &enc[un])) {
             core_buffer_release(&enc[un]);

@@ -828,7 +828,7 @@ static void *r_type_decl(parse_reduce_t *r)
     th_type *named = parse_tree_leaf_is(kind,
                                          CORE_STRING_STATIC("variant"))
         ? th_variant(ir_module_types(b->m), name->text, nullptr, 0)
-        : ir_type_parse(b->m, name->text);
+        : ir_type_intern(b->m, th_name(ir_module_types(b->m), name->text));
 
     if (!named || !ir_type_define(b->m, named, def)) {
         bfail(b, cover(r), CORE_STRING_STATIC("this type is already defined"));

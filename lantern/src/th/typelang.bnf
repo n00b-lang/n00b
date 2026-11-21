@@ -1,18 +1,14 @@
-<type>       ::= <one-type>
 <union-type> ::= <isect-type> (%"|" <isect-type>)+
               | <isect-type>
 
-<isect-type> ::= <one-type> (%"&" <one-type>)+
-               | <one-type>
-
-<one-type> ::= <base-type>
+<isect-type> ::= <base-type> (%"&" <base-type>)+
+               | <base-type>
 
 <base-type> ::= <tvar>
               | <binder>
               | <bitint>
               | <indirection>
               | <sequence>
-              | <anon-site>
               | <tuple>
               | <paren-form>
               | <named-type>
@@ -21,16 +17,14 @@
 <type-app>   @nospace ::= %"[" <type-args> %"]"
 
 <qualified-name> @nospace ::= %IDENTIFIER (%"." <name-segment>)*
-<qualified-name> @nospace ::= %"set" (%"." <name-segment>)*
-<qualified-name> @nospace ::= %"dict" (%"." <name-segment>)*
 <qualified-name> @nospace ::= %"view" (%"." <name-segment>)*
 
-<name-segment> ::= %IDENTIFIER | %"set" | %"dict" | %"variant" | %"forall"
+<name-segment> ::= %IDENTIFIER | %"variant" | %"forall"
                  | %"bitint" | %"ubitint" | %"i" | %"u" | %"bits" | %"ptr"
                  | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
                  | %"nullable" | %"reseatable" | %"indexable" | %"owning"
                  | %"exclusive" | %"temporary" | %"foreign" | %"array" | %"t" | %"fail"
-                 | %"in" | %"out" | %"inout" | %"consume" | %"view"
+                 | %"out" | %"inout" | %"consume" | %"view"
 
 <type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
 
@@ -40,7 +34,7 @@
 
 <tvar> @nospace ::= %"`" %IDENTIFIER
 
-<binder> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"forall" %"[" <tvar> (%"," <tvar>)* %"]" <one-type>
+<binder> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"forall" %"[" <tvar> (%"," <tvar>)* %"]" <base-type>
 
 <bitint> @nospace ::= %"bitint" %"[" %INT_LIT %"]"
            | %"ubitint" %"[" %INT_LIT %"]"
@@ -48,8 +42,8 @@
            | %"u" %":" %INT_LIT
            | %"bits" %":" %INT_LIT
 
-<indirection> @nospace ::= <ind-name> %"[" <union-type> <ind-tail>? %"]"
-<ind-tail>    ::= %";" <ind-attrs>?
+<indirection> @nospace ::= <ind-name> %"[" <union-type> %"]"
+                         | %"ref" %"[" <union-type> %";" <ind-attrs> %"]"
 
 <ind-name> ::= %"ptr" | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
 
@@ -65,20 +59,16 @@
 
 <sequence> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"array" %"[" <union-type> (%";" %INT_LIT)? %"]"
 
-<anon-site> @nospace ::= %"@" %STRING_LIT %":" %INT_LIT %":" %INT_LIT
-
 <field-body> @nospace ::= %"(" <field-list> %")"
                | %"(" %")"
 
 <field-list> @nospace($1) ::= <field> (%"," <field>)*
 
-<field> @nospace($1) ::= %IDENTIFIER %":" <union-type>
+<field> @nospace($1) ::= <name-segment> %":" <union-type>
 
-<paren-form> @nospace ::= <record>
+<paren-form> @nospace ::= <field-body>
                | <function>
                | %"(" <union-type> %")"
-
-<record> ::= <field-body>
 
 <tuple> @nospace ::= %"t" %"(" <tuple-args>? %")"
 
@@ -94,9 +84,9 @@
 <param-list> @nospace($1) ::= <param> (%"," <param>)*
 
 <param> ::= <mode>? <rest-param>
-          | <mode>? %IDENTIFIER %":" <mode>? <union-type>
+          | <name-segment> %":" <mode>? <union-type>
           | <mode>? <union-type>
 
-<mode> ::= %"in" | %"out" | %"inout" | %"consume" | %"view"
+<mode> ::= %"out" | %"inout" | %"consume" | %"view"
 
 <rest-param> @nospace($1) ::= %"*" <union-type>

@@ -210,6 +210,11 @@ static bool pair_seen(core_list_t(type_pair_t) * seen, const th_type *a,
   return false;
 }
 
+static bool scalar_arg_equal(const th_arg *x, const th_arg *y) {
+  return x->kind == y->kind && (x->kind != TH_ARG_UINT || x->u == y->u) &&
+         (x->kind != TH_ARG_STR || core_string_eq(x->str, y->str));
+}
+
 static bool pattern_equal(const th_type *a, const th_type *b,
                           core_list_t(type_pair_t) * seen) {
   a = th_resolve_c(a);
@@ -239,16 +244,8 @@ static bool pattern_equal(const th_type *a, const th_type *b,
       return false;
     for (size_t i = 0; i < a->named.nargs; i++) {
       const th_arg *x = &a->named.args[i], *y = &b->named.args[i];
-      if (x->kind != y->kind)
-        return false;
-      if (x->kind == TH_ARG_TYPE) {
-        if (!pattern_equal(x->type, y->type, seen))
-          return false;
-      } else if (x->kind == TH_ARG_UINT && x->u != y->u)
-        return false;
-      else if (x->kind == TH_ARG_SINT && x->s != y->s)
-        return false;
-      else if (x->kind == TH_ARG_STR && !core_string_eq(x->str, y->str))
+      if (!scalar_arg_equal(x, y)
+          || (x->kind == TH_ARG_TYPE && !pattern_equal(x->type, y->type, seen)))
         return false;
     }
     return true;
@@ -360,16 +357,9 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
       return false;
     for (size_t i = 0; i < general->named.nargs; i++) {
       const th_arg *x = &general->named.args[i], *y = &specific->named.args[i];
-      if (x->kind != y->kind)
-        return false;
-      if (x->kind == TH_ARG_TYPE) {
-        if (!pattern_subsumes(x->type, y->type, bindings, seen))
-          return false;
-      } else if (x->kind == TH_ARG_UINT && x->u != y->u)
-        return false;
-      else if (x->kind == TH_ARG_SINT && x->s != y->s)
-        return false;
-      else if (x->kind == TH_ARG_STR && !core_string_eq(x->str, y->str))
+      if (!scalar_arg_equal(x, y)
+          || (x->kind == TH_ARG_TYPE
+              && !pattern_subsumes(x->type, y->type, bindings, seen)))
         return false;
     }
     return true;
