@@ -19,6 +19,8 @@ hello="$tests/perf/hello.n"
 records="$programs/merged/records.n"
 text="$programs/text/text_suite.n"
 threads="$programs/buffer/buffer_thread_slice.n"
+stack="$programs/cache_barrier/stack_caller.n"
+heap="$programs/cache_barrier/heap_caller.n"
 
 image() {
     "$llvm/llvm-objdump" -s "$1" | awk '
@@ -97,7 +99,13 @@ cold() {
     run build.records.off off build "$records"
     run build.text.off off build "$text"
     run build.summaries.off off build-summaries "$hello"
+    run build.heap.off off build "$heap"
     run library.off off library record_root
+}
+
+filled_by_stack_caller() {
+    run build.stack.fill bs build "$stack"
+    run build.heap.cross bs build "$heap"
 }
 
 filled_by_hello() {
@@ -165,6 +173,7 @@ else
     filled_by_hello &
     filled_by_records &
     library_cache &
+    filled_by_stack_caller &
     syntax_settings &
     wait
     for setting in default no-warnings function-fn block-colon; do
@@ -193,6 +202,7 @@ else
     same build.records.cross-hello build.records.off build.records.cross
     same build.text_suite.cross-hello build.text.off build.text.cross
     same build.text_suite.warm build.text.off build.text.warm
+    same build.heap_caller.cross-stack-caller build.heap.off build.heap.cross
     same build.hello-function-summaries.cross-records build.summaries.off \
         build.summaries.cross
     same library.record_root.fill library.off library.fill

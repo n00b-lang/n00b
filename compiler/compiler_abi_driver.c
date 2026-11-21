@@ -38,6 +38,7 @@
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
 #include "compiler_native_roots.h"
+#include "lower/lower_internal.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
@@ -472,6 +473,7 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
 
 typedef struct {
     bool has_user_native_objects;
+    n00bb_link_analysis_t *analysis;
 } n00bb_storage_origin_context_t;
 
 static bool
@@ -494,8 +496,11 @@ static bool
 n00bb_closed_callers(const ir_func_t *function, void *context)
 {
     const n00bb_storage_origin_context_t *origin = context;
-    if (!function || !function->owner || !origin
-        || origin->has_user_native_objects) return false;
+    core_translation_unit_t *unit = function && function->owner && origin
+        ? n00bb_visibility_unit(origin->analysis, function->owner) : nullptr;
+    if (!unit || origin->has_user_native_objects
+        || !n00bb_same_package(unit, origin->analysis->units.data[0]))
+        return false;
     if (core_string_eq(function->name, CORE_STRING_STATIC("__finalize"))
         || core_string_starts_with(function->name,
                                    CORE_STRING_STATIC("__finalize#")))
@@ -2286,6 +2291,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_storage_origin_context_t origin_context = {
         .has_user_native_objects = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object")) != 0,
+        .analysis = analysis,
     };
     ir_storage_origin_t *storage_origin = ok
         ? ir_storage_origin_new(
