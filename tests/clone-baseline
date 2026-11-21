@@ -551,8 +551,6 @@ f78cd624183a31cd	2	pending	lantern/src/th/environment.c
 4986101b387986c1	2	pending	lantern/src/th/environment_codec.c
 d91a32c4ac936fd9	2	pending	lantern/src/th/environment_codec.c
 e2a1f755f98eda1f	2	pending	lantern/src/th/environment_codec.c
-336bc55beefa995f	2	pending	lantern/src/th/print.c
-ff3c78254dd30eb8	2	pending	lantern/src/th/print.c
 259516fd657e92a1	2	pending	lantern/src/th/scheme.c
 ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 0fb8960c60978ec4	2	pending	lantern/src/th/typehash.c
