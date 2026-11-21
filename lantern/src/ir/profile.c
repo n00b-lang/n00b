@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
-#include "ir/typelang.h"
 
 struct ir_parsed_scalars_t {
     const ir_profile_t  *profile;
@@ -36,12 +35,8 @@ static ir_parsed_scalars_t *parsed_scalars(ir_ctx_t *ctx,
         parsed->hashes  = ir_alloc(ctx, n * sizeof(uint64_t));
         parsed->types   = ir_alloc(ctx, n * sizeof(th_type *));
         for (size_t i = 0; i < p->n_scalars; i++) {
-            core_string_t err = {};
-            th_type      *t   = ir_typelang_parse(ctx->types,
-                                                  p->scalars[i].type_text,
-                                                  &err);
+            th_type *t = th_name(ctx->types, p->scalars[i].type_text);
 
-            core_free(err.data);
             parsed->hashes[i] = t ? th_hash(ctx->types, t) : 0;
             parsed->types[i]  = t;
         }
