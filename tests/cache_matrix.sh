@@ -95,6 +95,7 @@ cold() {
     run build.hello.off off build "$hello"
     run build.hello.off2 off build "$hello"
     run build.records.off off build "$records"
+    run build.text.off off build "$text"
     run build.summaries.off off build-summaries "$hello"
     run library.off off library record_root
 }
@@ -109,6 +110,8 @@ filled_by_hello() {
     run build.hello.fill bh build "$hello"
     run build.hello.warm bh build "$hello"
     run build.records.cross bh build "$records"
+    run build.text.cross bh build "$text"
+    run build.text.warm bh build "$text"
 }
 
 filled_by_records() {
@@ -188,6 +191,8 @@ else
     same build.records.fill build.records.off build.records.fill
     same build.records.warm build.records.off build.records.warm
     same build.records.cross-hello build.records.off build.records.cross
+    same build.text_suite.cross-hello build.text.off build.text.cross
+    same build.text_suite.warm build.text.off build.text.warm
     same build.hello-function-summaries.cross-records build.summaries.off \
         build.summaries.cross
     same library.record_root.fill library.off library.fill
