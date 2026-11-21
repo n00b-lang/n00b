@@ -34,5 +34,11 @@ sed -e 's/sum_widths/add_heights/; s/records/rows/g; s/record/row/g; s/total/hei
 expect fail "clones: renamed copy of a function" check clones clones
 python3 "$tools/check_clones.py" "$work/clones" --update > /dev/null
 expect pass "clones: copy recorded in the baseline" check clones clones
+cp "$work/clones/tests/clone-baseline" "$work/clones/baseline.before"
+printf 'static int unrelated_marker;\n\n' | cat - "$work/clones/compiler/a.c" > "$work/clones/a.c.new"
+mv "$work/clones/a.c.new" "$work/clones/compiler/a.c"
+python3 "$tools/check_clones.py" "$work/clones" --update > /dev/null
+expect pass "clones: an edit above a copy keeps the baseline" \
+    cmp "$work/clones/baseline.before" "$work/clones/tests/clone-baseline"
 cp "$work/clones/compiler/b.c" "$work/clones/compiler/c.c"
 expect fail "clones: third copy beyond the baseline" check clones clones
