@@ -1985,7 +1985,6 @@ emit_runtime_objects(core_link_unit_t *link,
                 emission->debug_enabled, emission->native_cpu,
                 &program->objects[modules + 3], diagnostics);
     }
-    bool *fresh = core_alloc_array(bool, program->object_slots);
     core_translation_unit_t *root = core_link_unit_root(link, 0);
     for (size_t u = 0; ok && u < units->len; u++) {
         size_t slot = 0;
@@ -2040,11 +2039,13 @@ emit_runtime_objects(core_link_unit_t *link,
             unlink(program->objects[slot]);
             core_free(program->objects[slot]);
             program->objects[slot] = path;
-            fresh[slot] = true;
         }
     }
+    n00bb_native_frames_free(runtime.native_frames);
+    runtime.native_frames = n00bb_native_frames_new(
+        emission->analysis->target.object_format);
     for (size_t i = 0; ok && !emission->lto && i < modules; i++) {
-        if (!program->objects[i] || fresh[i]) continue;
+        if (!program->objects[i]) continue;
         core_string_t name = core_string_from_cstr(program->objects[i]);
         char *contents = nullptr;
         size_t size = 0;
@@ -2074,7 +2075,6 @@ emit_runtime_objects(core_link_unit_t *link,
     keep_runtime_objects(emission->kept, &runtime_kept);
     core_list_free(runtime_functions);
     core_list_free(reemitted);
-    core_free(fresh);
     if (!ok && !core_diagnostics_failed(diagnostics))
         n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
             "emitting runtime code", "could not re-emit baked modules");

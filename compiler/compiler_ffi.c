@@ -467,6 +467,14 @@ clear_strings(core_list_t(core_string_t) *list)
     list->len = 0;
 }
 
+static int
+record_order(const void *left, const void *right)
+{
+    const ffi_literal_t *a = left, *b = right;
+    int order = core_string_cmp(a->module, b->module);
+    return order ? order : core_string_cmp(a->prefix, b->prefix);
+}
+
 static void
 refresh_selection(n00bb_ffi_t *ffi)
 {
@@ -475,6 +483,9 @@ refresh_selection(n00bb_ffi_t *ffi)
     clear_strings(&ffi->frameworks);
     clear_strings(&ffi->search_paths);
     ffi->selected_shims.len = 0;
+    if (ffi->records.len > 1)
+        qsort(ffi->records.data, ffi->records.len,
+              sizeof(*ffi->records.data), record_order);
     for (size_t i = 0; i < ffi->records.len; i++) {
         const ffi_literal_t *record = &ffi->records.data[i];
         if (!record->used) {

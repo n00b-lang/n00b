@@ -490,39 +490,53 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     return valid;
 }
 
+static int
+compare_symbol_names(const void *left, const void *right)
+{
+    return core_string_cmp((*(parse_sym_entry_t *const *)left)->name,
+                           (*(parse_sym_entry_t *const *)right)->name);
+}
+
 static bool
 publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
-    for (size_t u = 0; u < analysis->units.len; u++) {
+    bool ok = true;
+    core_list_t(parse_sym_entry_ptr_t) requested =
+        core_list_new(parse_sym_entry_ptr_t);
+    for (size_t u = 0; ok && u < analysis->units.len; u++) {
         core_translation_unit_t *owner = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(owner);
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
-        if (!symtab) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
+        ok = symtab != nullptr;
+        requested.len = 0;
+        for (parse_scope_t *scope = ok ? symtab->all_scopes : nullptr; scope;
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
                 n00bb_record_layout_request_t *request = parse_sym_binding(
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
-                if (!request || request->policy != N00BB_RECORD_C) continue;
-                for (size_t d = 0; d < analysis->units.len; d++) {
-                    core_translation_unit_t *importer =
-                        analysis->units.data[d];
-                    if (importer != owner
-                        && !n00bb_unit_reaches_import(importer, owner)) continue;
-                    n00bb_tu_state_t *destination = tu_state(
-                        importer);
-                    if (!destination->ir_module
-                        || !publish_c_record_symbol(analysis, owner, symbol,
-                                                    destination->ir_module))
-                        return false;
-                }
+                if (request && request->policy == N00BB_RECORD_C)
+                    core_list_push(requested, symbol);
             }
         }
+        if (requested.len > 1)
+            qsort(requested.data, requested.len, sizeof(*requested.data),
+                  compare_symbol_names);
+        for (size_t s = 0; ok && s < requested.len; s++)
+            for (size_t d = 0; ok && d < analysis->units.len; d++) {
+                core_translation_unit_t *importer = analysis->units.data[d];
+                if (importer != owner
+                    && !n00bb_unit_reaches_import(importer, owner)) continue;
+                n00bb_tu_state_t *destination = tu_state(importer);
+                ok = destination->ir_module
+                    && publish_c_record_symbol(analysis, owner,
+                           requested.data[s], destination->ir_module);
+            }
     }
-    return true;
+    core_list_free(requested);
+    return ok;
 }
 
 static bool
