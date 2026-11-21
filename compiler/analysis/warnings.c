@@ -237,8 +237,7 @@ warn_dead_type_arms(n00bb_link_analysis_t *analysis)
             ? state->ir_module : nullptr;
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
-            if (th_is_closed(ir_module_types(module), function->type)
-                || !n00bb_instantiated(function))
+            if (th_is_closed(ir_module_types(module), function->type))
                 continue;
             for (uint32_t b = 0; b < function->n_blocks; b++) {
                 ir_instr_t *term = ir_block_terminator(function->blocks[b]);
@@ -248,8 +247,16 @@ warn_dead_type_arms(n00bb_link_analysis_t *analysis)
                 ir_instr_t *test = condition ? condition->def : nullptr;
                 if (!test || test->op != IR_OP_TYPE_TEST
                     || n00bb_static_type_test(test) >= 0) continue;
-                uint64_t seen = n00bb_type_test_outcomes(test);
-                int dead = !(seen & 2) ? 0 : seen == 2 ? 1 : -1;
+                uint32_t seen = 0;
+                for (size_t s = 0; s < analysis->specializations.len; s++) {
+                    const n00bb_specialization_t *item =
+                        &analysis->specializations.data[s];
+                    if (item->generic == function)
+                        seen |= 4 | (b < item->outcomes.len
+                                     ? item->outcomes.data[b] : 0);
+                }
+                int dead = !seen ? -1 : !(seen & 2) ? 0
+                    : (seen & 3) == 2 ? 1 : -1;
                 const ir_instr_t *site = dead >= 0
                     ? first_user_instruction(ir_succ_at(term, dead), test)
                     : nullptr;

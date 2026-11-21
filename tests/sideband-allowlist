@@ -615,7 +615,6 @@ key	n00bb.try-error	existing
 key	n00bb.tuple-index	existing
 key	n00bb.type-bounds	existing
 key	n00bb.type_index.static	existing
-key	n00bb.type_test_outcomes	existing
 key	n00bb.typecase-subject	existing
 key	n00bb.union_absent	existing
 key	n00bb.untyped-const	existing
@@ -676,7 +675,6 @@ macro	N00BB_SWITCH_VARIABLE_KEY	existing
 macro	N00BB_TRAIT_CAST_KEY	existing
 macro	N00BB_TUPLE_INDEX_KEY	existing
 macro	N00BB_TYPE_BOUNDS_KEY	existing
-macro	N00BB_TYPE_TEST_OUTCOMES_KEY	existing
 macro	N00BB_UNTYPED_CONST_KEY	existing
 macro	N00BB_VARIANT_ARM_KEY	existing
 macro	N00BB_WITH_VALUE_EXIT_KEY	existing
