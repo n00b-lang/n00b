@@ -1093,8 +1093,7 @@ static th_type *lower(bctx *c, parse_tree_t *tree)
 
     return out;
 }
-static th_type *run(th_ctx *ctx, core_string_t src, size_t *consumed,
-                    core_string_t *err)
+static th_type *run(th_ctx *ctx, core_string_t src, core_string_t *err)
 {
     if (err) {
         *err = (core_string_t){};
@@ -1114,17 +1113,9 @@ static th_type *run(th_ctx *ctx, core_string_t src, size_t *consumed,
     parse_pwz_parser_t   *p =
         parse_pwz_new_for_start(g, parse_nonterm_id(parse_find_nonterm(
                                        g, CORE_STRING_STATIC("union-type"))));
-    th_type *out  = nullptr;
-    int32_t  used = 0;
-    bool     ok;
+    th_type *out = nullptr;
 
-    if (consumed) {
-        ok = parse_pwz_parse_prefix(p, ts, &used);
-    } else {
-        ok = parse_pwz_parse(p, ts);
-    }
-
-    if (ok) {
+    if (parse_pwz_parse(p, ts)) {
         bctx c = {.th = ctx, .g = g};
 
         core_dict_init_string(&c.fv_index);
@@ -1146,13 +1137,6 @@ static th_type *run(th_ctx *ctx, core_string_t src, size_t *consumed,
         core_list_free(c.binders);
     } else if (err) {
         *err = msg(CORE_STRING_STATIC("cannot parse a type here"));
-    }
-
-    if (out && consumed) {
-        parse_token_info_t *last =
-            used > 0 ? scan_stream_get(ts, used - 1) : nullptr;
-
-        *consumed = last ? parse_token_end_byte(last) : 0;
     }
 
     parse_pwz_free(p);
@@ -1211,7 +1195,7 @@ void ir_typelang_lower_free(ir_typelang_lower_t *l)
 th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
                            core_string_t *err)
 {
-    return src.data ? run(ctx, src, nullptr, err) : nullptr;
+    return src.data ? run(ctx, src, err) : nullptr;
 }
 
 th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
@@ -1226,7 +1210,7 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
     }
 
     core_string_t err = {};
-    th_type      *t   = run(types, spec, nullptr, &err);
+    th_type      *t   = ir_typelang_parse(types, spec, &err);
 
     core_free(err.data);
 
@@ -1235,10 +1219,4 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
     }
 
     return t;
-}
-
-th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
-                                  size_t *consumed, core_string_t *err)
-{
-    return run(ctx, src, consumed, err);
 }

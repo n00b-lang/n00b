@@ -8,8 +8,6 @@
 th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
                            core_string_t *err);
 
-th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
-                                  size_t *consumed, core_string_t *err);
 
 void ir_typelang_shutdown(void);
 

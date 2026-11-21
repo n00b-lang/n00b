@@ -24,10 +24,6 @@ void parse_pwz_release_parse_state(parse_pwz_parser_t *p);
 bool parse_pwz_parse(parse_pwz_parser_t   *p,
                      parse_token_stream_t *ts);
 
-bool parse_pwz_parse_prefix(parse_pwz_parser_t   *p,
-                          parse_token_stream_t *ts,
-                          int32_t            *ntokens);
-
 parse_tree_t *parse_pwz_get_tree(parse_pwz_parser_t *p);
 
 bool parse_pwz_parse_range(parse_pwz_parser_t   *p,
