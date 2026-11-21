@@ -6,7 +6,6 @@
 
 #define HANDOFF_VARIABLE CORE_STRING_STATIC("N00BB_HANDOFF")
 #define CACHE_EXCLUDE CORE_STRING_STATIC("cache_exclude")
-#define TOOLCHAIN_REASON CORE_STRING_STATIC("toolchain_reason")
 
 static n00bb_handoff_t handoff;
 static bool loaded;
@@ -53,8 +52,6 @@ load(void)
     while (rest.u8_bytes && take(&rest, &name, &value)) {
         if (core_string_eq(name, CACHE_EXCLUDE))
             n00bb_handoff_set(&handoff.cache_exclude, value);
-        else if (core_string_eq(name, TOOLCHAIN_REASON))
-            n00bb_handoff_set(&handoff.toolchain_reason, value);
     }
     core_free(text.data);
 }
@@ -81,8 +78,6 @@ n00bb_handoff_pass(void)
     core_buffer_t out = {0};
     if (record->cache_exclude.u8_bytes)
         put(&out, CACHE_EXCLUDE, record->cache_exclude);
-    if (record->toolchain_reason.u8_bytes)
-        put(&out, TOOLCHAIN_REASON, record->toolchain_reason);
     bool passed = out.byte_len
         ? core_os_set_environment(HANDOFF_VARIABLE, core_buffer_string(&out))
         : core_os_unset_environment(HANDOFF_VARIABLE);
