@@ -181,7 +181,6 @@ struct th_type {
   };
 };
 
-core_list_decl(th_error_t);
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 
@@ -190,7 +189,6 @@ struct th_ctx {
   core_buffer_t scratch;
   th_normalizer norm;
   void *norm_state;
-  core_string_t err;
   uint64_t next_var;
   const th_builtin_type_t *builtin_types;
   size_t builtin_count;
@@ -199,11 +197,6 @@ struct th_ctx {
   core_dict_t *closed_type_records;
   core_dict_t *open_type_records;
   core_dict_t *generic_type_heads;
-  core_list_t(th_error_t) errors;
-  th_span_t span;
-  core_string_t source_file;
-  th_span_t related;
-  bool has_related;
   const th_env *environment;
   core_string_t module;
   core_string_t package;
@@ -242,9 +235,6 @@ struct th_env {
   bool frozen;
 };
 
-
-void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
-            th_type *expected, th_type *got, core_string_t message);
 
 void *th_alloc(th_ctx *ctx, size_t n);
 uint64_t th_var_fresh_origin(void);

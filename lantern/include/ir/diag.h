@@ -95,7 +95,6 @@ const ir_diag_t         *ir_diags_at(const ir_diags_t *d, uint32_t i);
 const core_diagnostic_t *ir_diag_item(const ir_diags_t *d,
                                       const ir_diag_t *dg);
 bool                     ir_diags_failed(const ir_diags_t *d);
-uint32_t                 ir_import_type_errors(ir_module_t *m, ir_diags_t *d);
 
 typedef core_string_t (*ir_source_fn)(void *state, int32_t file);
 

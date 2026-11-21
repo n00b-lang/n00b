@@ -96,7 +96,6 @@ void th_ctx_free(th_ctx *ctx)
         core_dict_free(ctx->text_types);
         core_free(ctx->text_types);
     }
-    core_list_free(ctx->errors);
     core_arena_free(&ctx->arena);
     core_arena_free(&ctx->memo_arena);
     core_buffer_release(&ctx->scratch);
@@ -444,11 +443,6 @@ void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state)
     ctx->norm_state = state;
 }
 
-core_string_t th_last_error(const th_ctx *ctx)
-{
-    return ctx->err;
-}
-
 th_kind th_kind_of(const th_type *t)
 {
     return t->kind;
@@ -525,9 +519,6 @@ bool th_name_syntax_valid(core_string_t s)
 static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
 {
     if (!th_name_syntax_valid(s)) {
-        th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-               CORE_STRING_STATIC("not a valid type name"));
-
         return false;
     }
 
@@ -535,10 +526,6 @@ static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
         core_string_t o;
 
         if (!ctx->norm(ctx->norm_state, s, &o)) {
-            th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-                   CORE_STRING_STATIC(
-                       "the name is not in Unicode normal form C"));
-
             return false;
         }
 
@@ -549,11 +536,6 @@ static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
 
     for (size_t i = 0; i < s.u8_bytes; i++) {
         if ((unsigned char)s.data[i] >= 0x80) {
-            th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-                   CORE_STRING_STATIC(
-                       "a non-ASCII type name cannot be checked without "
-                       "Unicode normalization"));
-
             return false;
         }
     }
@@ -834,12 +816,6 @@ static bool enc_plan(th_enc *e, eframe *f)
             u64(&s->pre, 0);
         }
         else if (!t->var.has_index) {
-            th_err(e->ctx, TH_ERR_FREE_VAR, (core_string_t){}, nullptr,
-                   (th_type *)t,
-                   CORE_STRING_STATIC(
-                       "a type still contains an unresolved type "
-                       "variable"));
-
             return false;
         }
         else {

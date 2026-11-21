@@ -531,34 +531,6 @@ static void test_pass_declarations(void)
     ir_ctx_free(ctx);
 }
 
-static void test_type_errors_import_once(void)
-{
-    ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *m = mod(ctx);
-    th_ctx *types = ir_module_types(m);
-    th_type *integer = ir_type_parse(m, S("int"));
-    th_type *string = ir_type_parse(m, S("string"));
-    ir_diags_t *diags = ir_diags_new(ctx, nullptr);
-
-    if (integer && string) {
-        th_err(types, TH_ERR_UNIFY, S("unifies"), integer, string,
-               S("the types do not match"));
-    }
-    check("mismatched types produce a type error",
-          integer && string && th_error_count(types) == 1);
-    check("type errors become IR diagnostics exactly once",
-          ir_import_type_errors(m, diags) == 1
-              && ir_import_type_errors(m, diags) == 0
-              && th_error_count(types) == 0);
-    const ir_diag_t *diagnostic = ir_diags_at(diags, 0);
-    check("the diagnostic retains both type names",
-          diagnostic && diagnostic->code == IR_DIAG_TYPE_MISMATCH
-              && contains(item(diags, diagnostic)->message, S("int"))
-              && contains(item(diags, diagnostic)->message, S("string")));
-    produced[IR_DIAG_TYPE_MISMATCH] = diagnostic != nullptr;
-    ir_ctx_free(ctx);
-}
-
 static FILE *open_path(core_string_t path, const char *mode)
 {
     char *native = core_string_to_cstr(path);
@@ -706,7 +678,6 @@ int main(int argc, char **argv)
     test_span_fallback();
     test_ordering_is_deterministic();
     test_pass_declarations();
-    test_type_errors_import_once();
     test_errors_do_not_stop_the_pipeline();
     test_rendering(golden);
     dump_produced_codes("produced-codes-diag.txt", produced);
