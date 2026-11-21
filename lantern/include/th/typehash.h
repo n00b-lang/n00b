@@ -249,7 +249,7 @@ bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
 
 typedef struct th_type_writer th_type_writer_t;
 typedef struct th_type_reader th_type_reader_t;
-th_type_writer_t *th_type_writer_new(void);
+th_type_writer_t *th_type_writer_new(th_ctx *ctx);
 uint32_t th_type_writer_add(th_type_writer_t *writer, const th_type *type);
 bool th_type_writer_finish(th_type_writer_t *writer, core_buffer_t *out);
 void th_type_writer_free(th_type_writer_t *writer);

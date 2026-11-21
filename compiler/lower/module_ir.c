@@ -133,6 +133,8 @@ register_nominal_types(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !state->annotations->symtab)
         return false;
+    core_list_t(parse_sym_entry_ptr_t) nominals =
+        core_list_new(parse_sym_entry_ptr_t);
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
          scope; scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -152,13 +154,21 @@ register_nominal_types(parse_grammar_t *grammar,
                 || (symbol->member_scope
                     && core_string_eq(symbol->member_scope->scope_tag,
                                       CORE_STRING_STATIC("flagset")));
-            if (!nominal && !scalar) continue;
-            th_type *representation = th_type_definition(state->types, symbol->type);
-            if (!representation || !ir_type_define(module, symbol->type,
-                                                    representation)) return false;
+            if (nominal || scalar) core_list_push(nominals, symbol);
         }
     }
-    return true;
+    if (imported && nominals.len > 1)
+        qsort(nominals.data, nominals.len, sizeof(*nominals.data),
+              n00bb_compare_symbol_names);
+    bool ok = true;
+    for (size_t i = 0; ok && i < nominals.len; i++) {
+        th_type *representation = th_type_definition(state->types,
+                                                     nominals.data[i]->type);
+        ok = representation && ir_type_define(module, nominals.data[i]->type,
+                                              representation);
+    }
+    core_list_free(nominals);
+    return ok;
 }
 
 static bool

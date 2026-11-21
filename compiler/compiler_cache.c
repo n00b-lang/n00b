@@ -2118,7 +2118,8 @@ request_key(const n00bb_specialization_t *item, core_buffer_t *key)
 {
     put_text(key, ir_module_name(item->generic->owner));
     put_text(key, item->generic->name);
-    th_type_writer_t *writer = th_type_writer_new();
+    th_type_writer_t *writer = th_type_writer_new(
+        ir_module_types(item->generic->owner));
     bool ok = writer && th_type_writer_add(writer, item->signature)
         && th_type_writer_finish(writer, key);
     th_type_writer_free(writer);
@@ -2161,7 +2162,8 @@ scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
         }
     if (count)
         qsort(requests, count, sizeof(*requests), compare_requests);
-    th_type_writer_t *writer = th_type_writer_new();
+    th_type_writer_t *writer = th_type_writer_new(
+        count ? ir_module_types(requests[0].item->generic->owner) : nullptr);
     core_buffer_t entries = {0};
     for (uint32_t i = 0; writer && i < count; i++) {
         const n00bb_specialization_t *item = requests[i].item;
