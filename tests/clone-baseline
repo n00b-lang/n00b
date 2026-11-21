@@ -385,12 +385,6 @@ fc69c08e1f0142f2	2	pending	lantern/src/ir/structure.c
 3e03715886c38487	2	pending	lantern/src/ir/summary_facts.c
 613f3a81b6a7641a	2	pending	lantern/src/ir/summary_facts.c
 269a532acbcea96d	2	pending	lantern/src/ir/typelang.c
-5be61950e7780c2b	2	pending	lantern/src/ir/typelang.c
-95e711cc3973a40b	3	pending	lantern/src/ir/typelang.c
-9f7fa45a8fff6049	3	pending	lantern/src/ir/typelang.c
-b9cd0bbc7ea2a146	3	pending	lantern/src/ir/typelang.c
-f0d1388c26e92fa6	2	pending	lantern/src/ir/typelang.c
-f6bf9efba46d8bdd	3	pending	lantern/src/ir/typelang.c
 06c0d8a65dc08b7b	3	pending	lantern/src/lib/module.c
 08d3f858d078533b	3	pending	lantern/src/lib/module.c
 10510af229cb2531	3	pending	lantern/src/lib/module.c

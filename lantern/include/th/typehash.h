@@ -369,8 +369,6 @@ core_string_t th_print(th_ctx *ctx, th_type *type);
 core_string_t th_print_with_options(th_ctx *ctx, th_type *type,
                                     const th_print_options_t *options);
 uint64_t th_arm_tag(core_string_t name);
-core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
-                           uint64_t col);
 
 th_kind th_kind_of(const th_type *type);
 bool    th_is_scheme(const th_type *type);

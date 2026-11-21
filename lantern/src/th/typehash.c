@@ -1417,40 +1417,6 @@ uint64_t th_arm_tag(core_string_t n)
     return t ? t : 1;
 }
 
-core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
-                           uint64_t col)
-{
-    size_t       plen = path.u8_bytes;
-    uint8_t      head[8];
-    XXH3_state_t st;
-
-    for (int i = 0; i < 8; i++) {
-        head[i] = (uint8_t)(plen >> (56 - 8 * i));
-    }
-
-    XXH3_128bits_reset(&st);
-    XXH3_128bits_update(&st, head, sizeof head);
-    XXH3_128bits_update(&st, path.data, plen);
-
-    uint64_t at[2] = {line, col};
-
-    for (int k = 0; k < 2; k++) {
-        for (int i = 0; i < 8; i++) {
-            head[i] = (uint8_t)(at[k] >> (56 - 8 * i));
-        }
-        XXH3_128bits_update(&st, head, sizeof head);
-    }
-
-    uint64_t d = XXH3_128bits_digest(&st).low64;
-
-    d = d ? d : 1;
-
-    char *s = th_alloc(ctx, 32);
-    int   n = snprintf(s, 32, "_anon_%016llx", (unsigned long long)d);
-
-    return core_string_borrow(s, n > 0 ? (size_t)n : 0);
-}
-
 static th_type *node(th_ctx *ctx, th_kind k)
 {
     th_type *t = th_alloc(ctx, sizeof(th_type));
