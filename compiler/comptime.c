@@ -459,7 +459,11 @@ adopt_graph(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
             .kind = IR_GLOBAL_INIT_PHASE_RESULT,
             .phase_result.identifier = identifier,
         };
-        if (!global) continue;
+        if (!global || (global->mutability == IR_MUT_CONST
+                        && global->has_static_initializer
+                        && global->static_initializer->kind
+                            <= IR_GLOBAL_INIT_FLOAT))
+            continue;
         if (!ir_global_replace_static_initializer(module, global, &value))
             return false;
         changed = true;
