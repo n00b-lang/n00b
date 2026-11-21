@@ -55,7 +55,7 @@ static void check_native_symbols(const uint8_t *image, size_t size,
                                  const core_object_emit_symbol_t *expected,
                                  size_t expected_count)
 {
-    uint32_t first = target->object_format == CORE_TARGET_OBJECT_ELF ? 1 : 0;
+    uint32_t first = target->object_format == CORE_TARGET_OBJECT_ELF ? 2 : 0;
     for (size_t i = 0; i < expected_count; i++) {
         bool found = false;
         for (size_t native = first; native < first + expected_count;
@@ -353,7 +353,9 @@ static void thread_local_section_test(void)
             size_t header = (size_t)core_le_load_u64(image + 40);
             size_t symtab = (size_t)core_le_load_u64(image + header
                 + 3 * 64 + 24);
-            assert((image[symtab + 2 * 24 + 4] & 0x0f) == 6);
+            assert(image[symtab + 24 + 4] == 4
+                && core_le_load_u16(image + symtab + 24 + 6) == 0xfff1);
+            assert((image[symtab + 3 * 24 + 4] & 0x0f) == 6);
         }
         else if (cases[i].format == CORE_TARGET_OBJECT_MACH_O)
             assert((section.flags & 0xff) == 0x11);
@@ -501,7 +503,7 @@ int main(int argc, char **argv)
     assert(core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_ELF, 0, &relocation));
     assert(relocation.section_offset == 8 &&
-           relocation.native_symbol_index == 2 &&
+           relocation.native_symbol_index == 3 &&
            relocation.addend_bits == 5);
     core_object_symbol_name_t name;
     assert(core_object_symbol_name_at(image, size, CORE_TARGET_OBJECT_ELF,
@@ -539,7 +541,7 @@ int main(int argc, char **argv)
            && native_index == UINT32_MAX);
     assert(core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_ELF, 0, &relocation));
-    assert(relocation.native_symbol_index == 1);
+    assert(relocation.native_symbol_index == 2);
     assert(core_object_symbol_name_at(image, size, CORE_TARGET_OBJECT_ELF,
                                       &section, relocation.native_symbol_index,
                                       &name));

@@ -14,6 +14,8 @@ enum {
     ELF_RESERVED_SECTION_START = 0xff00,
     ELF_RELOC_X86_64_64 = 1,
     ELF_RELOC_AARCH64_ABS64 = 257,
+    ELF_SYMBOL_FILE = 4,
+    ELF_SECTION_ABSOLUTE = 0xfff1,
 };
 
 bool core_object_emit_elf_native_section_index(size_t section_count,
@@ -70,7 +72,7 @@ bool core_object_emit_elf(const core_target_desc_t *target,
     bool aarch64 = target->call_abi == CORE_TARGET_CALL_AAPCS64;
     if ((!aarch64 && target->call_abi != CORE_TARGET_CALL_SYSV_AMD64) ||
         section_count > ELF_RESERVED_SECTION_START - ELF_USER_SECTION_BASE ||
-        symbol_count >= UINT32_MAX) return false;
+        symbol_count >= UINT32_MAX - 1) return false;
 
     uint32_t *rel_counts = core_alloc_array(uint32_t, section_count);
     size_t *data_offsets = core_alloc_array(size_t, section_count);
@@ -85,7 +87,7 @@ bool core_object_emit_elf(const core_target_desc_t *target,
 
     for (size_t i = 0; i < relocation_count; i++)
         rel_counts[relocations[i].section_index - 1]++;
-    size_t rel_section_count = 0, local_count = 0;
+    size_t rel_section_count = 0, local_count = 1;
     for (size_t i = 0; i < section_count; i++)
         rel_section_count += rel_counts[i] != 0;
     for (size_t i = 0; i < symbol_count; i++)
@@ -113,7 +115,7 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         if (!add_name(&str_size, symbols[i].name)) goto done;
 
     size_t symtab_bytes, shdr_bytes, offset = ELF_HEADER_BYTES;
-    if (!core_object_size_mul(symbol_count + 1, ELF_SYMBOL_BYTES,
+    if (!core_object_size_mul(symbol_count + 2, ELF_SYMBOL_BYTES,
                               &symtab_bytes) ||
         !core_object_size_mul(section_headers, ELF_SECTION_BYTES,
                               &shdr_bytes)) goto done;
@@ -188,7 +190,10 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         put_name(image, &string_cursor, symbols[i].name);
     }
 
-    uint32_t local_next = 1;
+    uint8_t *file_symbol = image + symtab_offset + ELF_SYMBOL_BYTES;
+    file_symbol[4] = ELF_SYMBOL_FILE;
+    core_le_store_u16(file_symbol + 6, ELF_SECTION_ABSOLUTE);
+    uint32_t local_next = 2;
     uint32_t global_next = (uint32_t)local_count + 1;
     for (size_t i = 0; i < symbol_count; i++) {
         uint32_t index = symbols[i].exported ? global_next++ : local_next++;
