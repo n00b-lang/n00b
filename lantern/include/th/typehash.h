@@ -203,8 +203,6 @@ th_type_cloner_t *th_type_cloner_new(th_ctx *destination,
 th_type *th_type_cloner_clone(th_type_cloner_t *cloner,
                               const th_type *source);
 void th_type_cloner_free(th_type_cloner_t *cloner);
-bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
-                        th_type **copies, size_t count);
 
 typedef struct th_type_writer th_type_writer_t;
 typedef struct th_type_reader th_type_reader_t;
@@ -245,9 +243,6 @@ th_type *th_record_sorted(th_ctx *ctx, th_member *members, size_t n);
 th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
                   const th_member *methods, size_t n,
                   const th_trait_requirement *requirements, size_t nr);
-th_type *th_record_stub(th_ctx *ctx);
-void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
-                        size_t n);
 typedef enum : uint8_t {
     TH_BUILTIN_NONE,
     TH_BUILTIN_SCALAR,
@@ -391,7 +386,6 @@ typedef enum : uint8_t {
     TH_COERCE_RECORD_CONSTRUCT = 1 << 5,
 } th_coerce_flag;
 
-bool   th_implements(th_ctx *ctx, th_type *type, core_string_t iface);
 
 th_type *th_resolve(th_type *type);
 th_type *th_var_ref(const th_type *var);
@@ -420,12 +414,8 @@ bool     th_same_type(th_type *a, th_type *b);
 th_type *th_fill(th_type *placeholder, th_type *type);
 bool     th_compatible(th_type *a, th_type *b);
 bool     th_match_pair(th_type *a, th_type *b);
-th_type *th_meet(th_ctx *ctx, th_type *a, th_type *b);
 bool     th_type_widens_to(const th_type *from, const th_type *to);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);
 th_type *th_generalize(th_ctx *ctx, th_type *type);
-th_type *th_generalize_excluding(th_ctx *ctx, th_type *type,
-                                 th_type *const *environment,
-                                 size_t environment_count);
 
 #endif

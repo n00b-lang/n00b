@@ -579,48 +579,4 @@ th_type *th_generalize(th_ctx *ctx, th_type *t)
     return generalize_vars(ctx, t, vars, nvars);
 }
 
-th_type *th_generalize_excluding(th_ctx *ctx, th_type *t,
-                                 th_type *const *environment,
-                                 size_t environment_count)
-{
-    if (!environment || !environment_count)
-        return th_generalize(ctx, t);
-
-    core_dict_t fixed;
-    core_dict_init(&fixed, nullptr, nullptr);
-    for (size_t i = 0; i < environment_count; i++) {
-        th_type **vars = nullptr;
-        size_t nvars = th_free_vars(ctx, environment[i], &vars);
-        for (size_t j = 0; j < nvars; j++)
-            core_dict_put(&fixed, vars[j], 1);
-    }
-
-    th_type **candidates = nullptr;
-    size_t count = th_free_vars(ctx, t, &candidates);
-    th_type **generalizable = th_alloc(ctx,
-        (count ? count : 1) * sizeof(th_type *));
-    size_t n_generalizable = 0;
-    for (size_t i = 0; i < count; i++) {
-        bool is_fixed = false;
-        core_dict_get(&fixed, candidates[i], &is_fixed);
-        if (!is_fixed)
-            generalizable[n_generalizable++] = candidates[i];
-    }
-    core_dict_free(&fixed);
-    return generalize_vars(ctx, t, generalizable, n_generalizable);
-}
-
-bool th_implements(th_ctx *ctx, th_type *type, core_string_t iface)
-{
-    th_type *resolved = type ? th_resolve(type) : nullptr;
-
-    if (!ctx || !resolved || !iface.data) {
-        return false;
-    }
-    if (resolved->kind == TH_VAR) {
-        return false;
-    }
-
-    return th_ctx_environment(ctx) && th_env_implements(ctx, type, iface);
-}
 

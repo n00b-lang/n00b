@@ -506,9 +506,6 @@ static th_env *th_env_compose_diagnose_in_context(
     const th_env *const *environments, size_t count, th_ctx *types,
     th_env_compose_error_t *error);
 
-th_env *th_env_compose(const th_env *const *environments, size_t count) {
-  return th_env_compose_diagnose(environments, count, nullptr);
-}
 
 static void report_compose_error(core_diagnostics_t *diagnostics,
                                  const th_env_compose_error_t *error) {
@@ -567,13 +564,6 @@ static void report_compose_error(core_diagnostics_t *diagnostics,
                           core_string_borrow(message, size));
 }
 
-th_env *th_env_compose_report(const th_env *const *environments, size_t count,
-                              core_diagnostics_t *diagnostics,
-                              th_env_compose_error_t *error) {
-  return th_env_compose_report_in_context(environments, count, nullptr,
-                                          diagnostics, error);
-}
-
 th_env *th_env_compose_report_in_context(
     const th_env *const *environments, size_t count, th_ctx *types,
     core_diagnostics_t *diagnostics, th_env_compose_error_t *error) {
@@ -584,11 +574,6 @@ th_env *th_env_compose_report_in_context(
   return result;
 }
 
-th_env *th_env_compose_diagnose(const th_env *const *environments,
-                                size_t count, th_env_compose_error_t *error) {
-  return th_env_compose_diagnose_in_context(environments, count, nullptr,
-                                            error);
-}
 
 static th_type *
 composition_type(const th_env *source, th_env *destination,
@@ -797,13 +782,6 @@ bool th_env_register_type_shape(th_env *env, core_string_t name,
   return same_type_pattern(origin->shape, shape);
 }
 
-bool th_env_register_trait(th_env *env, core_string_t name,
-                           core_string_t module, core_string_t package,
-                           th_env_visibility_t visibility, th_type *methods) {
-  return th_env_register_trait_channels(env, name, module, package,
-                                        visibility, methods, nullptr);
-}
-
 static th_type *fresh_pattern(th_ctx *ctx, th_type *type) {
   if (!ctx || !type) return nullptr;
   return th_kind_of(th_resolve(type)) == TH_BINDER
@@ -852,63 +830,6 @@ bool th_env_signature_channels(th_ctx *ctx, th_type *contract,
   if (error_type) *error_type = nullptr;
   return ctx && contract && signature_channels_raw(
       ctx, fresh_pattern(ctx, contract), signature, error_type);
-}
-
-bool th_env_register_trait_channels(th_env *env, core_string_t name,
-                                    core_string_t module,
-                                    core_string_t package,
-                                    th_env_visibility_t visibility,
-                                    th_type *methods, th_type *errors) {
-  if (!env || env->frozen || !name.u8_bytes || !module.data ||
-      !package.data ||
-      !methods || visibility > TH_ENV_PUBLIC ||
-      th_kind_of(methods) != TH_RECORD || !th_record_len(methods) ||
-      trait_named(env, name))
-    return false;
-  core_list_t(th_member) default_errors = core_list_new(th_member);
-  if (!errors) {
-    for (size_t i = 0; i < th_record_len(methods); i++) {
-      const th_member *member = th_record_member(methods, i);
-      core_list_push(default_errors, ((th_member){
-          .name = member->name,
-          .type = th_nil(env->types),
-      }));
-    }
-    errors = th_record(env->types, default_errors.data, default_errors.len);
-  }
-  if (!errors || th_kind_of(errors) != TH_RECORD ||
-      th_record_len(errors) != th_record_len(methods)) {
-    core_list_free(default_errors);
-    return false;
-  }
-  core_list_t(th_member) contracts = core_list_new(th_member);
-  for (size_t i = 0; i < th_record_len(methods); i++) {
-    const th_member *member = th_record_member(methods, i);
-    th_type *error = member ? th_record_lookup(errors, member->name) : nullptr;
-    th_type *contract = member && error
-        ? th_env_signature_contract(env->types, member->type, error) : nullptr;
-    th_type *signature = nullptr;
-    if (contract)
-      th_env_signature_channels(env->types, contract, &signature, nullptr);
-    th_type *receiver = first_parameter(signature);
-    if (!receiver || !error ||
-        th_resolve(receiver)->kind != TH_VAR ||
-        th_resolve(receiver)->var.ref)
-    {
-      core_list_free(contracts);
-      core_list_free(default_errors);
-      return false;
-    }
-    core_list_push(contracts,
-        ((th_member){.name = member->name, .type = contract}));
-  }
-  th_type *contract_record =
-      th_record(env->types, contracts.data, contracts.len);
-  bool registered = th_env_register_trait_contracts(
-      env, name, module, package, visibility, contract_record);
-  core_list_free(contracts);
-  core_list_free(default_errors);
-  return registered;
 }
 
 bool th_env_register_trait_contracts(th_env *env, core_string_t name,
@@ -1671,19 +1592,6 @@ static bool visible_to(const th_ctx *ctx, th_env_visibility_t visibility,
   if (visibility == TH_ENV_PACKAGE)
     return ctx->package.data && core_string_eq(ctx->package, package);
   return ctx->module.data && core_string_eq(ctx->module, module);
-}
-
-bool th_env_type_visible(const th_ctx *ctx, core_string_t name) {
-  if (!ctx || !ctx->environment || !name.data)
-    return false;
-  const th_env *env = ctx->environment;
-  for (size_t i = 0; i < env->type_origins.len; i++) {
-    const th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (core_string_eq(origin->name, name))
-      return visible_to(ctx, origin->visibility, origin->module,
-                        origin->package);
-  }
-  return false;
 }
 
 th_type *th_env_type_shape(const th_ctx *ctx, core_string_t name,

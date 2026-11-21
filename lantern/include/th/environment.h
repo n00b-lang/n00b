@@ -108,12 +108,6 @@ th_env *th_env_new(void);
 th_env *th_env_new_in_context(th_ctx *types);
 void th_env_free(th_env *environment);
 
-th_env *th_env_compose(const th_env *const *environments, size_t count);
-th_env *th_env_compose_diagnose(const th_env *const *environments,
-                                size_t count, th_env_compose_error_t *error);
-th_env *th_env_compose_report(const th_env *const *environments, size_t count,
-                              core_diagnostics_t *diagnostics,
-                              th_env_compose_error_t *error);
 th_env *th_env_compose_report_in_context(
     const th_env *const *environments, size_t count, th_ctx *types,
     core_diagnostics_t *diagnostics, th_env_compose_error_t *error);
@@ -151,13 +145,6 @@ bool th_env_register_type_shape(th_env *environment,
 th_type *th_env_type_shape(const th_ctx *context,
                            core_string_t qualified_type_name,
                            th_env_type_shape_kind_t *shape_kind);
-bool th_env_register_trait(th_env *environment, core_string_t qualified_name,
-                           core_string_t module, core_string_t package,
-                           th_env_visibility_t visibility, th_type *methods);
-bool th_env_register_trait_channels(
-    th_env *environment, core_string_t qualified_name, core_string_t module,
-    core_string_t package, th_env_visibility_t visibility, th_type *methods,
-    th_type *errors);
 bool th_env_register_trait_contracts(
     th_env *environment, core_string_t qualified_name, core_string_t module,
     core_string_t package, th_env_visibility_t visibility,
@@ -223,8 +210,6 @@ bool th_ctx_set_environment(th_ctx *context, const th_env *environment,
 const th_env *th_ctx_environment(const th_ctx *context);
 bool th_ctx_set_environment_scope(th_ctx *context, core_string_t module,
                                  core_string_t package);
-bool th_env_type_visible(const th_ctx *context,
-                         core_string_t qualified_type_name);
 bool th_env_implements(th_ctx *context, th_type *receiver,
                        core_string_t trait_name);
 th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,

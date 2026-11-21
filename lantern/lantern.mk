@@ -34,8 +34,7 @@ LANTERN_TESTS := ir/span ir/diag \
     lib/object_archive lib/native_archive lib/object_emit lib/object_section \
     lib/variant lib/result \
     logic/datalog \
-    types/solver \
-    th/cycle th/nest_tmp th/infer_cycle th/constraint th/environment th/match \
+    th/nest_tmp th/constraint th/match \
     parse/pwz parse/ambiguity parse/commander parse/compose parse/tree_print \
     parse/symtab_binding parse/rewrite parse/generic_print \
     parse/bnf parse/annot parse/bnf_print parse/grammars parse/format \

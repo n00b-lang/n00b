@@ -335,20 +335,6 @@ bool ty_declare_trait(ty_solver_t *s, core_string_t trait,
     return ok;
 }
 
-bool ty_declare_method(ty_solver_t *s, th_type *type, core_string_t method)
-{
-    if (!s || !type || !method.data) {
-        return false;
-    }
-
-    core_datalog_symbol_t row[] = {key_of(s, th_resolve(type)),
-                                   word(s, method)};
-
-    s->dirty = true;
-
-    return core_datalog_add_fact(s->logic, s->method, 2, row);
-}
-
 static bool exact_sequence(ty_solver_t *s, th_type *t)
 {
     return th_kind_of(t) == TH_SEQUENCE
@@ -373,36 +359,6 @@ bool ty_declare_impl(ty_solver_t *s, th_type *type, core_string_t trait)
     return core_datalog_add_fact(s->logic, s->impl, 2, row);
 }
 
-bool ty_declare_operator(ty_solver_t *s, core_string_t op, th_type *left,
-                         th_type *right, th_type *result)
-{
-    if (!s || !op.data || !left || !right || !result) {
-        return false;
-    }
-
-    core_datalog_symbol_t row[] = {
-        word(s, op), key_of(s, th_resolve(left)), key_of(s, th_resolve(right)),
-        core_datalog_integer(s->logic, (int64_t)s->results.len)};
-
-    core_list_push(s->results, result);
-    s->dirty = true;
-
-    return core_datalog_add_fact(s->logic, s->operators, 4, row);
-}
-
-th_type *ty_fresh(ty_solver_t *s, ty_origin_t origin)
-{
-    th_type *var = s ? th_var(s->types) : nullptr;
-
-    if (var && (origin.value || origin.symbol)) {
-        ty_origin_t *kept = core_alloc(ty_origin_t);
-
-        *kept = origin;
-        core_dict_put(&s->origins, var, kept);
-    }
-
-    return var;
-}
 
 static void fail(ty_solver_t *s, ty_fail_kind_t kind, ty_why_t why,
                  th_type *expected, th_type *actual, const ty_pred_t *pred)
@@ -1607,30 +1563,6 @@ bool ty_require(ty_solver_t *s, ty_pred_t pred, ty_why_t why)
     return s->failures.len == before;
 }
 
-th_type *ty_refine(ty_solver_t *s, th_type *t, th_type *to, ty_why_t why)
-{
-    if (!s || !t || !to) {
-        return nullptr;
-    }
-
-    th_type *from = th_resolve(t);
-    th_type *item = th_option_item(from);
-    th_type *want = th_resolve(to);
-
-    if (item && th_is_nil(want)) {
-        return want;
-    }
-    if (item && same(s, item, want, why)) {
-        return item;
-    }
-    if (!item && same(s, from, want, why)) {
-        return from;
-    }
-    fail(s, TY_FAIL_REFINE, why, from, want, nullptr);
-
-    return nullptr;
-}
-
 static void default_nils(ty_solver_t *s)
 {
     for (size_t i = 0; i < s->nils.len; i++) {
@@ -2146,42 +2078,6 @@ th_type *ty_instantiate(ty_solver_t *s, th_type *t, ty_why_t why)
     return copy;
 }
 
-th_type *ty_resolve(ty_solver_t *s, th_type *t)
-{
-    (void)s;
-
-    return th_resolve(t);
-}
-
-void ty_explain(ty_solver_t *s, th_type *t, core_buffer_t *out)
-{
-    if (!s || !t || !out) {
-        return;
-    }
-
-    th_type *final = th_resolve(t);
-
-    for (size_t i = 0; i < s->events.len; i++) {
-        event_t *e = &s->events.data[i];
-
-        if (th_resolve(e->var) != final && e->var != t) {
-            continue;
-        }
-
-        core_string_t to = th_print(s->types, e->to);
-
-        core_buffer_printf(out, "R%u", (unsigned)e->why.rule);
-        if (e->why.at && e->why.at->block) {
-            core_buffer_puts(out, " at ");
-            core_buffer_append_string(out, e->why.at->block->name);
-            core_buffer_printf(out, "#%u", e->why.at->index);
-        }
-        core_buffer_puts(out, ": ");
-        core_buffer_append_string(out, to);
-        core_buffer_puts(out, "\n");
-    }
-}
-
 size_t ty_failure_count(const ty_solver_t *s)
 {
     return s ? s->failures.len : 0;
@@ -2190,17 +2086,6 @@ size_t ty_failure_count(const ty_solver_t *s)
 const ty_failure_t *ty_failure_at(const ty_solver_t *s, size_t i)
 {
     return s && i < s->failures.len ? &s->failures.data[i] : nullptr;
-}
-
-size_t ty_pending_count(const ty_solver_t *s)
-{
-    size_t open = 0;
-
-    for (size_t k = 0; s && k < s->live.len; k++) {
-        open += !s->pending.data[s->live.data[k]].settled;
-    }
-
-    return open;
 }
 
 static bool open_pending(ty_solver_t *s, const pending_t *p,

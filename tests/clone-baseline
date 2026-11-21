@@ -518,7 +518,6 @@ d91a32c4ac936fd9	2	pending	lantern/src/th/environment_codec.c
 e2a1f755f98eda1f	2	pending	lantern/src/th/environment_codec.c
 259516fd657e92a1	2	pending	lantern/src/th/scheme.c
 ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
-0fb8960c60978ec4	2	pending	lantern/src/th/typehash.c
 5b768a5a9d0d2a06	2	false-positive	lib/builtin/containers/dict.n:259 public entries_in_key_order and entries_in_value_order wrappers that differ only in the comparator
 1f638cb84eb69520	2	pending	lib/builtin/floating.n
 28f2d2260a904b10	2	pending	lib/builtin/floating.n

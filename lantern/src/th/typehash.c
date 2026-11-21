@@ -336,24 +336,6 @@ th_type_clone_fresh(th_ctx *destination, const th_type *source)
     return copy;
 }
 
-bool
-th_type_clone_many(th_ctx *destination, const th_type *const *sources,
-                   th_type **copies, size_t count)
-{
-    if (!destination || (count && (!sources || !copies))) return false;
-    core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
-    bool ok = true;
-    for (size_t i = 0; i < count; i++) {
-        copies[i] = clone_type_graph(destination, sources[i], &seen);
-        if (sources[i] && !copies[i]) {
-            ok = false;
-            break;
-        }
-    }
-    core_list_free(seen);
-    return ok;
-}
-
 struct th_type_cloner {
     th_ctx *destination;
     core_list_t(th_clone_entry_t) seen;
@@ -1637,28 +1619,6 @@ th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
         if (!valid) return nullptr;
     }
     return t;
-}
-
-th_type *th_record_stub(th_ctx *ctx)
-{
-    return node(ctx, TH_RECORD);
-}
-
-void th_record_fill(th_ctx *ctx, th_type *stub, const th_member *m, size_t n)
-{
-    stub->ground = 0;
-    stub->hashed = false;
-    stub->record.n       = n;
-    stub->record.members = nullptr;
-
-    if (n) {
-        stub->record.members = th_alloc(ctx, n * sizeof(th_member));
-
-        for (size_t i = 0; i < n; i++) {
-            stub->record.members[i].name = th_strdup(ctx, m[i].name);
-            stub->record.members[i].type = m[i].type;
-        }
-    }
 }
 
 th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
