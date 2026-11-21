@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "qualified_names.h"

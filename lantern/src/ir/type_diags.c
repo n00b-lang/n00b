@@ -1,5 +1,4 @@
 #include "private/ir/internal.h"
-#include "ir/typelang.h"
 #include "ir/text.h"
 #include "ir/diag.h"
 

@@ -5,7 +5,6 @@
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/text.h"
-#include "ir/typelang.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/verify.h"

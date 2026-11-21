@@ -83,7 +83,6 @@ double n00bb_profile_seconds(void);
 #include "ir/doms.h"
 #include "ir/analyze.h"
 #include "ir/layout.h"
-#include "ir/typelang.h"
 #include "th/environment.h"
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"

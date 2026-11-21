@@ -2,7 +2,6 @@
 #include "ir/analyses.h"
 #include "ir/pdg.h"
 #include "ir/pdg_memory.h"
-#include "ir/typelang.h"
 #include "ir/vn.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"

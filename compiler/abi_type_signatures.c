@@ -3,7 +3,6 @@
 #include <limits.h>
 #include <string.h>
 
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 

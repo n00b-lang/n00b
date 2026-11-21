@@ -162,7 +162,6 @@ double n00bb_profile_seconds(void);
 
 #include "ir/layout.h"
 
-#include "ir/typelang.h"
 
 #include "th/environment.h"
 

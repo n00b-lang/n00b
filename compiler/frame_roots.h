@@ -14,7 +14,6 @@
 #include "ir/summary.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
-#include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/typehash.h"
 

@@ -2,7 +2,6 @@
 
 #include <limits.h>
 #include <string.h>
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/indexed_table.h"

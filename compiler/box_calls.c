@@ -9,7 +9,6 @@
 #include "sequence_transfer.h"
 #include "ir/layout.h"
 #include "ir/pass.h"
-#include "ir/typelang.h"
 #include "lib/buffer.h"
 
 typedef struct {

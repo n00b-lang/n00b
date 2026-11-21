@@ -6,7 +6,6 @@
 #include "ir/doms.h"
 #include "ir/places.h"
 #include "ir/summary.h"
-#include "ir/typelang.h"
 #include "ir/layout.h"
 #include "lib/dict.h"
 

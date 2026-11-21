@@ -883,7 +883,6 @@ func write_graph(graph: Ref[Graph]) {
             write_word(cast[u64]node.size, 8)
             write_word(cast[u64]node.alignment, 4)
             write_word(node.typehash, 8)
-            write_type_name(node.type_index)
             write_word(cast[u64]node.flags, 4)
             write_block(node.base, node.size)
         }
@@ -1036,14 +1035,6 @@ func write_failure(graph: Ref[Graph]) {
     write_string(unsafe_cast[Ref[byte]] (ref failure.message))
 }
 
-func write_type_name(type_index: u32) {
-    if type_index == 0 {
-        write_word(0, 8)
-        return
-    }
-    write_string(unsafe_cast[Ref[byte]] (ref type_row(type_index).__value.canonical_name))
-}
-
 func write_slot(slot: Graph_Slot) {
     write_word(cast[u64]slot.node, 4)
     write_word(cast[u64]slot.offset, 8)
@@ -1057,7 +1048,6 @@ func write_slot(slot: Graph_Slot) {
     }
     if slot.table == internal.abi.table_type {
         write_word(type_row(slot.index).__value.typehash, 8)
-        write_type_name(slot.index)
         return
     }
     let found: Ref[internal.abi.Function_Record]? = internal.abi.function_at(

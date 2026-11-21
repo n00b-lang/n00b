@@ -767,14 +767,6 @@ trace_node(graph_t *graph, uint32_t index)
 }
 
 static bool
-put_type_name(const graph_t *graph, uint32_t type_index)
-{
-    const n00b_abi_type_v1 *row = type_row(type_index);
-    return row ? put_abi_string(graph, &row->canonical_name)
-               : put_word(0, 8);
-}
-
-static bool
 put_slot(const graph_t *graph, const slot_t *slot)
 {
     bool ok = put_word(slot->node, 4) && put_word(slot->offset, 8)
@@ -801,8 +793,7 @@ put_slot(const graph_t *graph, const slot_t *slot)
     }
     if (slot->table == N00B_ABI_TABLE_TYPE) {
         const n00b_abi_type_v1 *row = type_row(slot->index);
-        return row && put_word(row->typehash, 8)
-            && put_type_name(graph, slot->index);
+        return row && put_word(row->typehash, 8);
     }
     const n00b_abi_function_v1 *function = n00b_builtin_abi_function(
         slot->index);
@@ -822,7 +813,6 @@ put_graph(const graph_t *graph, const n00b_abi_module_v1 *module)
         const n00b_abi_type_v1 *row = type_row(node->type_index);
         ok = put_word(node->size, 8) && put_word(node->alignment, 4)
             && put_word(row ? row->typehash : 0, 8)
-            && put_type_name(graph, node->type_index)
             && put_word(node->flags, 4) && put(node->base, node->size);
     }
     ok = ok && put_word(graph->edges.count, 8);

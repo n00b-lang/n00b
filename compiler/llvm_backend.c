@@ -10,7 +10,6 @@
 #include "ir/liveness.h"
 #include "ir/abcd.h"
 #include "ir/shape.h"
-#include "ir/typelang.h"
 #include "th/environment.h"
 #include "abi_layout.h"
 #include "abi_string.h"
