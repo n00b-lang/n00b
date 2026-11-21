@@ -41,6 +41,7 @@ typedef struct {
     core_string_t package_namespace;
     bool is_default_package;
     bool interface_module;
+    bool linked_library;
     bool open_module;
     n00bb_native_declarations_t natives;
     core_string_t generated_owner;
@@ -772,12 +773,13 @@ n00bb_resolver_same_root(const n00bb_resolver_t *resolver,
 
 void
 n00bb_source_file_mark_interface(core_source_file_t *source,
-                                 uint64_t source_hash)
+                                 uint64_t source_hash, bool linked_library)
 {
     n00bb_source_origin_t *origin = source
         ? core_source_file_user_data(source) : nullptr;
     if (!origin) return;
     origin->interface_module = true;
+    origin->linked_library = linked_library;
     core_source_file_set_identity(source, source_hash);
 }
 
@@ -808,6 +810,14 @@ n00bb_source_file_is_interface(const core_source_file_t *source)
     const n00bb_source_origin_t *origin = source
         ? core_source_file_user_data(source) : nullptr;
     return origin && origin->interface_module;
+}
+
+bool
+n00bb_source_file_is_linked_library(const core_source_file_t *source)
+{
+    const n00bb_source_origin_t *origin = source
+        ? core_source_file_user_data(source) : nullptr;
+    return origin && origin->linked_library;
 }
 
 core_string_t

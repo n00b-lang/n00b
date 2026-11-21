@@ -249,7 +249,7 @@ bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
 
 typedef struct th_type_writer th_type_writer_t;
 typedef struct th_type_reader th_type_reader_t;
-th_type_writer_t *th_type_writer_new(void);
+th_type_writer_t *th_type_writer_new(th_ctx *ctx);
 uint32_t th_type_writer_add(th_type_writer_t *writer, const th_type *type);
 bool th_type_writer_finish(th_type_writer_t *writer, core_buffer_t *out);
 void th_type_writer_free(th_type_writer_t *writer);
@@ -335,10 +335,7 @@ th_type *th_builtin_item(th_ctx *ctx, const th_type *type,
 
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
 size_t   th_generic_arity(th_ctx *ctx, core_string_t name);
-bool     th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
-                              void *owner);
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
-void    *th_type_definition_owner(th_ctx *ctx, const th_type *type);
 th_type *th_auto_deref(th_ctx *ctx, th_type *type);
 th_type *th_fields_record(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
@@ -468,8 +465,6 @@ bool     th_is_poison(const th_type *type);
 bool     th_mentions_poison(th_type *type);
 size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
-th_type *th_text_type(th_ctx *ctx, core_string_t text);
-void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
 bool     th_match(th_type *pattern, th_type *concrete);

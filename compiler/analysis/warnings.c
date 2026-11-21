@@ -237,8 +237,7 @@ warn_dead_type_arms(n00bb_link_analysis_t *analysis)
             ? state->ir_module : nullptr;
         for (size_t f = 0; module && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
-            if (th_is_closed(ir_module_types(module), function->type)
-                || !n00bb_instantiated(function))
+            if (th_is_closed(ir_module_types(module), function->type))
                 continue;
             for (uint32_t b = 0; b < function->n_blocks; b++) {
                 ir_instr_t *term = ir_block_terminator(function->blocks[b]);
@@ -248,8 +247,16 @@ warn_dead_type_arms(n00bb_link_analysis_t *analysis)
                 ir_instr_t *test = condition ? condition->def : nullptr;
                 if (!test || test->op != IR_OP_TYPE_TEST
                     || n00bb_static_type_test(test) >= 0) continue;
-                uint64_t seen = n00bb_type_test_outcomes(test);
-                int dead = !(seen & 2) ? 0 : seen == 2 ? 1 : -1;
+                uint32_t seen = 0;
+                for (size_t s = 0; s < analysis->specializations.len; s++) {
+                    const n00bb_specialization_t *item =
+                        &analysis->specializations.data[s];
+                    if (item->generic == function)
+                        seen |= 4 | (b < item->outcomes.len
+                                     ? item->outcomes.data[b] : 0);
+                }
+                int dead = !seen ? -1 : !(seen & 2) ? 0
+                    : (seen & 3) == 2 ? 1 : -1;
                 const ir_instr_t *site = dead >= 0
                     ? first_user_instruction(ir_succ_at(term, dead), test)
                     : nullptr;
@@ -1062,9 +1069,9 @@ static void
 report_race(void *context, const ir_race_t *race)
 {
     n00bb_link_analysis_t *analysis = context;
-    core_translation_unit_t *unit = unit_for_ir_module(analysis,
+    core_translation_unit_t *unit = n00bb_visibility_unit(analysis,
         race->site->block->owner->owner);
-    if (!unit || tu_state(unit)->interface_module) return;
+    if (!unit || n00bb_source_file_is_linked_library(&unit->source)) return;
     core_string_t global = n00bb_name_leaf(race->place.global->name);
     report_at(unit, N00B_DIAG_DATA_RACE, race->site,
               race->self ? N00B_TEXT_RACE_SAME_ENTRY : N00B_TEXT_RACE,
@@ -1098,12 +1105,17 @@ warn_shared_global_races(n00bb_link_analysis_t *analysis,
     core_dict_init(&seen, nullptr, nullptr);
     core_list_t(n00bb_ir_func_ptr_t) everything =
         core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t f = 0; f < analysis->emitted_functions.len; f++)
-        if (core_dict_add(&seen, analysis->emitted_functions.data[f], 1))
-            core_list_push(everything, analysis->emitted_functions.data[f]);
-    for (size_t f = 0; f < main_roots.len; f++)
-        if (core_dict_add(&seen, main_roots.data[f], 1))
-            core_list_push(everything, main_roots.data[f]);
+    core_list_t(n00bb_ir_func_ptr_t) bodies =
+        core_list_new(n00bb_ir_func_ptr_t);
+    n00bb_unit_bodies(analysis, &bodies);
+    const core_list_t(n00bb_ir_func_ptr_t) *lists[] = {
+        &analysis->emitted_functions, &bodies, &main_roots,
+    };
+    for (size_t l = 0; l < sizeof(lists) / sizeof(*lists); l++)
+        for (size_t f = 0; f < lists[l]->len; f++)
+            if (core_dict_add(&seen, lists[l]->data[f], 1))
+                core_list_push(everything, lists[l]->data[f]);
+    core_list_free(bodies);
     for (size_t f = 0; f < everything.len; f++) {
         ir_func_t *function = everything.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)

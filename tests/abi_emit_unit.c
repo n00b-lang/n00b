@@ -143,7 +143,7 @@ check_type_descriptor_storage(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t types_rows = {0};
     assert(names && n00bb_abi_type_identity_rows_build(index,
-        runtime, false, symbols, nullptr, nullptr, names, &types_rows));
+        runtime, symbols, nullptr, nullptr, names, &types_rows));
     n00bb_abi_decl_index_t *declarations = n00bb_abi_decl_index_new(symbols);
     assert(declarations && n00bb_abi_decl_symbol_count(declarations) == 2);
     assert(n00bb_abi_decl_symbol_at(declarations, 1) == symbol);

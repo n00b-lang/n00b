@@ -165,7 +165,8 @@ plain_call(const ir_instr_t *call, const call_targets_t *targets, bool hooked)
         ? ir_operand_value(&call->operands[0]) : nullptr;
     return hooked && !targets->unknown && targets->targets.len == 1
         && callee && callee->kind == IR_VAL_FUNC
-        && callee->owner == targets->targets.data[0];
+        && ir_func_definition(callee->owner)
+            == ir_func_definition(targets->targets.data[0]);
 }
 
 static void
@@ -398,13 +399,6 @@ stored_deps_hold(ir_summaries_t *summaries, const ir_summary_t *summary,
     return holds;
 }
 
-static void
-put_u64(core_buffer_t *out, uint64_t value)
-{
-    put_u32(out, (uint32_t)value);
-    put_u32(out, (uint32_t)(value >> 32));
-}
-
 static uint64_t
 get_u64(summary_reader_t *r)
 {
@@ -459,26 +453,29 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
         put_u64(out, stable_content(target_summary(summaries,
                                                    (ir_func_t *)dep)));
     }
-    put_u32(out, (uint32_t)summary->inputs.len);
+    type_sink_t types = {ir_module_types(function->owner), nullptr};
+    types.writer = th_type_writer_new(types.ctx);
+    core_buffer_t listed = {0};
+    put_u32(&listed, (uint32_t)summary->inputs.len);
     for (size_t i = 0; i < summary->inputs.len; i++) {
         const summary_input_t *input = &summary->inputs.data[i];
-        put_u8(out, input->kind);
-        put_u32(out, input->site);
-        put_function(out, texts, input->caller);
-        put_function(out, texts, input->function);
-        put_global(out, texts, input->global);
-        put_text(out, texts, input->module
+        put_u8(&listed, input->kind);
+        put_u32(&listed, input->site);
+        put_function(&listed, texts, input->caller);
+        put_function(&listed, texts, input->function);
+        put_global(&listed, texts, input->global);
+        put_text(&listed, texts, input->module
             ? ir_module_name((ir_module_t *)input->module)
             : (core_string_t){0});
-        th_ctx *types = input->module
-            ? ir_module_types((ir_module_t *)input->module) : nullptr;
-        put_text(out, texts, types && input->from
-            ? ir_types_text(types, input->from) : (core_string_t){0});
-        put_text(out, texts, types && input->to
-            ? ir_types_text(types, input->to) : (core_string_t){0});
-        put_text(out, texts, input->effect);
-        put_u64(out, input->answer);
+        put_type(&listed, &types, input->from);
+        put_type(&listed, &types, input->to);
+        put_text(&listed, texts, input->effect);
+        put_u64(&listed, input->answer);
     }
+    ok = th_type_writer_finish(types.writer, out) && ok;
+    th_type_writer_free(types.writer);
+    core_buffer_append(out, listed.data, listed.byte_len);
+    core_buffer_release(&listed);
     return ok;
 }
 
@@ -518,6 +515,13 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         dep.stable = get_u64(&r);
         core_list_push(summary->deps, dep);
     }
+    size_t consumed = 0;
+    r.type_table = !r.failed && function && function->owner
+        ? th_type_reader_open(ir_module_types(function->owner),
+                              data + r.at, size - r.at, &consumed)
+        : nullptr;
+    if (!r.type_table) r.failed = true;
+    r.at += consumed;
     uint32_t inputs = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < inputs; i++) {
         summary_input_t input = {.kind = get_u8(&r)};
@@ -544,16 +548,8 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
                 : nullptr;
             if (!input.module) r.failed = true;
         }
-        th_ctx *types = input.module
-            ? ir_module_types((ir_module_t *)input.module) : nullptr;
-        core_string_t from = get_text(&r);
-        core_string_t to   = get_text(&r);
-        if (from.u8_bytes && !r.failed)
-            input.from = types ? ir_type_from_text(types, from) : nullptr;
-        if (to.u8_bytes && !r.failed)
-            input.to = types ? ir_type_from_text(types, to) : nullptr;
-        if ((from.u8_bytes && !input.from) || (to.u8_bytes && !input.to))
-            r.failed = true;
+        input.from = get_type(&r);
+        input.to   = get_type(&r);
         core_string_t effect = get_text(&r);
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};
@@ -561,6 +557,7 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         if (input.kind > SUMMARY_INPUT_ENTRY_ACCESS) r.failed = true;
         if (!r.failed) core_list_push(summary->inputs, input);
     }
+    th_type_reader_free(r.type_table);
     if (r.failed || r.at != r.size || !summary->stable) {
         summary_free(summary);
         return nullptr;

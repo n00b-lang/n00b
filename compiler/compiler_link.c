@@ -4048,6 +4048,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_free(analysis->failed_regions.data[i].module.data);
     core_list_free(analysis->failed_regions);
     core_list_free(analysis->dead_regions);
+    if (analysis->library_summaries != analysis->summaries)
+        ir_summaries_free(analysis->library_summaries);
     ir_summaries_free(analysis->summaries);
     ir_summaries_free(analysis->escapes);
     ir_group_pdg_free(analysis->program);
@@ -4101,6 +4103,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->effect_natives);
     if (analysis->effect_functions_ready)
         core_dict_free(&analysis->effect_functions);
+    for (size_t i = 0; i < analysis->specializations.len; i++)
+        core_list_free(analysis->specializations.data[i].outcomes);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
     core_list_free(analysis->boxed_hooks.addresses);

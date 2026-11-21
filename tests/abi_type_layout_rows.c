@@ -34,10 +34,10 @@ main(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t identities = {0};
     assert(n00bb_abi_type_identity_rows_build(index, runtime,
-                                               false, nullptr, nullptr, nullptr,
+                                               nullptr, nullptr, nullptr,
                                                names, &identities));
     n00bb_abi_type_layout_rows_t layouts = {0};
-    assert(n00bb_abi_type_layout_rows_build(index, runtime, false, 1,
+    assert(n00bb_abi_type_layout_rows_build(index, runtime, 1,
                                              nullptr, names, &identities,
                                              &layouts, nullptr));
     assert(layouts.layout_count == 2 && layouts.run_count == 3
@@ -117,9 +117,9 @@ main(void)
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
     assert(n00bb_abi_type_identity_rows_build(index, runtime,
-        false, generic_symbols, nullptr, nullptr, names, &identities));
+        generic_symbols, nullptr, nullptr, names, &identities));
     layouts = (n00bb_abi_type_layout_rows_t){0};
-    assert(n00bb_abi_type_layout_rows_build(index, runtime, false, 1,
+    assert(n00bb_abi_type_layout_rows_build(index, runtime, 1,
         nullptr, names, &identities, &layouts, nullptr));
     assert((identities.rows[template_index].flags
             & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
@@ -151,10 +151,10 @@ main(void)
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
     assert(n00bb_abi_type_identity_rows_build(index, runtime,
-                                               false, nullptr, nullptr, nullptr,
+                                               nullptr, nullptr, nullptr,
                                                names, &identities));
     layouts = (n00bb_abi_type_layout_rows_t){0};
-    assert(n00bb_abi_type_layout_rows_build(index, runtime, false, 1,
+    assert(n00bb_abi_type_layout_rows_build(index, runtime, 1,
                                              nullptr, names, &identities,
                                              &layouts, nullptr));
     assert(layouts.run_count == 3 && layouts.stream_index_count == 2
@@ -221,12 +221,12 @@ main(void)
     names = n00bb_abi_name_pool_new();
     identities = (n00bb_abi_type_identity_rows_t){0};
     assert(n00bb_abi_type_identity_rows_build(index, runtime,
-        false, symbols, nullptr, nullptr, names, &identities));
+        symbols, nullptr, nullptr, names, &identities));
     n00bb_abi_decl_index_t *declarations =
         n00bb_abi_decl_index_new(symbols);
     layouts = (n00bb_abi_type_layout_rows_t){0};
     assert(declarations && n00bb_abi_type_layout_rows_build(index,
-        runtime, false, 1, declarations, names, &identities, &layouts,
+        runtime, 1, declarations, names, &identities, &layouts,
         nullptr));
     uint32_t field_symbol_index = 0, child_type_index = 0;
     assert(n00bb_abi_decl_find_symbol(declarations, field,

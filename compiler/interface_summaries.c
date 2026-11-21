@@ -493,6 +493,8 @@ n00bb_stored_summary(void *context, ir_summaries_t *summaries,
                      const ir_func_t *function)
 {
     n00bb_link_analysis_t *analysis = context;
+    if (analysis && analysis->program_layer)
+        return ir_summary_of(analysis->library_summaries, function);
     uint8_t phase = analysis ? analysis->summary_phase : 0;
     if (!phase || phase > 3 || !analysis->cache || !function
         || !function->n_blocks || !function->owner)

@@ -133,6 +133,8 @@ register_nominal_types(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->annotations || !state->annotations->symtab)
         return false;
+    core_list_t(parse_sym_entry_ptr_t) nominals =
+        core_list_new(parse_sym_entry_ptr_t);
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
          scope; scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -152,13 +154,21 @@ register_nominal_types(parse_grammar_t *grammar,
                 || (symbol->member_scope
                     && core_string_eq(symbol->member_scope->scope_tag,
                                       CORE_STRING_STATIC("flagset")));
-            if (!nominal && !scalar) continue;
-            th_type *representation = th_type_definition(state->types, symbol->type);
-            if (!representation || !ir_type_define(module, symbol->type,
-                                                    representation)) return false;
+            if (nominal || scalar) core_list_push(nominals, symbol);
         }
     }
-    return true;
+    if (imported && nominals.len > 1)
+        qsort(nominals.data, nominals.len, sizeof(*nominals.data),
+              n00bb_compare_symbol_names);
+    bool ok = true;
+    for (size_t i = 0; ok && i < nominals.len; i++) {
+        th_type *representation = th_type_definition(state->types,
+                                                     nominals.data[i]->type);
+        ok = representation && ir_type_define(module, nominals.data[i]->type,
+                                              representation);
+    }
+    core_list_free(nominals);
+    return ok;
 }
 
 static bool
@@ -1389,7 +1399,11 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         core_translation_unit_t *unit = units->data[i];
         for (size_t j = 0; j < units->len; j++) {
             if (units->data[i] == units->data[j]
-                || !n00bb_unit_reaches_import(unit, units->data[j])) continue;
+                || !n00bb_unit_reaches_import(unit, units->data[j])
+                || (tu_state(units->data[j])->interface_module
+                    && !n00bb_source_file_is_linked_library(
+                           &units->data[j]->source)))
+                continue;
             if (!register_imported_record_layouts(grammar, units->data[j],
                                                    tu_state(unit)->ir_module))
                 return ir_initialization_error(unit,
@@ -1568,11 +1582,16 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 bool polymorphic_contract = symbol->callable_contract
                     && !th_is_closed(state->types,
                                      symbol->callable_contract);
+                th_type *semantic = polymorphic_contract
+                    && !state->interface_module
+                    ? function_semantic_contract(grammar, unit, symbol)
+                    : nullptr;
+                if (semantic && th_hash(state->types, semantic)
+                        == th_hash(state->types, symbol->callable_contract))
+                    semantic = nullptr;
                 th_type *ir_callable_contract = th_func_collect_rest(
                     state->types,
-                    polymorphic_contract && !state->interface_module
-                        ? function_semantic_contract(grammar, unit, symbol)
-                        : symbol->callable_contract);
+                    semantic ? semantic : symbol->callable_contract);
                 if (new_function && function && polymorphic_contract
                     && (!ir_callable_contract
                         || !ir_func_set_callable_contract(

@@ -492,20 +492,23 @@ n00bb_summary_call_targets(void *context, const ir_instr_t *call,
                            ir_summary_target_fn add, void *sink)
 {
     body_targets_t bodies = {.add = add, .sink = sink};
+    bool closed = !n00bb_summary_open(context, call->block->owner->owner);
     if (call->op == IR_OP_CALLBACK_INVOKE)
         return bounded_call_target(context, call, add_body_target, &bodies)
-            || callback_targets(context, call, add_body_target, &bodies);
+            || (closed && callback_targets(context, call, add_body_target,
+                                           &bodies));
     ir_func_t *target = n00bb_direct_call_target(call);
     core_string_t trait = {0}, method = {0};
     if (target && n00bb_open_hook(call, &trait, &method))
-        return hook_targets(context, target, trait, method, add_body_target,
-                            &bodies)
+        return (closed && hook_targets(context, target, trait, method,
+                                       add_body_target, &bodies))
             || bounded_call_target(context, call, add_body_target, &bodies);
     if (!target)
-        return trait_targets(context, call, add_body_target, &bodies)
+        return (closed && trait_targets(context, call, add_body_target,
+                                        &bodies))
             || bounded_call_target(context, call, add_body_target, &bodies)
-            || function_value_targets(context, call, add_body_target,
-                                      &bodies);
+            || (closed && function_value_targets(context, call,
+                                                 add_body_target, &bodies));
     add(sink, target);
     return true;
 }
@@ -617,7 +620,10 @@ n00bb_summary_call_finalizers(void *context, const ir_instr_t *call,
             ir_func_t *finalizer = finalizers->data[f];
             th_type *receiver = finalized_receiver(finalizer);
             if (!receiver || th_kind_of(receiver) == TH_VAR
-                || !th_matches(receiver, type)) continue;
+                || !th_matches(receiver, type)
+                || (n00bb_summary_open(analysis, module)
+                    && !n00bb_module_sees(analysis, module,
+                                          finalizer->owner))) continue;
             add(sink, finalizer);
             if (!th_is_closed(types, receiver))
                 (void)th_match_each(receiver, type, note_finalized_type,
@@ -662,8 +668,18 @@ n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
         n00bb_link_analysis_t *analysis = context;
         ir_summary_t *summary = ir_summary_bounded(summaries, function,
             n00bb_bound_bits(function, N00BB_QUERY_FORBIDS_EFFECT));
+        bool open = n00bb_summary_open(analysis, function->owner);
         for (size_t e = 0; summary && e < analysis->user_effects.len; e++) {
             core_string_t name = analysis->user_effects.data[e].qualified;
+            int64_t dot = core_string_rfind_byte(name, '.');
+            core_translation_unit_t *declared = open && dot > 0
+                ? n00bb_unit_named(analysis,
+                                   core_string_slice(name, 0, (size_t)dot))
+                : nullptr;
+            if (open && (!declared || !tu_state(declared)->ir_module
+                         || !n00bb_module_sees(analysis, function->owner,
+                                tu_state(declared)->ir_module)))
+                continue;
             if (!analysis->user_effects.data[e].bits
                 && !n00bb_bound_names(function, N00BB_QUERY_FORBIDS_EFFECT,
                                       name))
@@ -755,12 +771,18 @@ n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
 
 const ir_summary_t *
 n00bb_summary_entries(void *context, ir_summaries_t *summaries,
-                      uint32_t flag)
+                      uint32_t flag, const ir_func_t *subject)
 {
     n00bb_link_analysis_t *analysis = context;
     if (analysis->entry_owner != summaries) {
         analysis->entry_owner = summaries;
+        analysis->open_entry = nullptr;
         for (size_t s = 0; s < 3; s++) analysis->entry_ready[s] = false;
+    }
+    if (subject && n00bb_summary_open(analysis, subject->owner)) {
+        if (!analysis->open_entry)
+            analysis->open_entry = ir_summary_conservative(summaries, nullptr);
+        return analysis->open_entry;
     }
     size_t slot = flag == IR_SUMMARY_CALLS_FINALIZERS ? 0
         : flag == IR_SUMMARY_STARTS_THREADS ? 1 : 2;
@@ -1353,9 +1375,15 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
 void
 dump_function_summaries(n00bb_link_analysis_t *analysis)
 {
-    for (size_t f = 0; f < analysis->reachable_functions.len; f++)
-        dump_function_summary(analysis->summaries,
-            n00bb_cached_body(analysis->reachable_functions.data[f]), false);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    for (size_t f = 0; f < analysis->reachable_functions.len; f++) {
+        ir_func_t *body = n00bb_cached_body(
+            analysis->reachable_functions.data[f]);
+        if (core_dict_add(&seen, body, body))
+            dump_function_summary(analysis->summaries, body, false);
+    }
+    core_dict_free(&seen);
 }
 
 static int

@@ -28,6 +28,7 @@
 #include "qualified_names.h"
 #include "compiler_object_io.h"
 #include "abi_emit.h"
+#include "compiler_axioms.h"
 #include "abi_link.h"
 #include "abi_semantics.h"
 #include "global_metadata.h"
@@ -37,6 +38,7 @@
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
 #include "compiler_native_roots.h"
+#include "lower/lower_internal.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
@@ -365,8 +367,8 @@ n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
     if (!hooks->len) return true;
     *out = calloc(hooks->len, sizeof(**out));
     if (!*out) return false;
-    for (size_t b = 0; b < hooks->len; b++)
-        for (size_t t = 1; t < type_index_count; t++)
+    for (size_t t = 1; t < type_index_count && *out_count < hooks->len; t++)
+        for (size_t b = 0; b < hooks->len; b++)
             if (type_indices[t].typehash == hooks->data[b].typehash) {
                 (*out)[(*out_count)++] = (n00bb_llvm_finalizer_binding_t){
                     .type_index = (uint32_t)t,
@@ -471,6 +473,7 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
 
 typedef struct {
     bool has_user_native_objects;
+    n00bb_link_analysis_t *analysis;
 } n00bb_storage_origin_context_t;
 
 static bool
@@ -493,8 +496,11 @@ static bool
 n00bb_closed_callers(const ir_func_t *function, void *context)
 {
     const n00bb_storage_origin_context_t *origin = context;
-    if (!function || !function->owner || !origin
-        || origin->has_user_native_objects) return false;
+    core_translation_unit_t *unit = function && function->owner && origin
+        ? n00bb_visibility_unit(origin->analysis, function->owner) : nullptr;
+    if (!unit || origin->has_user_native_objects
+        || !n00bb_same_package(unit, origin->analysis->units.data[0]))
+        return false;
     if (core_string_eq(function->name, CORE_STRING_STATIC("__finalize"))
         || core_string_starts_with(function->name,
                                    CORE_STRING_STATIC("__finalize#")))
@@ -634,7 +640,7 @@ typedef struct {
     core_diagnostics_t *diagnostics;
     core_list_t(n00bb_cache_module_object_t) *kept;
     const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions;
-    const core_dict_t *mutator_decisions;
+    const n00bb_llvm_cached_facts_t *mutator_decisions;
 } module_emission_t;
 
 typedef struct {
@@ -662,6 +668,7 @@ typedef struct {
     core_diagnostics_t *diagnostics;
     double seconds;
     bool needs_native;
+    bool linked_indices;
     bool ok;
     bool done;
 } module_object_t;
@@ -689,10 +696,12 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
         analysis->target.enabled_features, module_diagnostics);
     item->backend = backend;
     if (!backend) return item->ok = false;
-    n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
+    n00bb_llvm_backend_bind_summaries(backend,
+        n00bb_summary_open(analysis, item->module)
+            ? analysis->library_summaries : analysis->summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);
-    core_string_t table_symbol = artifact
+    core_string_t table_symbol = artifact && !item->linked_indices
         ? artifact->index_table.symbol : (core_string_t){};
     if (table_symbol.u8_bytes && table_symbol.data[0] == '_'
         && analysis->target.object_format == CORE_TARGET_OBJECT_MACH_O)
@@ -1758,26 +1767,43 @@ static void
 cached_mutator_decisions(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
                          core_translation_unit_t *const *order, size_t count,
-                         core_dict_t *decisions)
+                         n00bb_llvm_cached_facts_t *facts)
 {
-    core_dict_init(decisions, nullptr, nullptr);
-    if (!analysis->cache) return;
+    core_dict_init(&facts->decisions, nullptr, nullptr);
+    core_dict_init(&facts->definitions, nullptr, nullptr);
+    facts->allocators = core_list_new(n00bb_llvm_func_ptr_t);
     n00bb_cache_module_object_t cached = {0};
     for (size_t i = 0; i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order[i]);
-        if (state->interface_module
-            && n00bb_cache_module_object(analysis->cache,
+        for (size_t f = 0; state->ir_module
+             && f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *body = n00bb_cached_body(ir_func_at(state->ir_module,
+                                                           f));
+            if (body && body->n_blocks && n00bb_axiom_function_has(body,
+                    N00BB_AXIOM_MUTATOR_ALLOCATOR))
+                core_list_push(facts->allocators, body);
+        }
+        if (!analysis->cache || !state->interface_module
+            || !n00bb_cache_module_object(analysis->cache,
                    ir_module_name(state->ir_module), &cached))
-            n00bb_llvm_mutator_decisions_add(decisions, state->ir_module,
-                core_string_borrow((const char *)cached.mutators,
-                                   cached.mutators_bytes));
+            continue;
+        n00bb_llvm_mutator_decisions_add(&facts->decisions, state->ir_module,
+            core_string_borrow((const char *)cached.mutators,
+                               cached.mutators_bytes));
+        ir_module_t *body = cached.ir;
+        for (size_t g = 0; body && g < ir_global_count(body); g++)
+            if (!ir_global_at(body, g)->is_extern)
+                core_dict_put(&facts->definitions,
+                    ir_global_identity(ir_global_at(body, g)),
+                    ir_global_at(body, g));
     }
-    for (size_t i = 0; i < analysis->specializations.len; i++) {
+    for (size_t i = 0; analysis->cache
+         && i < analysis->specializations.len; i++) {
         const n00bb_specialization_t *item =
             &analysis->specializations.data[i];
         if (n00bb_cache_instance_object(analysis->cache, link, analysis,
                                         item, &cached))
-            n00bb_llvm_mutator_decisions_add(decisions,
+            n00bb_llvm_mutator_decisions_add(&facts->decisions,
                 item->instance->owner,
                 core_string_borrow((const char *)cached.mutators,
                                    cached.mutators_bytes));
@@ -1904,7 +1930,7 @@ units_to_reemit(const n00bb_link_analysis_t *analysis,
         if (core_dict_contains(&listed, order[i])) continue;
         bool root = state->link
             && order[i] == core_link_unit_root(state->link, 0);
-        if (cached_generated_unit(order[i])
+        if (n00bb_generated_source(core_source_file_path(&order[i]->source))
             || (!state->interface_module
                 && (core_dict_contains(&stale, state->ir_module)
                     || (generated && root))))
@@ -1964,7 +1990,6 @@ emit_runtime_objects(core_link_unit_t *link,
                 emission->debug_enabled, emission->native_cpu,
                 &program->objects[modules + 3], diagnostics);
     }
-    bool *fresh = core_alloc_array(bool, program->object_slots);
     core_translation_unit_t *root = core_link_unit_root(link, 0);
     for (size_t u = 0; ok && u < units->len; u++) {
         size_t slot = 0;
@@ -1981,6 +2006,8 @@ emit_runtime_objects(core_link_unit_t *link,
                 ? view.payload : nullptr,
             .object_path = &path,
             .bitcode = emission->lto ? &bitcode : nullptr,
+            .linked_indices = n00bb_generated_source(
+                core_source_file_path(&order[slot]->source)),
         };
         ir_module_t *cached = cached_generated_unit(order[slot])
             ? n00bb_cache_module(emission->analysis->cache,
@@ -2017,11 +2044,13 @@ emit_runtime_objects(core_link_unit_t *link,
             unlink(program->objects[slot]);
             core_free(program->objects[slot]);
             program->objects[slot] = path;
-            fresh[slot] = true;
         }
     }
+    n00bb_native_frames_free(runtime.native_frames);
+    runtime.native_frames = n00bb_native_frames_new(
+        emission->analysis->target.object_format);
     for (size_t i = 0; ok && !emission->lto && i < modules; i++) {
-        if (!program->objects[i] || fresh[i]) continue;
+        if (!program->objects[i]) continue;
         core_string_t name = core_string_from_cstr(program->objects[i]);
         char *contents = nullptr;
         size_t size = 0;
@@ -2051,7 +2080,6 @@ emit_runtime_objects(core_link_unit_t *link,
     keep_runtime_objects(emission->kept, &runtime_kept);
     core_list_free(runtime_functions);
     core_list_free(reemitted);
-    core_free(fresh);
     if (!ok && !core_diagnostics_failed(diagnostics))
         n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
             "emitting runtime code", "could not re-emit baked modules");
@@ -2263,6 +2291,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_storage_origin_context_t origin_context = {
         .has_user_native_objects = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object")) != 0,
+        .analysis = analysis,
     };
     ir_storage_origin_t *storage_origin = ok
         ? ir_storage_origin_new(
@@ -2287,7 +2316,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (ok && !native_frames) ok = false;
     core_list_t(n00bb_cache_module_object_t) kept =
         core_list_new(n00bb_cache_module_object_t);
-    core_dict_t mutator_decisions;
+    n00bb_llvm_cached_facts_t mutator_decisions;
     cached_mutator_decisions(link, analysis, order.data, count,
                              &mutator_decisions);
     module_emission_t emission = {
@@ -2501,7 +2530,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free((void *)kept.data[i].mutators);
     }
     core_list_free(kept);
-    core_dict_free(&mutator_decisions);
+    core_dict_free(&mutator_decisions.decisions);
+    core_dict_free(&mutator_decisions.definitions);
+    core_list_free(mutator_decisions.allocators);
     release_output(&plan);
     core_free(archive);
     core_free(target_flag);
@@ -3021,7 +3052,9 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
             valid = false;
             break;
         }
-        modules[i] = state->ir_module;
+        ir_module_t *body = interface_body_module(analysis,
+                                                  unit->module.identifier);
+        modules[i] = body ? body : state->ir_module;
     }
     if (!analysis->link_types) analysis->link_types = th_ctx_new();
     n00bb_abi_semantics_t semantics = {

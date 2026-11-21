@@ -114,6 +114,8 @@ core_translation_unit_t *unit_for_ir_module(n00bb_link_analysis_t *analysis,
                                             ir_module_t *module);
 core_translation_unit_t *n00bb_unit_named(n00bb_link_analysis_t *analysis,
                                           core_string_t name);
+bool n00bb_summary_open(n00bb_link_analysis_t *analysis,
+                        const ir_module_t *module);
 void copy_export_binding_facts(parse_sym_entry_t *binding,
                                parse_sym_entry_t *origin);
 
@@ -232,6 +234,7 @@ void n00bb_check_clobbered_import(parse_grammar_t *grammar,
 core_string_t n00bb_describe_candidates(parse_grammar_t *grammar,
     n00bb_tu_state_t *state,
     const core_list_t(parse_sym_entry_ptr_t) *symbols);
+int n00bb_compare_symbol_names(const void *left, const void *right);
 bool n00bb_function_has_overloads(n00bb_tu_state_t *state,
     parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
 core_list_t(parse_sym_entry_ptr_t) n00bb_call_candidates(
@@ -362,6 +365,7 @@ typedef struct n00bb_link_analysis_t {
     bool trait_targets_ready;
     ir_summaries_t *entry_owner;
     ir_summary_t *entry_summaries[3];
+    ir_summary_t *open_entry;
     bool entry_ready[3];
     core_dict_t global_symbols;
     bool global_symbols_ready;
@@ -396,6 +400,8 @@ typedef struct n00bb_link_analysis_t {
     bool nominal_symbols_ready;
     ir_summary_hooks_t summary_hooks;
     ir_summaries_t *summaries;
+    ir_summaries_t *library_summaries;
+    bool program_layer;
     ir_summaries_t *escapes;
     ir_group_pdg_t *program;
     struct n00bb_rule_facts_t *rule_facts;

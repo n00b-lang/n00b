@@ -25,6 +25,7 @@ typedef struct {
     size_t runtime_object_bytes;
     const uint8_t *mutators;
     size_t mutators_bytes;
+    ir_module_t *ir;
 } n00bb_cache_module_object_t;
 core_list_decl(n00bb_cache_module_object_t);
 
@@ -65,27 +66,12 @@ const th_env *n00bb_cache_interface(const n00bb_cache_t *cache,
                                     size_t index);
 bool n00bb_cache_has_module(const n00bb_cache_t *cache,
                             core_string_t module);
-bool n00bb_cache_optimistic(const n00bb_cache_t *cache);
-bool n00bb_cache_module_speculative(const n00bb_cache_t *cache,
-                                    core_string_t module);
 void n00bb_cache_log_restart(core_string_t reason);
 void n00bb_cache_log_runtime_object(core_string_t module);
-void n00bb_cache_stale_modules(const n00bb_cache_t *cache,
-                               core_buffer_t *out);
-void n00bb_cache_unloadable_modules(const n00bb_cache_t *cache,
-                                    core_buffer_t *out);
 void n00bb_cache_note_refreeze(n00bb_cache_t *cache, core_string_t module);
 void n00bb_cache_skip_store(n00bb_cache_t *cache, core_string_t module);
 void n00bb_cache_refreeze_modules(const n00bb_cache_t *cache,
                                   core_buffer_t *out);
-bool n00bb_cache_assumptions_hold(n00bb_cache_t *cache,
-                                  core_link_unit_t *link,
-                                  n00bb_link_analysis_t *analysis);
-bool n00bb_cache_record_summaries(n00bb_cache_t *cache,
-                                  core_link_unit_t *link,
-                                  n00bb_link_analysis_t *analysis);
-bool n00bb_cache_summary_assumptions_hold(const n00bb_cache_t *cache);
-bool n00bb_cache_summary_hints(const n00bb_cache_t *cache, core_buffer_t *out);
 typedef bool (*n00bb_cache_module_used_fn)(void *context,
                                            core_string_t module);
 bool n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,

@@ -188,6 +188,20 @@ add_rows(n00bb_abi_rows_t *into, const n00bb_abi_rows_t *rows)
 }
 
 static int
+key_order(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
+    return a < b ? -1 : a > b;
+}
+
+static int
+receiver_order(const void *left, const void *right)
+{
+    const receiver_t *a = left, *b = right;
+    return a->index < b->index ? -1 : a->index > b->index;
+}
+
+static int
 row_order(const void *left, const void *right)
 {
     uint32_t a = *(const uint32_t *)left;
@@ -546,13 +560,46 @@ n00bb_abi_link_semantic_rows(
         valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
             th_name(ctx, declaration.qualified_name));
     }
-    for (size_t m = 0; valid && m < facts->module_count; m++) {
+    core_dict_t interned;
+    core_dict_init(&interned, nullptr, nullptr);
+    for (size_t m = 0; m < facts->module_count; m++) {
         ir_module_t *module = (ir_module_t *)facts->modules[m];
-        for (size_t i = 0; valid && i < ir_type_count(module); i++)
-            valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
-                ir_type_at(module, i));
+        for (size_t i = 0; i < ir_type_count(module); i++) {
+            th_type *type = ir_type_at(module, i);
+            if (type && th_is_closed(ctx, type))
+                core_dict_add(&interned,
+                              (void *)(uintptr_t)th_hash(ctx, type), type);
+        }
     }
+    for (size_t s = 0; valid && s < selected->count; s++) {
+        const n00bb_abi_object_view_t *view = &selected->views[s];
+        const n00bb_abi_directory_entry_t *rows = n00bb_abi_object_table(view,
+            N00B_ABI_TABLE_TYPE);
+        for (uint32_t r = 1; valid && rows && r < rows->record_count; r++) {
+            const n00b_abi_type_v1 *row = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_TYPE, r);
+            n00bb_abi_string_view_t name = {0};
+            uint32_t linked = row ? type_index(&link, row->typehash) : 0;
+            if (!linked || core_dict_contains(&seen_receivers,
+                                              (void *)(uintptr_t)linked)
+                || !n00bb_abi_object_string(view, &row->canonical_name,
+                                            &name)) continue;
+            th_type *type = core_dict_get(&interned,
+                (void *)(uintptr_t)row->typehash, nullptr);
+            core_string_t error = {0};
+            if (!type) type = ir_typelang_parse(ctx, core_string_borrow(
+                (const char *)name.bytes, name.length), &error);
+            core_free(error.data);
+            if (type && th_hash(ctx, type) == row->typehash)
+                valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
+                                     type);
+        }
+    }
+    core_dict_free(&interned);
     core_dict_free(&seen_receivers);
+    if (valid && receivers.len > 1)
+        qsort(receivers.data, receivers.len, sizeof(*receivers.data),
+              receiver_order);
     for (size_t r = 0; valid && r < receivers.len; r++) {
         th_type *head = n00bb_generic_head(ctx, receivers.data[r].type);
         uint32_t parent = head ? type_index(&link, th_hash(ctx, head)) : 0;
@@ -564,7 +611,20 @@ n00bb_abi_link_semantic_rows(
     bool *matches = receivers.len
         ? core_alloc_array(bool, receivers.len) : nullptr;
     valid = valid && (!receivers.len || matches != nullptr);
-    for (size_t i = 0; valid && i < declarations; i++) {
+    uint64_t *ordered = core_alloc_array(uint64_t, declarations + 1);
+    size_t trait_count = 0;
+    for (size_t i = 0; valid && ordered && i < declarations; i++) {
+        th_env_declaration_view_t trait;
+        if (th_env_declaration_at(facts->environment, i, &trait)
+            && trait.kind == TH_ENV_DECLARATION_TRAIT && trait.contract
+            && th_kind_of(trait.contract) == TH_TRAIT)
+            ordered[trait_count++] = (uint64_t)type_index(&link,
+                th_hash(ctx, trait.contract)) << 32 | i;
+    }
+    if (trait_count > 1)
+        qsort(ordered, trait_count, sizeof(*ordered), key_order);
+    for (size_t t = 0; valid && t < trait_count; t++) {
+        size_t i = (uint32_t)ordered[t];
         th_env_declaration_view_t trait;
         valid = th_env_declaration_at(facts->environment, i, &trait);
         if (!valid || trait.kind != TH_ENV_DECLARATION_TRAIT) continue;
@@ -673,6 +733,7 @@ n00bb_abi_link_semantic_rows(
     core_list_free(specializations);
     core_list_free(receivers);
     core_free(matches);
+    core_free(ordered);
     link_index_close(&link);
     if (!facts->types) th_ctx_free(ctx);
     return valid;

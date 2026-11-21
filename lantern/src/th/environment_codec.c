@@ -34,7 +34,7 @@ bool
 th_env_encode(const th_env *env, core_buffer_t *out)
 {
     if (!env || !out) return false;
-    th_type_writer_t *types = th_type_writer_new();
+    th_type_writer_t *types = th_type_writer_new(env->types);
     if (!types) return false;
     core_buffer_t body = {0};
     put_u64(&body, env->type_origins.len);

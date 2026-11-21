@@ -22,12 +22,7 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++)
-            core_list_push(roots, ir_func_at(state->ir_module, f));
-    }
+    n00bb_unit_bodies(analysis, &roots);
     bind_summary_hooks(analysis, true);
     n00bb_push_summary_roots(analysis, &roots);
     ir_summaries_free(analysis->escapes);

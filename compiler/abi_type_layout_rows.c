@@ -161,10 +161,8 @@ trace_need(trace_source_t *source, uint32_t type_index)
         if (!type->layout_index) {
             th_type *actual = n00bb_abi_type_index_at(source->index,
                                                        type_index);
-            ir_module_t *owner = actual
-                ? ir_type_definition_owner(source->module, actual) : nullptr;
-            const ir_final_layout_t *layout = owner && owner != source->module
-                ? ir_layout_final_visible(source->module, actual,
+            const ir_final_layout_t *layout = actual
+                ? ir_layout_final(source->module, actual,
                     ir_module_target(source->module)) : nullptr;
             th_type *definition = layout
                 ? ir_type_definition(source->module, actual) : nullptr;
@@ -259,10 +257,8 @@ trace_child_append(const trace_source_t *source,
     if (!child->layout_index && (!child_bits || !child_alignment)) {
         th_type *actual = n00bb_abi_type_index_at(source->index,
                                                    child_index);
-        ir_module_t *owner = actual
-            ? ir_type_definition_owner(source->module, actual) : nullptr;
-        const ir_final_layout_t *layout = owner && owner != source->module
-            ? ir_layout_final_visible(source->module, actual,
+        const ir_final_layout_t *layout = actual
+            ? ir_layout_final(source->module, actual,
                 ir_module_target(source->module)) : nullptr;
         if (layout) {
             child_bits = layout->intrinsic_bits;
@@ -298,14 +294,12 @@ trace_child_append(const trace_source_t *source,
 }
 
 static bool
-external_untraced(const trace_source_t *source, uint32_t type_index)
+declared_elsewhere(const trace_source_t *source, uint32_t type_index)
 {
     const n00b_abi_type_v1 *type = &source->types->rows[type_index];
-    if (type->tracing_index || type->layout_index) return false;
-    th_type *actual = n00bb_abi_type_index_at(source->index, type_index);
-    ir_module_t *owner = actual
-        ? ir_type_definition_owner(source->module, actual) : nullptr;
-    return owner && owner != source->module;
+    return !type->tracing_index && !type->layout_index
+        && source->types->declared_elsewhere
+        && source->types->declared_elsewhere[type_index];
 }
 
 static bool
@@ -317,7 +311,7 @@ linked_unary_trace(trace_source_t *source, uint32_t type_index)
             || type->kind == N00B_ABI_TYPE_WRAPPER
             || type->kind == N00B_ABI_TYPE_ATOMIC)
         && trace_unary_component(source, type_index, &child_index)
-        && external_untraced(source, child_index);
+        && declared_elsewhere(source, child_index);
 }
 
 static const n00bb_field_union_t *
@@ -434,11 +428,7 @@ append_traces(trace_source_t *source,
         if (need != TRACE_PRESENT || linked_unary_trace(source, type_index))
             continue;
         if (!type->layout_index) {
-            th_type *actual = n00bb_abi_type_index_at(source->index,
-                                                       type_index);
-            ir_module_t *owner = actual
-                ? ir_type_definition_owner(source->module, actual) : nullptr;
-            if (owner && owner != source->module) continue;
+            if (declared_elsewhere(source, type_index)) continue;
             return false;
         }
         if (type->layout_index >= layouts->len
@@ -740,7 +730,7 @@ append_members(n00bb_abi_type_index_t *index,
 bool
 n00bb_abi_type_layout_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
-    bool include_external_definitions, uint32_t stream_base,
+    uint32_t stream_base,
     const n00bb_abi_decl_index_t *declarations,
     n00bb_abi_name_pool_t *names,
     n00bb_abi_type_identity_rows_t *types,
@@ -775,21 +765,12 @@ n00bb_abi_type_layout_rows_build(
     for (size_t i = 0; valid && i < types->count; i++) {
         current = i;
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        ir_module_t *definition_owner = ir_type_definition_owner(runtime,
-            type);
-        const ir_final_layout_t *final = ir_layout_final(
-            runtime, type, ir_module_target(runtime));
-        size_t named_arguments = 0;
-        bool specialization = th_named_info(th_resolve(type), nullptr,
-            nullptr, &named_arguments) && named_arguments != 0;
-        if (!include_external_definitions
-            && (!types->owners || !types->owners[i])
-            && definition_owner && definition_owner != runtime
-            && types->rows[i].kind != N00B_ABI_TYPE_ATOMIC
-            && (!specialization || !final)) {
+        if (types->declared_elsewhere && types->declared_elsewhere[i]) {
             types->rows[i].flags &= ~N00B_ABI_TYPE_FLAG_PACKABLE;
             continue;
         }
+        const ir_final_layout_t *final = ir_layout_final(
+            runtime, type, ir_module_target(runtime));
         if (!final) {
             if (types->rows[i].flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
                 continue;

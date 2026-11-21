@@ -363,7 +363,6 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     uint32_t i           = start;
     for (; type && i < path->depth; i++) {
         core_string_t step    = path->steps[i];
-        th_type      *named   = type;
         th_type      *current = defined_type(pt->f, type);
         pt->crossed_known     = i;
         if (!current) return mask;
@@ -386,7 +385,7 @@ crossings(pt_t *pt, const pt_loc_t *loc)
             bool known = false;
             type = field_type(pt, current, step);
             bool inside = type
-                && member_inline(pt->f, pt, named, current, step, &known);
+                && member_inline(pt->f, pt, current, step, &known);
             out_of_line = type && known && !inside;
             break;
         }

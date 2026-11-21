@@ -1,4 +1,5 @@
 import aligned_types
+import inline_holder
 
 func low_bits(address: Ref[byte], alignment: uint) -> uint {
     return __abi_ref_address(address) & (alignment - 1)
@@ -27,6 +28,19 @@ func check_heap() {
     }
 }
 
+func offset(field: Ref[byte], base: Ref[byte]) -> uint {
+    return __abi_ref_address(field) - __abi_ref_address(base)
+}
+
+func check_reached_layouts() {
+    var pair: inline_holder.Pair
+    let block = unsafe_cast[Ref[byte]] (ref pair.block)
+    let plain = unsafe_cast[Ref[byte]] (ref pair.plain)
+    require offset(unsafe_cast[Ref[byte]] (ref pair.block.bits), block) == 8
+    require offset(unsafe_cast[Ref[byte]] (ref pair.plain.marks), plain) == 16
+}
+
 check_stack()
 check_heap()
+check_reached_layouts()
 __fd_write(2, "ok")

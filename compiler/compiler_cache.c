@@ -30,7 +30,7 @@
 #include "th/environment.h"
 
 #define CACHE_MAGIC   UINT32_C(0x4f42304e)
-#define CACHE_VERSION UINT32_C(4)
+#define CACHE_VERSION UINT32_C(5)
 
 core_list_decl(size_t);
 
@@ -45,10 +45,7 @@ typedef struct {
     size_t index;
     core_list_t(core_translation_unit_ptr_t) members;
     core_list_t(size_t) imports;
-    size_t direct_imports;
     uint64_t freshness;
-    uint64_t interface_identity;
-    uint64_t summary_identity;
     uint64_t key;
     uint8_t *interface;
     size_t interface_bytes;
@@ -397,6 +394,13 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         put_u32(out, n00bb_setting_bool(settings[i]));
+    put_u32(out, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
+    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
+    put_u32(out, (uint32_t)n00bb_setting_count(preferences));
+    for (size_t i = 0; i < n00bb_setting_count(preferences); i++) {
+        core_string_t value = n00bb_setting_at(preferences, i);
+        put_bytes(out, value.data, value.u8_bytes);
+    }
     put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
@@ -598,7 +602,6 @@ collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs,
                 if (!seen) core_list_push(scc->imports, imported);
             }
         }
-        scc->direct_imports = scc->imports.len;
         scc_freshness(scc);
         if (lowered) inline_dependencies(sccs, scc, &scc->inlined);
     }
@@ -641,20 +644,14 @@ typedef enum {
 typedef struct {
     uint64_t key;
     uint64_t freshness;
-    uint64_t interface_identity;
-    uint64_t summary_identity;
     core_list_t(cache_member_t) members;
     core_list_t(cache_link_t) imports;
-    core_list_t(cache_link_t) import_summaries;
     core_list_t(cache_link_t) inlined;
     core_list_t(core_string_t) references;
     core_list_t(cache_section_t) sections;
-    core_list_t(size_t) assumed;
     bool fresh;
     bool excluded;
-    bool deferred;
     bool loaded;
-    bool stale;
     bool alternate;
     entry_state_t state;
     entry_state_t load;
@@ -740,12 +737,9 @@ struct n00bb_cache_t {
     core_list_t(cache_environment_t) interfaces;
     core_list_t(cache_snapshot_t) snapshots;
     core_list_t(cache_scc_t) sccs;
-    core_list_t(cache_link_t) summary_identities;
     bool prepared;
     bool prepare_failed;
-    bool strict;
     bool ir_load_failed;
-    bool assumptions_confirmed;
     core_list_t(cache_instance_t) instances;
     n00bb_cache_locate_fn locate;
     void *locate_context;
@@ -757,16 +751,13 @@ struct n00bb_cache_t {
 static uint64_t
 scc_key(const n00bb_cache_t *cache, uint64_t freshness,
         const uint64_t *imports, size_t import_count,
-        const uint64_t *summaries, size_t summary_count,
         const uint64_t *inlined, size_t inlined_count)
 {
     core_buffer_t key = {0};
-    core_buffer_puts(&key, "n00b.scc.key.v4");
+    core_buffer_puts(&key, "n00b.scc.key.v5");
     put_u64(&key, freshness);
     put_u32(&key, (uint32_t)import_count);
     for (size_t i = 0; i < import_count; i++) put_u64(&key, imports[i]);
-    put_u32(&key, (uint32_t)summary_count);
-    for (size_t i = 0; i < summary_count; i++) put_u64(&key, summaries[i]);
     put_u32(&key, (uint32_t)inlined_count);
     for (size_t i = 0; i < inlined_count; i++) put_u64(&key, inlined[i]);
     put_u64(&key, cache->compiler);
@@ -899,16 +890,12 @@ entry_release(cache_entry_t *entry)
     for (size_t i = 0; i < entry->imports.len; i++)
         core_free(entry->imports.data[i].name.data);
     core_list_free(entry->imports);
-    for (size_t i = 0; i < entry->import_summaries.len; i++)
-        core_free(entry->import_summaries.data[i].name.data);
-    core_list_free(entry->import_summaries);
     for (size_t i = 0; i < entry->inlined.len; i++)
         core_free(entry->inlined.data[i].name.data);
     core_list_free(entry->inlined);
     for (size_t i = 0; i < entry->references.len; i++)
         core_free(entry->references.data[i].data);
     core_list_free(entry->references);
-    core_list_free(entry->assumed);
     sections_release(&entry->sections);
     if (entry->interface) th_env_free(entry->interface);
 }
@@ -918,7 +905,6 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
 {
     entry->members = core_list_new(cache_member_t);
     entry->imports = core_list_new(cache_link_t);
-    entry->import_summaries = core_list_new(cache_link_t);
     entry->inlined = core_list_new(cache_link_t);
     entry->references = core_list_new(core_string_t);
     entry->sections = core_list_new(cache_section_t);
@@ -933,8 +919,6 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
                            .length = manifest->length};
     uint64_t key = read_u64(&r);
     entry->freshness = read_u64(&r);
-    entry->interface_identity = read_u64(&r);
-    entry->summary_identity = read_u64(&r);
     uint32_t members = read_u32(&r);
     for (uint32_t m = 0; !r.failed && m < members; m++) {
         cache_member_t member = {
@@ -964,7 +948,6 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
         core_list_push(entry->members, member);
     }
     read_links(&r, &entry->imports);
-    read_links(&r, &entry->import_summaries);
     read_links(&r, &entry->inlined);
     uint32_t references = read_u32(&r);
     for (uint32_t i = 0; !r.failed && i < references; i++) {
@@ -1008,25 +991,12 @@ selected_entry(n00bb_cache_t *cache, core_string_t module)
 
 static bool entry_validate(n00bb_cache_t *cache, cache_entry_t *entry);
 
-static cache_entry_t *
-import_entry(n00bb_cache_t *cache, core_string_t module, uint64_t identity,
-             bool *current)
+static bool
+import_valid(n00bb_cache_t *cache, core_string_t module, uint64_t key)
 {
-    cache_entry_t *fallback = nullptr;
-    *current = false;
-    for (size_t i = 0; module.data && i < cache->module_keys.len; i++) {
-        if (!core_string_eq(cache->module_keys.data[i].name, module))
-            continue;
-        cache_entry_t *entry = entry_with_key(cache,
-            cache->module_keys.data[i].value);
-        if (!entry || entry->interface_identity != identity) continue;
-        if (entry_validate(cache, entry)) {
-            *current = true;
-            return entry;
-        }
-        if (!fallback) fallback = entry;
-    }
-    return fallback;
+    cache_entry_t *entry = module_has_key(cache, module, key)
+        ? entry_with_key(cache, key) : nullptr;
+    return entry && entry_validate(cache, entry);
 }
 
 static cache_entry_t *
@@ -1197,21 +1167,13 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
                              entry->members.data[m].name);
     uint64_t *imports = core_alloc_array(uint64_t,
                                          entry->imports.len + 1);
-    uint64_t *summaries = core_alloc_array(uint64_t,
-                                           entry->import_summaries.len + 1);
     uint64_t *inlined = core_alloc_array(uint64_t,
                                          entry->inlined.len + 1);
-    ok = ok && imports && summaries && inlined;
-    for (size_t i = 0; ok && i < entry->import_summaries.len; i++)
-        summaries[i] = entry->import_summaries.data[i].value;
+    ok = ok && imports && inlined;
     for (size_t i = 0; ok && i < entry->imports.len; i++) {
-        bool current = false;
-        cache_entry_t *imported = import_entry(cache,
-            entry->imports.data[i].name, entry->imports.data[i].value,
-            &current);
-        ok = imported && (current || !cache->strict);
-        if (ok && !current) core_list_push(entry->assumed, i);
-        if (ok) imports[i] = imported->interface_identity;
+        ok = import_valid(cache, entry->imports.data[i].name,
+                          entry->imports.data[i].value);
+        imports[i] = entry->imports.data[i].value;
     }
     for (size_t i = 0; ok && i < entry->inlined.len; i++) {
         cache_entry_t *callee = inlined_entry(cache,
@@ -1220,10 +1182,8 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
         if (ok) inlined[i] = callee->freshness;
     }
     ok = ok && scc_key(cache, entry->freshness, imports, entry->imports.len,
-                       summaries, entry->import_summaries.len,
                        inlined, entry->inlined.len) == entry->key;
     core_free(imports);
-    core_free(summaries);
     core_free(inlined);
     entry->state = ok ? ENTRY_VALID : ENTRY_INVALID;
     return ok;
@@ -1401,9 +1361,8 @@ reference_holds(n00bb_cache_t *cache, const cache_entry_t *entry,
     for (size_t m = 0; m < entry->members.len; m++)
         if (core_string_eq(entry->members.data[m].name, reference))
             return true;
-    if (!module_has_key(cache, reference, 0)) return false;
-    cache_entry_t *referenced = selected_entry(cache, reference);
-    return referenced && (!referenced->deferred || entry->deferred);
+    return module_has_key(cache, reference, 0)
+        && selected_entry(cache, reference);
 }
 
 static bool
@@ -1667,11 +1626,9 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->module_keys = core_list_new(cache_link_t);
     cache->entries = core_list_new(cache_entry_t);
     cache->interfaces = core_list_new(cache_environment_t);
-    cache->summary_identities = core_list_new(cache_link_t);
     cache->snapshots = core_list_new(cache_snapshot_t);
     cache->sccs = core_list_new(cache_scc_t);
     cache->instances = core_list_new(cache_instance_t);
-    cache->strict = n00bb_handoff()->cache_strict;
     core_buffer_append_string(&cache->libraries, libraries);
     read_module_keys(cache);
     read_reachable_entries(cache);
@@ -1703,9 +1660,7 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                 if (reference_holds(cache, entry,
                                     entry->references.data[i]))
                     continue;
-                if (cache->strict) entry->state = ENTRY_INVALID;
-                else if (!entry->deferred) entry->deferred = true;
-                else continue;
+                entry->state = ENTRY_INVALID;
                 changed = true;
                 break;
             }
@@ -1758,7 +1713,6 @@ n00bb_cache_free(n00bb_cache_t *cache)
         snapshot_release(&cache->snapshots.data[i]);
     core_list_free(cache->snapshots);
     sccs_release(&cache->sccs);
-    core_list_free(cache->summary_identities);
     for (size_t i = 0; i < cache->instances.len; i++)
         sections_release(&cache->instances.data[i].sections);
     core_list_free(cache->instances);
@@ -1913,27 +1867,6 @@ n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
     return !reader.failed;
 }
 
-bool
-n00bb_cache_optimistic(const n00bb_cache_t *cache)
-{
-    for (size_t e = 0; cache && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load == ENTRY_VALID
-            && (entry->deferred || entry->assumed.len)) return true;
-    }
-    return false;
-}
-
-bool
-n00bb_cache_module_speculative(const n00bb_cache_t *cache,
-                               core_string_t module)
-{
-    const cache_entry_t *entry = nullptr;
-    if (!loaded_member(cache, module, &entry)) return false;
-    if (!cache_check_only) return entry->deferred || entry->assumed.len;
-    return entry->assumed.len && !cache->assumptions_confirmed;
-}
-
 void
 n00bb_cache_log_restart(core_string_t reason)
 {
@@ -2003,66 +1936,7 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
     }
     core_free(modules);
     core_free(inputs);
-    cache->ir_load_failed = cache->ir_load_failed || !ok;
     return ok;
-}
-
-void
-n00bb_cache_unloadable_modules(const n00bb_cache_t *cache, core_buffer_t *out)
-{
-    for (size_t e = 0; cache && cache->ir_load_failed
-         && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID || !entry->deferred) continue;
-        for (size_t m = 0; m < entry->members.len; m++) {
-            if (out->byte_len) core_buffer_putc(out, ',');
-            core_buffer_append_string(out, entry->members.data[m].name);
-        }
-    }
-}
-
-static bool
-next_summary_hint(core_string_t *rest, core_string_t *phase,
-                  core_string_t *module, uint64_t *value)
-{
-    while (rest->u8_bytes) {
-        int64_t comma = core_string_find_byte(*rest, ',');
-        size_t length = comma >= 0 ? (size_t)comma : rest->u8_bytes;
-        core_string_t item = core_string_slice(*rest, 0, length);
-        *rest = core_string_slice(*rest, comma >= 0 ? length + 1 : length,
-            rest->u8_bytes - (comma >= 0 ? length + 1 : length));
-        int64_t slash = core_string_find_byte(item, '/');
-        int64_t equals = core_string_find_byte(item, '=');
-        if (slash <= 0 || equals <= slash
-            || item.u8_bytes - (size_t)equals - 1 != 16)
-            continue;
-        *phase = core_string_slice(item, 0, (size_t)slash);
-        *module = core_string_slice(item, (size_t)slash + 1,
-                                    (size_t)(equals - slash - 1));
-        *value = core_string_strtoull(core_string_slice(item,
-            (size_t)equals + 1, 16), 16);
-        return true;
-    }
-    return false;
-}
-
-void
-n00bb_cache_stale_modules(const n00bb_cache_t *cache, core_buffer_t *out)
-{
-    for (size_t e = 0; cache && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (!entry->stale) continue;
-        core_buffer_t members = {0};
-        member_names(entry, &members);
-        core_string_t phase = phase_name();
-        cache_log("%.*s stale scc %.*s", (int)phase.u8_bytes, phase.data,
-                  (int)members.byte_len, members.data ? members.data : "");
-        core_buffer_release(&members);
-        for (size_t m = 0; m < entry->members.len; m++) {
-            if (out->byte_len) core_buffer_putc(out, ',');
-            core_buffer_append_string(out, entry->members.data[m].name);
-        }
-    }
 }
 
 void
@@ -2087,170 +1961,6 @@ n00bb_cache_refreeze_modules(const n00bb_cache_t *cache, core_buffer_t *out)
     if (cache && cache->refreeze.byte_len)
         core_buffer_append(out, cache->refreeze.data,
                            cache->refreeze.byte_len);
-}
-
-bool
-n00bb_cache_assumptions_hold(n00bb_cache_t *cache,
-                             core_link_unit_t *link,
-                             n00bb_link_analysis_t *analysis)
-{
-    if (!cache || !link || !analysis) return false;
-    core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
-    bool ok = collect_sccs(link, &sccs, false);
-    for (size_t e = 0; ok && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID) continue;
-        for (size_t a = 0; ok && a < entry->assumed.len; a++) {
-            const cache_link_t *import =
-                &entry->imports.data[entry->assumed.data[a]];
-            size_t found = SIZE_MAX;
-            for (size_t s = 0; found == SIZE_MAX && s < sccs.len; s++)
-                for (size_t m = 0; m < sccs.data[s].members.len; m++) {
-                    core_string_t name =
-                        sccs.data[s].members.data[m]->module.identifier;
-                    if (core_string_eq(import->name, name)) found = s;
-                }
-            cache_scc_t *scc = found != SIZE_MAX ? &sccs.data[found]
-                                                 : nullptr;
-            ok = scc && !scc->cached && interface_bytes(analysis, &sccs, scc);
-            if (!ok) break;
-            core_buffer_t identity = {0};
-            core_buffer_puts(&identity, "n00b.scc.interface.v1");
-            put_bytes(&identity, scc->interface, scc->interface_bytes);
-            ok = buffer_hash(&identity) == import->value;
-            core_buffer_release(&identity);
-            if (!ok) {
-                core_string_t phase = phase_name();
-                cache_log("%.*s assumption: %.*s's interface changed",
-                          (int)phase.u8_bytes, phase.data,
-                          (int)import->name.u8_bytes, import->name.data);
-            }
-        }
-    }
-    sccs_release(&sccs);
-    cache->assumptions_confirmed = ok && cache_check_only;
-    return ok;
-}
-
-static uint64_t
-recorded_summary_identity(const n00bb_cache_t *cache, core_string_t module)
-{
-    for (size_t i = 0; cache && i < cache->summary_identities.len; i++)
-        if (core_string_eq(cache->summary_identities.data[i].name, module))
-            return cache->summary_identities.data[i].value;
-    return 0;
-}
-
-static void
-scc_function_roots(const cache_scc_t *scc,
-                   core_list_t(n00bb_ir_func_ptr_t) *roots)
-{
-    for (size_t m = 0; m < scc->members.len; m++) {
-        ir_module_t *module = tu_state(scc->members.data[m])->ir_module;
-        for (size_t f = 0; module && f < ir_func_count(module); f++) {
-            ir_func_t *function = ir_func_at(module, f);
-            if (function->n_blocks) core_list_push(*roots, function);
-        }
-    }
-}
-
-bool
-n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
-                             n00bb_link_analysis_t *analysis)
-{
-    if (!cache || !link || !analysis) return true;
-    core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
-    core_list_t(n00bb_ir_func_ptr_t) roots =
-        core_list_new(n00bb_ir_func_ptr_t);
-    bool ok = collect_sccs(link, &sccs, false);
-    for (size_t s = 0; ok && s < sccs.len; s++)
-        if (!sccs.data[s].cached) scc_function_roots(&sccs.data[s], &roots);
-    size_t missing = 0;
-    for (size_t r = 0; r < roots.len; r++)
-        if (!ir_summary_of(analysis->summaries, roots.data[r]))
-            roots.data[missing++] = roots.data[r];
-    roots.len = missing;
-    ir_summaries_t *summaries = ok && roots.len
-        ? ir_summaries_recompute(roots.data, roots.len,
-                                 &analysis->summary_hooks, nullptr)
-        : nullptr;
-    ok = ok && (summaries || !roots.len);
-    cache->summary_identities.len = 0;
-    for (size_t s = 0; ok && s < sccs.len; s++) {
-        cache_scc_t *scc = &sccs.data[s];
-        if (scc->cached) continue;
-        core_list_t(n00bb_ir_func_ptr_t) functions =
-            core_list_new(n00bb_ir_func_ptr_t);
-        scc_function_roots(scc, &functions);
-        core_buffer_t input = {0};
-        core_buffer_puts(&input, "n00b.scc.summaries.v1");
-        for (size_t f = 0; ok && f < functions.len; f++) {
-            put_text(&input, ir_module_name(functions.data[f]->owner));
-            put_text(&input, functions.data[f]->name);
-            ir_summary_t *summary = ir_summary_of(analysis->summaries,
-                                                  functions.data[f]);
-            ok = ir_summary_encode_identity(summary ? summary
-                : ir_summary_of(summaries, functions.data[f]), &input);
-        }
-        core_list_push(cache->summary_identities, ((cache_link_t){
-            .name = scc->members.data[0]->module.identifier,
-            .value = buffer_hash(&input),
-        }));
-        core_buffer_release(&input);
-        core_list_free(functions);
-    }
-    ir_summaries_free(summaries);
-    core_list_free(roots);
-    sccs_release(&sccs);
-    return ok;
-}
-
-bool
-n00bb_cache_summary_assumptions_hold(const n00bb_cache_t *cache)
-{
-    for (size_t e = 0; cache && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID) continue;
-        for (size_t i = 0; i < entry->import_summaries.len; i++) {
-            const cache_entry_t *owner = nullptr;
-            core_string_t name = entry->import_summaries.data[i].name;
-            uint64_t actual = loaded_member(cache, name, &owner)
-                ? owner->summary_identity
-                : recorded_summary_identity(cache, name);
-            if (actual != entry->import_summaries.data[i].value) return false;
-        }
-    }
-    return true;
-}
-
-bool
-n00bb_cache_summary_hints(const n00bb_cache_t *cache, core_buffer_t *out)
-{
-    core_string_t previous = n00bb_handoff()->cache_summaries;
-    core_string_t current = phase_name();
-    core_string_t rest = previous;
-    core_string_t phase = {0}, name = {0};
-    uint64_t hint = 0;
-    bool first = true;
-    while (next_summary_hint(&rest, &phase, &name, &hint)) {
-        if (core_string_eq(phase, current)) {
-            first = false;
-            continue;
-        }
-        if (out->byte_len) core_buffer_putc(out, ',');
-        core_buffer_printf(out, "%.*s/%.*s=%016llx", (int)phase.u8_bytes,
-                           phase.data, (int)name.u8_bytes, name.data,
-                           (unsigned long long)hint);
-    }
-    for (size_t i = 0; cache && i < cache->summary_identities.len; i++) {
-        const cache_link_t *link = &cache->summary_identities.data[i];
-        if (out->byte_len) core_buffer_putc(out, ',');
-        core_buffer_printf(out, "%.*s/%.*s=%016llx",
-                           (int)current.u8_bytes, current.data,
-                           (int)link->name.u8_bytes, link->name.data,
-                           (unsigned long long)link->value);
-    }
-    return first && cache && cache->summary_identities.len;
 }
 
 bool
@@ -2295,6 +2005,7 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
         .runtime_object = runtime ? runtime->data : nullptr,
         .runtime_object_bytes = runtime ? runtime->length : 0,
         .mutators = mutators->data, .mutators_bytes = mutators->length,
+        .ir = member->module,
     };
     return true;
 }
@@ -2407,7 +2118,8 @@ request_key(const n00bb_specialization_t *item, core_buffer_t *key)
 {
     put_text(key, ir_module_name(item->generic->owner));
     put_text(key, item->generic->name);
-    th_type_writer_t *writer = th_type_writer_new();
+    th_type_writer_t *writer = th_type_writer_new(
+        ir_module_types(item->generic->owner));
     bool ok = writer && th_type_writer_add(writer, item->signature)
         && th_type_writer_finish(writer, key);
     th_type_writer_free(writer);
@@ -2450,7 +2162,8 @@ scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
         }
     if (count)
         qsort(requests, count, sizeof(*requests), compare_requests);
-    th_type_writer_t *writer = th_type_writer_new();
+    th_type_writer_t *writer = th_type_writer_new(
+        count ? ir_module_types(requests[0].item->generic->owner) : nullptr);
     core_buffer_t entries = {0};
     for (uint32_t i = 0; writer && i < count; i++) {
         const n00bb_specialization_t *item = requests[i].item;
@@ -2481,7 +2194,7 @@ n00bb_cache_capture_summaries(n00bb_cache_t *cache,
 {
     ir_summaries_t *summaries = !analysis ? nullptr
         : phase == N00BB_PHASE_ESCAPES ? analysis->escapes
-                                       : analysis->summaries;
+                                       : analysis->library_summaries;
     for (size_t i = 0; cache && phase && phase <= N00BB_PHASE_FINAL
          && i < cache->snapshots.len; i++)
         capture_snapshot(&cache->snapshots.data[i], analysis, summaries,
@@ -2537,8 +2250,9 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
         if (analysis) {
             capture_snapshot(&snapshot, analysis, analysis->escapes,
                              N00BB_PHASE_ESCAPES);
-            if (analysis->summaries)
-                capture_snapshot(&snapshot, analysis, analysis->summaries,
+            if (analysis->library_summaries)
+                capture_snapshot(&snapshot, analysis,
+                                 analysis->library_summaries,
                                  N00BB_PHASE_MAIN);
         }
         for (size_t i = 0; i < scc->inlined.len; i++)
@@ -2586,21 +2300,7 @@ put_links(core_buffer_t *out, const core_list_t(cache_scc_t) *sccs,
         const cache_scc_t *linked = &sccs->data[links->data[i]];
         core_string_t name = linked->members.data[0]->module.identifier;
         put_bytes(out, name.data, name.u8_bytes);
-        put_u64(out, freshness ? linked->freshness
-                               : linked->interface_identity);
-    }
-}
-
-static void
-put_summary_links(core_buffer_t *out, const core_list_t(cache_scc_t) *sccs,
-                  const cache_scc_t *scc)
-{
-    put_u32(out, (uint32_t)scc->direct_imports);
-    for (size_t i = 0; i < scc->direct_imports; i++) {
-        const cache_scc_t *linked = &sccs->data[scc->imports.data[i]];
-        core_string_t name = linked->members.data[0]->module.identifier;
-        put_bytes(out, name.data, name.u8_bytes);
-        put_u64(out, linked->summary_identity);
+        put_u64(out, freshness ? linked->freshness : linked->key);
     }
 }
 
@@ -2696,7 +2396,7 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
             || item->severity == CORE_DIAG_HELP;
         attached = note ? attached
             : core_diag_is_advisory(item->severity)
-                && !n00bb_diag_reports_unused(item->code);
+                && !n00bb_diag_reported_afresh(item->code);
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){
@@ -2750,8 +2450,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     core_buffer_t manifest = {0};
     put_u64(&manifest, scc->key);
     put_u64(&manifest, scc->freshness);
-    put_u64(&manifest, scc->interface_identity);
-    put_u64(&manifest, scc->summary_identity);
     put_u32(&manifest, (uint32_t)scc->members.len);
     for (size_t m = 0; m < scc->members.len; m++) {
         core_translation_unit_t *unit = scc->members.data[m];
@@ -2804,7 +2502,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         core_free(owner_canonical.data);
     }
     put_links(&manifest, sccs, &scc->imports, false);
-    put_summary_links(&manifest, sccs, scc);
     put_links(&manifest, sccs, &scc->inlined, true);
     const core_buffer_t *ir = &snapshot->ir;
     core_buffer_t references = {0};
@@ -2979,6 +2676,35 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+static uint64_t
+scc_key_of(const n00bb_cache_t *cache, core_list_t(cache_scc_t) *sccs,
+           size_t s)
+{
+    cache_scc_t *scc = &sccs->data[s];
+    if (scc->key) return scc->key;
+    const cache_snapshot_t *snapshot = snapshot_for(cache,
+        scc->members.data[0]->module.identifier);
+    if (snapshot) {
+        scc->inlined.len = 0;
+        for (size_t i = 0; i < snapshot->inlined.len; i++) {
+            size_t owner = scc_of_module_name(sccs,
+                                              snapshot->inlined.data[i]);
+            if (owner != SIZE_MAX) core_list_push(scc->inlined, owner);
+        }
+    }
+    uint64_t *imports = core_alloc_array(uint64_t, scc->imports.len + 1);
+    uint64_t *inlined = core_alloc_array(uint64_t, scc->inlined.len + 1);
+    for (size_t i = 0; i < scc->imports.len; i++)
+        imports[i] = scc_key_of(cache, sccs, scc->imports.data[i]);
+    for (size_t i = 0; i < scc->inlined.len; i++)
+        inlined[i] = sccs->data[scc->inlined.data[i]].freshness;
+    scc->key = scc_key(cache, scc->freshness, imports, scc->imports.len,
+                       inlined, scc->inlined.len);
+    core_free(imports);
+    core_free(inlined);
+    return scc->key;
+}
+
 static bool
 prepare_sccs(n00bb_cache_t *cache, core_link_unit_t *link,
              n00bb_link_analysis_t *analysis)
@@ -2992,54 +2718,13 @@ prepare_sccs(n00bb_cache_t *cache, core_link_unit_t *link,
         const cache_entry_t *entry = nullptr;
         if (sccs->data[s].cached && loaded_member(cache, first, &entry)) {
             sccs->data[s].freshness = entry->freshness;
-            sccs->data[s].interface_identity = entry->interface_identity;
-            sccs->data[s].summary_identity = entry->summary_identity;
             sccs->data[s].key = entry->key;
             continue;
         }
-        sccs->data[s].summary_identity = recorded_summary_identity(cache,
-                                                                   first);
-        if (!interface_bytes(analysis, sccs, &sccs->data[s])) {
-            ok = false;
-            break;
-        }
-        core_buffer_t identity = {0};
-        core_buffer_puts(&identity, "n00b.scc.interface.v1");
-        put_bytes(&identity, sccs->data[s].interface,
-                  sccs->data[s].interface_bytes);
-        sccs->data[s].interface_identity = buffer_hash(&identity);
-        core_buffer_release(&identity);
+        ok = interface_bytes(analysis, sccs, &sccs->data[s]);
     }
-    for (size_t s = 0; ok && s < sccs->len; s++) {
-        cache_scc_t *scc = &sccs->data[s];
-        if (scc->cached) continue;
-        const cache_snapshot_t *snapshot = snapshot_for(cache,
-            scc->members.data[0]->module.identifier);
-        if (snapshot) {
-            scc->inlined.len = 0;
-            for (size_t i = 0; i < snapshot->inlined.len; i++) {
-                size_t owner = scc_of_module_name(sccs,
-                                                  snapshot->inlined.data[i]);
-                if (owner != SIZE_MAX) core_list_push(scc->inlined, owner);
-            }
-        }
-        uint64_t *imports = core_alloc_array(uint64_t, scc->imports.len + 1);
-        uint64_t *summaries = core_alloc_array(uint64_t,
-                                               scc->direct_imports + 1);
-        uint64_t *inlined = core_alloc_array(uint64_t, scc->inlined.len + 1);
-        for (size_t i = 0; i < scc->imports.len; i++)
-            imports[i] = sccs->data[scc->imports.data[i]].interface_identity;
-        for (size_t i = 0; i < scc->direct_imports; i++)
-            summaries[i] = sccs->data[scc->imports.data[i]].summary_identity;
-        for (size_t i = 0; i < scc->inlined.len; i++)
-            inlined[i] = sccs->data[scc->inlined.data[i]].freshness;
-        scc->key = scc_key(cache, scc->freshness, imports, scc->imports.len,
-                           summaries, scc->direct_imports,
-                           inlined, scc->inlined.len);
-        core_free(imports);
-        core_free(summaries);
-        core_free(inlined);
-    }
+    for (size_t s = 0; ok && s < sccs->len; s++)
+        (void)scc_key_of(cache, sccs, s);
     cache->prepare_failed = !ok;
     return ok;
 }
@@ -3162,16 +2847,14 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     uint64_t generic_ir = 0;
     bool saved = scc_ir_hash(cache, &sccs->data[generic], &generic_ir);
     core_buffer_t input = {0};
-    core_buffer_puts(&input, "n00b.instance.key.v3");
+    core_buffer_puts(&input, "n00b.instance.key.v4");
     put_u64(&input, sccs->data[generic].key);
     put_u64(&input, generic_ir);
     put_text(&input, ir_module_name(item->instance->owner));
     put_text(&input, item->instance->name);
     put_u32(&input, (uint32_t)owners.len);
-    for (size_t i = 0; i < owners.len; i++) {
-        put_u64(&input, sccs->data[owners.data[i]].interface_identity);
-        put_u64(&input, sccs->data[owners.data[i]].summary_identity);
-    }
+    for (size_t i = 0; i < owners.len; i++)
+        put_u64(&input, sccs->data[owners.data[i]].key);
     ir_module_t *module = item->instance->owner;
     for (size_t f = 0; f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);

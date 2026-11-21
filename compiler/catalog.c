@@ -83,11 +83,13 @@ n00bb_diag_lookup(core_string_t code, n00bb_diag_t *out)
 }
 
 bool
-n00bb_diag_reports_unused(core_string_t code)
+n00bb_diag_reported_afresh(core_string_t code)
 {
     n00bb_diag_t id;
     if (!code.data || !n00bb_diag_lookup(code, &id)) return false;
     switch (id) {
+    case N00B_DIAG_PACKAGE_SINGLE_SUBPACKAGE:
+    case N00B_DIAG_DATA_RACE:
     case N00B_DIAG_UNUSED_FUNCTION:
     case N00B_DIAG_FIELD_NEVER_SET:
     case N00B_DIAG_FIELD_NEVER_READ:

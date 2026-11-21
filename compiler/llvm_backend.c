@@ -149,7 +149,7 @@ typedef struct {
 } debug_info_t;
 
 static _Thread_local debug_info_t *active_debug;
-static _Thread_local const core_dict_t *active_mutator_decisions;
+static _Thread_local const n00bb_llvm_cached_facts_t *active_mutator_decisions;
 static _Thread_local core_buffer_t *active_mutator_entries;
 
 enum {
@@ -336,7 +336,7 @@ struct n00bb_llvm_backend_t {
     const n00bb_llvm_callback_bindings_t *callback_bindings;
     bool prepared;
     ir_summaries_t *summaries;
-    const core_dict_t *mutator_decisions;
+    const n00bb_llvm_cached_facts_t *mutator_decisions;
     core_buffer_t mutator_entries;
 };
 
@@ -877,10 +877,6 @@ record_shape_build(ir_module_t *requester, th_type *type,
 {
     *shape = (record_shape_t){0};
     ir_module_t *module = requester;
-    ir_module_t *owner = type
-        ? ir_type_definition_owner(requester, type) : nullptr;
-    if (owner && ir_layout_final(owner, type, ir_module_target(owner)))
-        module = owner;
     th_type *definition = type ? ir_type_definition(module, type) : nullptr;
     if (type && !definition && th_kind_of(th_resolve(type)) == TH_RECORD)
         definition = th_resolve(type);
@@ -1589,6 +1585,12 @@ static LLVMValueRef
 frozen_scalar_global(lower_state_t *state, const ir_global_t *global)
 {
     const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
+    const ir_global_t *defined = identity && identity->is_extern
+            && active_mutator_decisions
+        ? core_dict_get((core_dict_t *)&active_mutator_decisions->definitions,
+                        (void *)identity, nullptr)
+        : nullptr;
+    if (defined) identity = defined;
     if (!identity || identity->is_extern
         || identity->mutability != IR_MUT_CONST
         || ir_global_storage_duration(identity) == IR_STORAGE_DURATION_THREAD
@@ -13412,8 +13414,9 @@ add_mutator_candidate(ir_func_t *function, pointer_set_t *mutators)
 {
     if (!function->n_blocks || pointer_set_has(mutators, function)) return;
     uintptr_t decided = active_mutator_decisions
-        ? (uintptr_t)core_dict_get((core_dict_t *)active_mutator_decisions,
-                                   function, nullptr)
+        ? (uintptr_t)core_dict_get(
+              (core_dict_t *)&active_mutator_decisions->decisions, function,
+              nullptr)
         : 0;
     if (decided ? decided == MUTATOR_ENTRY
                 : summary_has(function, IR_SUMMARY_ALLOCATES_DIRECT, false))
@@ -13619,9 +13622,10 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     for (size_t i = 0; i < inline_callees.items.len; i++)
         needs_allocation_callee |= summary_has(inline_callees.items.data[i],
             IR_SUMMARY_ALLOCATES_DIRECT, false);
-    for (size_t i = 0; ok && needs_allocation_callee && reachable
-         && i < reachable->items.len; i++) {
-        ir_func_t *function = reachable->items.data[i];
+    for (size_t i = 0; ok && needs_allocation_callee
+         && active_mutator_decisions
+         && i < active_mutator_decisions->allocators.len; i++) {
+        ir_func_t *function = active_mutator_decisions->allocators.data[i];
         if (!is_mutator_allocator(function) || function->owner == source
             || pointer_set_has(&inline_callees, function))
             continue;
@@ -14114,9 +14118,9 @@ n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
 
 void
 n00bb_llvm_backend_bind_mutator_decisions(n00bb_llvm_backend_t *backend,
-                                          const core_dict_t *decisions)
+    const n00bb_llvm_cached_facts_t *facts)
 {
-    if (backend) backend->mutator_decisions = decisions;
+    if (backend) backend->mutator_decisions = facts;
 }
 
 core_string_t
@@ -14178,7 +14182,8 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
     ir_summaries_t *previous_summaries = backend->summaries
         ? ir_analysis_bind_summaries(backend->summaries)
         : ir_analysis_summaries();
-    const core_dict_t *previous_decisions = active_mutator_decisions;
+    const n00bb_llvm_cached_facts_t *previous_decisions =
+        active_mutator_decisions;
     core_buffer_t *previous_entries = active_mutator_entries;
     active_mutator_decisions = backend->mutator_decisions;
     backend->mutator_entries.byte_len = 0;

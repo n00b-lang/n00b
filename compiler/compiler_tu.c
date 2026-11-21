@@ -2003,6 +2003,8 @@ bind_array_shape_alias_source(parse_grammar_t *grammar,
     for (parse_tree_t *at = type_reference; at;
          at = parse_tree_parent(at)) {
         if (core_tree_is_leaf(at)) continue;
+        if (NT_IS(grammar, at, "tspec-application")
+            || NT_IS(grammar, at, "tspec-func")) return true;
         parse_sym_entry_t *owner = parse_tree_sym(at);
         if (!owner || owner->decl_node != at
             || (owner->kind != PARSE_SYM_VARIABLE

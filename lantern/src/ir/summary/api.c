@@ -549,6 +549,8 @@ summary_shell(ir_summaries_t *summaries, const ir_func_t *function)
     void *summary = summaries
         ? core_dict_get(&summaries->by_function, (void *)function, &found)
         : nullptr;
+    if (!found && summaries && summaries->fallback)
+        return summary_shell(summaries->fallback, function);
     return found ? summary : nullptr;
 }
 
@@ -1000,7 +1002,10 @@ entries_unrecorded(ir_summaries_t *summaries, uint32_t flag)
 {
     const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
     return hooks && hooks->entries
-        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+        ? hooks->entries(hooks->context, summaries, flag,
+                         summaries->member_count ? summaries->members[0]
+                                                 : nullptr)
+        : nullptr;
 }
 
 const ir_summary_t *
