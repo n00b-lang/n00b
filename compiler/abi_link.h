@@ -50,8 +50,6 @@ typedef struct {
     size_t count;
 } n00bb_abi_selected_objects_t;
 
-/* The object and table bytes are borrowed; only the decoded directory is
- * owned by the view. An unsuccessful open leaves `out` unchanged. */
 bool n00bb_abi_object_open(const core_target_desc_t *target,
                            const uint8_t *object, size_t object_bytes,
                            n00bb_abi_object_view_t *out);
@@ -67,24 +65,15 @@ const n00bb_abi_directory_entry_t *n00bb_abi_object_table(
     const n00bb_abi_object_view_t *view, uint32_t kind);
 const void *n00bb_abi_object_row(const n00bb_abi_object_view_t *view,
                                   uint32_t kind, uint32_t index);
-/* Reads an inline or pool-backed metadata string without applying native
- * relocations. The returned bytes borrow the object; failure leaves out
- * unchanged. */
 bool n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
                              const n00b_abi_string_v1 *value,
                              n00bb_abi_string_view_t *out);
 
-/* Extracts ABI object members from a regular native archive. Module names and
- * object bytes borrow the archive; release frees only the input array. */
 bool n00bb_abi_archive_inputs_open(const core_target_desc_t *target,
                                     const void *archive, size_t archive_bytes,
                                     n00bb_abi_archive_inputs_t *out);
 void n00bb_abi_archive_inputs_release(n00bb_abi_archive_inputs_t *inputs);
 
-/* Selects exactly one object for each TU in the finalized link graph.
- * Unrelated candidates are ignored; selected objects are checked against
- * their module, import requirements, and recursive-import fragments. Object
- * bytes are borrowed and must outlive the selection. */
 bool n00bb_abi_select_objects(core_link_unit_t *link,
                               const core_target_desc_t *target,
                               const n00bb_abi_object_input_t *candidates,
@@ -94,10 +83,6 @@ void n00bb_abi_selected_objects_release(n00bb_abi_selected_objects_t *selected);
 
 typedef struct n00bb_abi_index_plan_t n00bb_abi_index_plan_t;
 
-/* Assigns one final index to each pre-remap identity and retains a checked
- * local-to-final map for every input table. Type-owned layout, trace, and
- * signature rows share their owner's identity; other reference-dependent
- * rows remain distinct until the remap/merge stage. */
 n00bb_abi_index_plan_t *n00bb_abi_index_plan_build(
     const n00bb_abi_selected_objects_t *selected);
 typedef struct {
@@ -131,9 +116,6 @@ bool n00bb_abi_index_plan_map(const n00bb_abi_index_plan_t *plan,
 const core_index_remap_t *n00bb_abi_index_plan_remap(
     const n00bb_abi_index_plan_t *plan, size_t input_index, uint32_t kind);
 
-/* `values` is the merged U32 stream; `kinds` is a same-length zeroed build
- * buffer that detects conflicting interpretations of a source slot. Neither
- * buffer is owned by the remapper. On failure, discard the output buffers. */
 typedef struct {
     uint32_t *values;
     uint32_t *kinds;
@@ -146,8 +128,6 @@ bool n00bb_abi_remap_row(
     uint32_t kind, uint32_t local_index, void *out, size_t out_bytes,
     n00bb_abi_u32_stream_build_t *stream);
 
-/* Pre-pooling manifest rows. String values still borrow the selected input
- * object and must be relocated into the final shared string pool. */
 typedef struct {
     n00b_abi_package_v1 *packages;
     uint32_t package_count;
@@ -164,17 +144,11 @@ bool n00bb_abi_rebuild_manifests(
     n00bb_abi_manifest_rows_t *out);
 void n00bb_abi_manifest_rows_release(n00bb_abi_manifest_rows_t *rows);
 
-/* Re-encodes every string-shaped column from an input row into a copied
- * final row, retaining its binary/ASCII/UTF-8 encoding. Long values gain
- * relocations addressed by final table kind and row index. */
 bool n00bb_abi_repool_row_strings(
     const n00bb_abi_object_view_t *view, uint32_t kind,
     uint32_t local_index, uint32_t final_index,
     void *out_row, size_t out_bytes, n00bb_abi_name_pool_t *pool);
 
-/* A staged, unpublishable table universe. Duplicate identity rows still
- * require structural compatibility checks, and native sections/index patches
- * have not yet been linked. All row and pool bytes are owned by this value. */
 typedef struct {
     size_t input;
     uint32_t local;
@@ -198,8 +172,6 @@ typedef struct {
 bool n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                           const n00bb_abi_index_plan_t *plan,
                           n00bb_abi_merged_rows_t *out);
-/* Unions specialization edges from every selected definition after type
- * indexes are final. Failure leaves the merged rows unchanged. */
 bool n00bb_abi_rebuild_specialization_links(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_index_plan_t *plan, n00bb_abi_merged_rows_t *merged);
@@ -232,11 +204,6 @@ typedef struct {
     uint32_t final_section_index;
 } n00bb_abi_string_storage_rebase_t;
 
-/* Owns merged copies of selected, file-backed native sections other than each
- * TU's metadata container. Input sections with the same name, segment and
- * flags share one final section; each map places one input section at its
- * base offset. Pointer relocations and exported symbols are transferred by
- * the final link step, not here. */
 bool n00bb_abi_collect_native_sections(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,
@@ -250,10 +217,6 @@ typedef struct {
     size_t relocation_count;
 } n00bb_abi_native_relocations_t;
 
-/* Transfers supported native absolute-64 relocations from collected sections.
- * Defined targets are relocated through their input's section map; undefined
- * targets retain their native name. Metadata relocations are rebuilt from the
- * merged table pool separately. Failure leaves `out` unchanged. */
 bool n00bb_abi_collect_native_relocations(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_native_sections_t *sections,
@@ -261,10 +224,6 @@ bool n00bb_abi_collect_native_relocations(
 void n00bb_abi_native_relocations_release(
     n00bb_abi_native_relocations_t *relocations);
 
-/* Rebases native-section references after the final sections are placed.
- * `base_offset` is the input section's byte offset within its final section.
- * Every non-reserved STORAGE and NATIVE_BINDING row must have exactly one
- * matching map. A failure leaves all merged rows unchanged. */
 typedef struct {
     uint32_t table_kind;
     uint32_t row_index;
@@ -279,45 +238,29 @@ bool n00bb_abi_rebase_native_references(
     const n00bb_abi_string_storage_rebase_t *string_storage,
     n00bb_abi_native_rebase_failure_t *failure);
 
-/* Adds merged native bindings after section rebasing. An existing undefined
- * reference with the same native name becomes defined; a conflicting defined
- * name fails. On failure `symbols` is unchanged. */
 bool n00bb_abi_add_native_bindings(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_merged_rows_t *merged,
     const n00bb_abi_native_sections_t *sections,
     n00bb_abi_native_relocations_t *symbols);
 
-/* Patches copied native section bytes using each input's local-to-final
- * table maps. Inputs remain unchanged. On failure the copied sections must
- * be discarded; no output object has been published. */
 bool n00bb_abi_apply_link_patches(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_index_plan_t *plan,
     const n00bb_abi_merged_rows_t *merged,
     n00bb_abi_native_sections_t *sections);
 
-/* Moves compiler-emitted long string payloads into the merged pool and
- * removes the source TU pools. Native section indexes, symbols, and pointer
- * relocations are rebased together; on failure discard all staged values. */
 bool n00bb_abi_consolidate_native_strings(
     const core_target_desc_t *target,
     n00bb_abi_name_pool_t *pool,
     n00bb_abi_native_sections_t *sections,
     n00bb_abi_native_relocations_t *native);
 
-/* Consolidates selected TU objects into one relocatable object. Link-only
- * requirements are removed only after resolution; unsupported patch and
- * dispatch records fail without changing the output. The object is owned
- * by the caller and is not an executable. */
 bool n00bb_abi_link_selected_objects(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,
     uint8_t **out_object, size_t *out_object_bytes);
 
-/* The frontend may add final-indexed semantic rows after remapping and
- * before the static image is packed. The callback must leave merged rows
- * valid on success; failure discards the entire link result. */
 typedef bool (*n00bb_abi_link_semantics_fn)(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_index_plan_t *plan,
@@ -336,8 +279,6 @@ bool n00bb_abi_link_objects_with_semantics(
     n00bb_abi_index_plan_failure_t *plan_failure,
     n00bb_abi_native_rebase_failure_t *rebase_failure);
 
-/* Selects objects for the finalized link unit, then consolidates them.
- * Candidate bytes are borrowed; the completed object is caller-owned. */
 bool n00bb_abi_link_objects(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,

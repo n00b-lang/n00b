@@ -283,8 +283,6 @@ n00bb_variant_scope_for_type(core_translation_unit_t *unit,
         ? type_symbol->member_scope : nullptr;
 }
 
-// A variant's arms are the only symbols in its scope: the declared ones,
-// and the tags of variants loaded from an interface.
 bool
 n00bb_variant_arm_symbol(const parse_sym_entry_t *symbol)
 {
@@ -508,7 +506,6 @@ n00bb_switch_case_integer(parse_grammar_t *grammar, parse_tree_t *node,
         grammar, node, &negative, &saw_sign);
     if (!literal) return false;
     if (!n00bb_parse_switch_integer(first_token_text(literal), value)) {
-        // A character literal case (`case 'n'`) matches its scalar value.
         parse_token_info_t *token = parse_tree_find_first_terminal(literal);
         core_option_t(core_string_t) text = token
             ? parse_token_value(token) : core_option_none(core_string_t);
@@ -764,10 +761,7 @@ n00bb_explicit_literal_site(parse_grammar_t *grammar,
     bool ambiguous = false;
     n00bb_user_litmod_t *registration = kind.data
         ? user_litmod(state, modifier, kind, &ambiguous) : nullptr;
-    // A fence with no modifier reads as `'string`; `'ffi` fences are
-    // module literals the driver handles before lowering.
     bool fence = NT_IS(grammar, node, "embed-lit");
-    // With no literal kind there is nothing to check the modifier against.
     bool unknown = kind.data && !registration && !ambiguous
         && !builtin_litmod_name(modifier, kind)
         && !(fence && (core_string_eq(modifier, CORE_STRING_STATIC("string"))
@@ -953,7 +947,6 @@ cache_record_layout_request(parse_grammar_t *grammar,
         CORE_STRING_STATIC("n00bb.record-layout-request"), stored);
 }
 
-// True when a name in `node` couldn't be found, which was reported then.
 static bool
 has_unresolved_name(parse_tree_t *node)
 {
@@ -1021,8 +1014,6 @@ typedef struct {
 } union_arm_entry_t;
 core_list_decl(union_arm_entry_t);
 
-// Modules are checked in parallel, and a record's union arms are asked
-// about from the modules that use it.
 static core_list_t(union_arm_entry_t) union_arms;
 static pthread_mutex_t union_arms_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1095,9 +1086,6 @@ cache_record_field_extents(parse_grammar_t *grammar,
     parse_scope_t *scope = record ? record->member_scope : nullptr;
     n00bb_native_declarations_t natives = n00bb_source_natives(unit);
     if (!state || !scope || !natives.field_count) return true;
-    // Only an FFI contract describes these, for the `layout(c)` records it
-    // generates (n00bb_native_field_t); writ already checked them against
-    // the contract, so a field the facts name is always there.
     for (size_t i = 0; i < natives.field_count; i++) {
         const n00bb_native_field_t *fact = &natives.fields[i];
         if (!core_string_eq(fact->record, record->name)) continue;
@@ -1722,8 +1710,6 @@ index_assignment_statement(parse_grammar_t *grammar, parse_tree_t *node,
     return nullptr;
 }
 
-// Whether `node` is `container[...]`, and whether its contents are a slice:
-// read from the node's own children alone.
 bool
 n00bb_index_node(parse_grammar_t *grammar, parse_tree_t *node, bool *slice)
 {
@@ -2161,7 +2147,6 @@ record_type_bound(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
     return true;
 }
 
-// The type a `cast[...]` names, when `node` lies inside it.
 static parse_tree_t *
 enclosing_cast_type(parse_grammar_t *grammar, parse_tree_t *node)
 {
@@ -2180,7 +2165,6 @@ enclosing_cast_type(parse_grammar_t *grammar, parse_tree_t *node)
     return nullptr;
 }
 
-// The trait `spec`, the type of a `cast[...]`, names directly.
 static parse_sym_entry_t *
 first_named_symbol(parse_tree_t *node)
 {
@@ -2197,8 +2181,6 @@ first_named_symbol(parse_tree_t *node)
     return nullptr;
 }
 
-// The trait `spec`, the type of a `cast[...]`, names: its first name, so
-// `List[Trait]` names no trait.
 parse_sym_entry_t *
 n00bb_cast_trait(parse_grammar_t *grammar, parse_tree_t *spec)
 {
@@ -2206,7 +2188,6 @@ n00bb_cast_trait(parse_grammar_t *grammar, parse_tree_t *spec)
     return symbol && is_trait_type_symbol(grammar, symbol) ? symbol : nullptr;
 }
 
-// The qualified name a trait's implementations are recorded under.
 void
 n00bb_trait_qualified_name(core_translation_unit_t *declaration_unit,
                            parse_sym_entry_t *symbol, core_buffer_t *out)
@@ -2229,8 +2210,6 @@ trait_type_reference(parse_grammar_t *grammar,
                      parse_sym_entry_t *symbol, parse_tree_t *reference)
 {
     n00bb_tu_state_t *state = tu_state(use_unit);
-    // A cast to a trait checks the value implements it; it is no type
-    // parameter of the function the cast is in.
     bool cast = reference && enclosing_cast_type(grammar, reference);
     parse_sym_entry_t *owner = reference && !cast
         ? typevar_owner(grammar, reference) : nullptr;
@@ -2804,8 +2783,6 @@ array_dimension_extent(parse_grammar_t *grammar, parse_tree_t *expression)
             .kind = IR_SHAPE_EXTENT_STATIC,
             .static_value = value,
         };
-    // At module scope too, the size is computed when the program runs, by the
-    // module's initializer (n00bb_allocate_runtime_global).
     return (ir_shape_extent_t){
         .kind       = IR_SHAPE_EXTENT_RUNTIME,
         .expression = expression,
@@ -3068,8 +3045,6 @@ static parse_sym_entry_t *
 typevar_owner(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *owner_node = node;
-    // An alias's type variables are its parameters: `alias Set = Dict['T,
-    // nil]` is used as `Set[int]`.
     while (owner_node && !NT_IS(grammar, owner_node, "func-def")
            && !NT_IS(grammar, owner_node, "trait-decl")
            && !NT_IS(grammar, owner_node, "callback-decl")
@@ -3139,7 +3114,6 @@ owner_typevar(n00bb_tu_state_t *state, parse_sym_entry_t *owner,
 void
 note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    // A `with`'s hooks are calls that may fail.
     bool raises = NT_IS(grammar, node, "fail-stmt")
         || NT_IS(grammar, node, "with-stmt")
         || NT_IS(grammar, node, "with-value-expr")
@@ -3149,7 +3123,6 @@ note_function_may_fail(parse_grammar_t *grammar, parse_tree_t *node)
                                   CORE_STRING_STATIC("!")));
     for (parse_tree_t *at = raises ? parse_tree_parent(node) : nullptr; at;
          at = parse_tree_parent(at)) {
-        // A `try`'s body sends its failures to the `try`'s handler.
         parse_tree_t *parent = parse_tree_parent(at);
         if (NT_IS(grammar, at, "try-body")
             || (NT_IS(grammar, at, "value-body") && parent
@@ -3188,8 +3161,6 @@ record_cached_declared_function_signature(parse_grammar_t *grammar,
     th_type *success = return_node
         ? return_types ? parse_tree_type(return_types) : nullptr
         : th_var(state->types);
-    // With no `fail:` clause, the failure type is inferred, or is `nil` if
-    // the body turns out not to fail (record_function_signature).
     th_type *failure = error_node
         ? error_type ? parse_tree_type(error_type) : nullptr
         : th_var(state->types);
@@ -3326,8 +3297,6 @@ trait_receiver_name(th_type *signature)
                                           : (core_string_t){0};
 }
 
-// A trait's type parameters: the variables its methods name besides their
-// receivers', in order of appearance.
 static core_list_t(core_string_t)
 trait_parameter_names(th_ctx *types, parse_sym_entry_t *trait_symbol)
 {
@@ -3366,7 +3335,6 @@ n00bb_trait_method_instances(th_ctx *types, parse_sym_entry_t *trait_symbol,
     bool ok = !arguments || names.len == arguments->len;
     for (size_t i = 0; ok && arguments && i < arguments->len; i++)
         ok = arguments->data[i] != nullptr;
-    // With no arguments, the bound's own variables, one per parameter.
     th_type **given = ok && names.len
         ? core_alloc_array(th_type *, names.len) : nullptr;
     for (size_t n = 0; given && n < names.len; n++)
@@ -3434,8 +3402,6 @@ apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
                                              : CORE_STRING_STATIC("?")),
                        ARG_NUMBER((int64_t)expected),
                        ARG_NUMBER((int64_t)arguments.len)));
-    // A declared method constraint is the call's shape: the method's without
-    // its receiver.
     for (size_t m = 0; ok && m < methods.len; m++) {
         th_type *instance = methods.data[m].target;
         core_list_t(th_param) rest = core_list_new(th_param);
@@ -3460,7 +3426,6 @@ apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return ok;
 }
 
-// An operator trait, which the compiler provides without a declaration.
 static bool
 builtin_trait_name(core_string_t name)
 {
@@ -3499,8 +3464,6 @@ apply_one_signature_constraint(parse_grammar_t *grammar,
         core_buffer_release(&name);
         return false;
     }
-    // A qualified name may resolve later, by name; an unqualified one that
-    // names no trait here is unknown.
     if (!trait_symbol && !memchr(name.data, '.', name.byte_len)
         && !builtin_trait_name(core_buffer_string(&name))) {
         n00bb_report(core_translation_unit_diagnostics(unit), unit,
@@ -3691,8 +3654,6 @@ record_function_signature(parse_grammar_t *grammar,
     if (declared) {
         th_type *unified = function_with_error_channel(state->types,
                                                        declared, nullptr);
-        // An omitted `fail:` leaves the declared signature's failure open,
-        // to be inferred.
         th_type *declared_kind = th_resolve(declared);
         th_type *declared_error = declared_failure ? declared_failure
             : th_kind_of(declared_kind) == TH_FUNCTION
@@ -3723,8 +3684,6 @@ record_function_signature(parse_grammar_t *grammar,
         else symbol->error_type = failure;
     }
 
-    // With no `fail:` clause, a body with no `fail`, `!` or `with` outside
-    // a `try` (note_function_may_fail) cannot fail.
     th_type *open = symbol->error_type ? th_resolve(symbol->error_type)
                                        : nullptr;
     if (!declared_failure && open && th_kind_of(open) == TH_VAR
@@ -3842,7 +3801,6 @@ record_function_signature(parse_grammar_t *grammar,
                     N00BB_NO_ARGS);
         }
         else {
-            // A value type would be finalized once per copy.
             th_type *finalized = th_resolve(
                 th_ind_referent(th_resolve(receiver->type)));
             if (finalized && th_kind_of(finalized) != TH_VAR
@@ -4015,8 +3973,6 @@ n00bb_print_type(th_ctx *types, th_type *type)
     return th_print_with_options(types, type, &options);
 }
 
-// Builtin types are in scope everywhere under their short names, and their
-// qualified names (`builtin.containers.dict.Dict`) do not resolve.
 static core_string_t
 source_type_name(core_string_t name, void *context)
 {
@@ -4025,8 +3981,6 @@ source_type_name(core_string_t name, void *context)
         ? short_type_name(name, context) : name;
 }
 
-// Qualified, and spelled as source would write it (`Tuple[u8, u8]`), for
-// text the formatter puts back into a program.
 core_string_t
 n00bb_print_type_source(th_ctx *types, th_type *type)
 {
@@ -4664,7 +4618,6 @@ finalize_variant_symbol_type(parse_tree_t *node,
     return true;
 }
 
-// The width and signedness of a fixed-width integer type, for `enum E: T`.
 static bool
 enum_storage_scalar(th_type *type, uint32_t *bits, bool *is_signed)
 {
@@ -4694,8 +4647,6 @@ enum_storage_scalar(th_type *type, uint32_t *bits, bool *is_signed)
     return false;
 }
 
-// Applies `: T` to an enum's range, reporting a storage type that is not a
-// fixed-width integer or that cannot hold every item.
 static bool
 enum_declared_storage(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_sym_entry_t *symbol, parse_tree_t *storage,
@@ -4808,8 +4759,6 @@ finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
     core_list_free(items);
     parse_tree_t *prefix = CHILD_NT(grammar, node, "enum-prefix");
     range.is_open = prefix && CHILD_NT(grammar, prefix, "enum-open");
-    // A storage type that is reported as invalid falls back to the best
-    // fit, so the rest of the module is still checked.
     parse_tree_t *storage = CHILD_NT(grammar, node, "enum-storage");
     if (ok && storage)
         (void)enum_declared_storage(grammar, unit, symbol, storage, &range);
@@ -5409,8 +5358,6 @@ n00bb_reference_views(th_type *from, th_type *to)
         && th_same_type(th_ind_referent(from), item->type);
 }
 
-// A `P` passed where a `View[P]` is wanted is viewed in place, as if
-// written `ref p`.
 bool
 n00bb_value_views(th_type *from, th_type *to)
 {
@@ -6624,8 +6571,6 @@ scope_has_lexical_lifetime(parse_scope_t *scope)
     return false;
 }
 
-// The binding kind (`const`, `let` or `var`) and storage class the variable
-// declaration around `node` spells; false when `node` is in none.
 static bool
 declared_binding_kind(parse_grammar_t *grammar, parse_tree_t *node,
                       parse_sym_mutability_t *mutability, bool *threaded)
@@ -6697,10 +6642,6 @@ apply_declaration_defaults(parse_visit_t *visit)
     if (declared && declared->is_field
         && in_private_fields(visit->grammar, visit->node))
         declared->visibility = CORE_STRING_STATIC("private");
-    // A module variable's binding kind is known once it is declared: an
-    // import cycle can expand a package's whole-module export before the
-    // module's own walk reaches the declaration, and whether a variable is
-    // exported by default depends on it being `const`.
     parse_sym_mutability_t mutability;
     bool threaded;
     if (declared && declared->kind == PARSE_SYM_VARIABLE
@@ -6995,7 +6936,6 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         core_string_t name = {0};
         if (!simple_identifier_expression(visit->grammar, target, &name))
             return;
-        // `_ = value` names no variable: the value is discarded.
         if (core_string_eq(name, CORE_STRING_STATIC("_"))) {
             (void)parse_tree_mark_discards_value(visit->node);
             return;
@@ -7467,8 +7407,6 @@ cache_package_export_syntax(parse_grammar_t *grammar,
             package_node = parent;
             break;
         }
-    // The grammar accepts `export` in any block, so a `when` inside a
-    // `package` block can hold one; anywhere else it is an error.
     if (!package_node) {
         n00bb_report(core_translation_unit_diagnostics(unit), unit,
             N00B_DIAG_EXPORT_OUTSIDE_PACKAGE, link_source_location(node),
@@ -8536,7 +8474,6 @@ names_visible_litmod(n00bb_tu_state_t *state, core_string_t name)
     return false;
 }
 
-// The one token a type written as a single name is, if it is one.
 static parse_tree_t *
 sole_leaf(parse_tree_t *node, parse_tree_t **parent, size_t *index)
 {
@@ -8564,8 +8501,6 @@ sole_leaf(parse_tree_t *node, parse_tree_t **parent, size_t *index)
     return found;
 }
 
-// Rebuilds a bare `alias name = target` statement as
-// `alias litmod name = target`.
 static parse_tree_t *
 litmod_alias_from(parse_grammar_t *grammar, parse_tree_t *statement)
 {
@@ -8594,7 +8529,6 @@ litmod_alias_from(parse_grammar_t *grammar, parse_tree_t *statement)
         parse_tree_free(word);
         return nullptr;
     }
-    // Children of the statement: the keyword, the name, `=`, the type.
     parse_tree_t *alias_word = core_tree_remove_child(keyword, 0);
     parse_tree_t *assign = core_tree_remove_child(statement, 2);
     parse_tree_t *identifier = core_tree_remove_child(statement, 1);
@@ -9009,9 +8943,6 @@ cache_ordered_array_dimensions(parse_grammar_t *grammar,
     core_list_free(items);
     return ok;
 }
-// The variable a `switch` or `typecase` narrows: its subject, when that is
-// a variable or parameter, possibly in grouping parentheses. Recorded on the
-// node, so lowering need not find it in the subject's syntax.
 parse_sym_entry_t *
 n00bb_narrowed_subject(parse_grammar_t *grammar,
                        core_translation_unit_t *unit, parse_tree_t *node)
@@ -9352,7 +9283,6 @@ compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return result;
 }
 
-// The alias a type name refers to, when the alias has type parameters.
 static parse_sym_entry_t *
 generic_alias_named(parse_grammar_t *grammar, parse_tree_t *type_node)
 {
@@ -9370,9 +9300,6 @@ generic_alias_named(parse_grammar_t *grammar, parse_tree_t *type_node)
     return alias ? symbol : nullptr;
 }
 
-// `Alias[args]` for an alias with type parameters: the aliased type with
-// each parameter, in the order the target first names it, replaced by its
-// argument.
 static th_type *
 generic_alias_application(parse_grammar_t *grammar,
                           core_translation_unit_t *unit,
@@ -9406,8 +9333,6 @@ generic_alias_application(parse_grammar_t *grammar,
         : nullptr;
     core_free(to);
     core_list_free(arguments);
-    // The alias's name, applied here, stands for the applied type; left
-    // with the alias's own type, it would carry the alias's parameters.
     if (expanded) parse_tree_set_type(type_node, expanded);
     return expanded;
 }

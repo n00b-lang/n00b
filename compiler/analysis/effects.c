@@ -367,8 +367,6 @@ implementations(n00bb_link_analysis_t *analysis, core_string_t trait,
     *found = core_list_new(n00bb_ir_func_ptr_t);
     bool known = count != 0;
     for (size_t i = 0; known && i < count; i++) {
-        // A bit integer's `Integer.from_bits` is a cast with no body and no
-        // effects (see register_bit_integer_from_bits).
         if (core_string_starts_with(methods[i].qualified_name,
                                     CORE_STRING_STATIC("builtins.Integer.")))
             continue;
@@ -859,9 +857,6 @@ n00bb_summary_global_named(void *context, const ir_func_t *function,
     return !owner || !viewer || owner == viewer;
 }
 
-// The collector's own module variables are behind an abstraction barrier
-// for code outside it: a caller sees what a collector function does to its
-// arguments and what it returns, not the collector's state.
 static bool
 collector_module(core_string_t name)
 {
@@ -879,8 +874,6 @@ n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
     if (collector_module(ir_module_name((ir_module_t *)owner))
         && !collector_module(ir_module_name(caller->owner)))
         return IR_SUMMARY_HIDDEN_BARRIER;
-    // A global the caller can't name, whose address never leaves its
-    // module, can't be seen from the caller at all.
     if (!analysis->global_symbols_ready) {
         core_dict_init(&analysis->global_symbols, nullptr, nullptr);
         index_module_globals(analysis, &analysis->global_symbols);
@@ -892,9 +885,6 @@ n00bb_summary_global_hidden(void *context, const ir_func_t *caller,
     core_translation_unit_t *viewer = n00bb_visibility_unit(analysis,
                                                             caller->owner);
     if (!found || !symbol) {
-        // A cached module's private global has no symbol here, only its
-        // body's global; it's hidden exactly as when it's compiled, or
-        // summaries would depend on what was cached.
         ir_global_t *cached = analysis->cached_globals_ready
             ? core_dict_get(&analysis->cached_globals, (void *)global,
                             nullptr) : nullptr;
@@ -967,9 +957,6 @@ callee_text(const ir_switness_t *witness, core_buffer_t *out)
                                    CORE_STRING_STATIC("$spec$"));
     if (cut >= 0) source.module = core_string_slice(source.module, 0,
                                                     (size_t)cut);
-    // A native is named as its contract declares it, not by its C symbol:
-    // a syscall's symbol is its number on this architecture, and a shim's
-    // carries its literal's prefix.
     uint32_t declared = 0;
     bool generated = core_string_starts_with(source.name,
             CORE_STRING_STATIC("n00b.syscall."))
@@ -1005,8 +992,6 @@ spath_text(core_buffer_t *out, const ir_func_t *function,
 {
     if (path->root == IR_SPLACE_PARAM) {
         param_text(out, function, path->param);
-        // A modify or out parameter is a reference to the caller's place;
-        // its paths are shown as the place's, without that reference.
         const th_param *formal = function && function->type
                 && path->param < th_func_nparams(function->type)
             ? th_func_param(function->type, path->param) : nullptr;
@@ -1522,7 +1507,6 @@ witness_text(const ir_switness_t *witness, core_buffer_t *out)
         core_buffer_puts(out, "a checked callback");
         return;
     }
-    // `Trait.method`, naming the trait as written rather than qualified.
     core_string_t text = bound->s;
     size_t dots = 0, start = 0;
     for (size_t i = text.u8_bytes; i > 0 && !start; i--)

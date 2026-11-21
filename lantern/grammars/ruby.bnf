@@ -1,43 +1,14 @@
 @lexer("ruby.lex")
 
-# Ruby 3.x Grammar
-#
-# Syntactic grammar for Ruby 3.x, based on CRuby's parse.y.
-# Lexer-provided tokens: %IDENTIFIER, %CONSTANT, %INTEGER, %FLOAT, %STRING,
-# %SYMBOL, %REGEX, %HEREDOC, %IVAR, %CVAR, %GVAR, %NTH_REF, %BACK_REF
-#
-# The lexer is responsible for:
-#   - String interpolation (#{expr} boundaries)
-#   - Heredoc management
-#   - Regex literal scanning
-#   - Symbol quoting (:"...")
-#   - Distinguishing unary vs binary +/-
-#   - Distinguishing / (division) vs /.../ (regex)
-#   - %w[], %i[], %r{}, %q{}, %Q{} literal forms
-#   - Newline significance (statement terminators vs ignored inside grouping)
-#   - Recognizing CONSTANT (capitalized identifier) vs IDENTIFIER
-#   - Encoding __ENCODING__, __LINE__, __FILE__ as keywords
-#
-# Start symbol: <program>
-
-# ============================================================================
-# Program structure
-# ============================================================================
-
 <program> ::= <compstmt>
 
 <compstmt> @nospace($1) ::= <stmts>? <opt-terms>
 
 <stmts> @hardline @nospace($1) ::= <stmt> (<terms> <stmt>)*
 
-# Statement terminators: newline or semicolon
 <terms> ::= <term>+
 <term> ::= %NEWLINE | %";"
 <opt-terms> ::= <terms>?
-
-# ============================================================================
-# Statements
-# ============================================================================
 
 <stmt> ::= <alias-stmt>
           | <undef-stmt>
@@ -58,7 +29,6 @@
 <begin-block> ::= %"BEGIN" %"{" <compstmt> %"}"
 <end-block> ::= %"END" %"{" <compstmt> %"}"
 
-# Modifier forms: expr if/unless/while/until/rescue expr
 <stmt-modifier> ::= <expr> %"if" <expr>
                    | <expr> %"unless" <expr>
                    | <expr> %"while" <expr>
@@ -66,10 +36,6 @@
                    | <expr> %"rescue" <expr>
                    | <expr> %"in" <pattern>
                    | <expr> %"=>" <pattern>
-
-# ============================================================================
-# Expressions
-# ============================================================================
 
 <expr> ::= <not-expr>
           | <keyword-and-expr>
@@ -80,18 +46,12 @@
           | <multi-assign>
           | <arg>
 
-# Ruby's keyword-level boolean operators (lowest precedence)
 <keyword-not-expr> ::= %"not" <expr>
 <keyword-and-expr> ::= <expr> %"and" <expr>
 <keyword-or-expr> ::= <expr> %"or" <expr>
 
-# "!" applied to a command call (method call without parens)
 <not-expr> ::= %"!" <command-call>
              | %"!" <arg>
-
-# ============================================================================
-# Multiple assignment
-# ============================================================================
 
 <multi-assign> ::= <mlhs> %"=" <mrhs>
                  | <mlhs> %"=" <mrhs> %"," %"*" <arg>
@@ -111,10 +71,6 @@
               | <primary> %"::" %CONSTANT
 
 <mrhs> ::= <arg> (%"," <arg>)*
-
-# ============================================================================
-# Assignment expressions
-# ============================================================================
 
 <assignment-expr> ::= <lhs> %"=" <arg>
                     | <lhs> <assign-op> <arg>
@@ -140,10 +96,6 @@
               | %"<<="
               | %">>="
 
-# ============================================================================
-# Command calls (method calls without parentheses)
-# ============================================================================
-
 <command-call> ::= <command>
                  | <primary> <call-op> <operation> <command-args>
                  | <primary> <call-op> <operation> <command-args> <block>
@@ -159,27 +111,6 @@
             | <operation> <command-args> <block>
 
 <command-args> ::= <call-args>
-
-# ============================================================================
-# Arguments (precedence chain)
-# ============================================================================
-#
-# Precedence (lowest to highest):
-#   ternary          ? :
-#   range            .. ...
-#   or               ||
-#   and              &&
-#   not              ! (unary)
-#   comparison       <=> == === != =~ !~ <= >= < >
-#   or (bitwise)     |  ^
-#   and (bitwise)    &
-#   shift            << >>
-#   additive         + -
-#   multiplicative   * / %
-#   unary minus      -@ +@
-#   power            **
-#   not (bitwise)    ~ !
-#   indexing, calls  [] . ::
 
 <arg> ::= <ternary-expr>
 
@@ -250,10 +181,6 @@
                | <primary>
                | %"defined?" <arg>
 
-# ============================================================================
-# Primary expressions
-# ============================================================================
-
 <primary> ::= <literal>
             | <string-expr>
             | <symbol-expr>
@@ -297,10 +224,6 @@
             | <indexing-expr>
             | <scope-resolution>
 
-# ============================================================================
-# Literals
-# ============================================================================
-
 <literal> ::= <numeric-literal>
 
 <numeric-literal> ::= %INTEGER
@@ -309,16 +232,13 @@
                      | %"-" %FLOAT
 
 <string-expr> ::= %STRING+
+                | %Q
 
 <symbol-expr> ::= %SYMBOL
 
 <regex-literal> ::= %REGEX
 
 <heredoc-literal> ::= %HEREDOC
-
-# ============================================================================
-# Variable references
-# ============================================================================
 
 <variable-ref> ::= <variable>
 
@@ -338,21 +258,9 @@
 <line-expr> ::= %"__LINE__"
 <encoding-expr> ::= %"__ENCODING__"
 
-# ============================================================================
-# Parenthesized expressions
-# ============================================================================
-
 <paren-expr> ::= %"(" <compstmt> %")"
 
-# ============================================================================
-# Array literal
-# ============================================================================
-
 <array-literal> ::= %"[" <opt-call-args> %"]"
-
-# ============================================================================
-# Hash literal
-# ============================================================================
 
 <hash-literal> ::= %"{" <opt-assoc-list> %"}"
 
@@ -366,24 +274,18 @@
            | %STRING %":" <arg>
            | %"**" <arg>
 
-# ============================================================================
-# Method calls
-# ============================================================================
-
 <method-call> ::= <primary> <call-op> <operation> <opt-paren-args> <opt-block>
                 | <primary> %"::" <operation> <opt-paren-args> <opt-block>
                 | <operation> <paren-args> <opt-block>
                 | <primary> <call-op> <operation> <opt-block>
                 | <primary> %"::" <operation> <opt-block>
 
-# Call operator: "." or "&." (safe navigation, Ruby 2.3+)
 <call-op> ::= %"." | %"&."
 
 <operation> ::= %IDENTIFIER
               | %CONSTANT
               | <operator-method-name>
 
-# Method names that are operators (for def/alias/method references)
 <operator-method-name> ::= %"|"
                           | %"^"
                           | %"&"
@@ -412,25 +314,12 @@
                           | %"[]="
                           | %"`"
 
-# Optional block attachment
 <opt-block> ::= <block>?
-
-# ============================================================================
-# Indexing
-# ============================================================================
 
 <indexing-expr> ::= <primary> %"[" <opt-call-args> %"]"
 
-# ============================================================================
-# Scope resolution
-# ============================================================================
-
 <scope-resolution> ::= <primary> %"::" %CONSTANT
                       | %"::" %CONSTANT
-
-# ============================================================================
-# Call arguments
-# ============================================================================
 
 <opt-paren-args> ::= <paren-args>?
 
@@ -453,10 +342,6 @@
 <block-pass> ::= %"&" <arg>
                | %"&"
 
-# ============================================================================
-# Super / yield / return / break / next
-# ============================================================================
-
 <super-expr> ::= %"super" <paren-args>
                | %"super"
 
@@ -474,10 +359,6 @@
 
 <redo-expr> ::= %"redo"
 <retry-expr> ::= %"retry"
-
-# ============================================================================
-# Blocks (do...end and brace blocks)
-# ============================================================================
 
 <block> ::= <brace-block>
            | <do-block>
@@ -501,10 +382,6 @@
                       | %"**" %IDENTIFIER?
                       | %"&" %IDENTIFIER?
 
-# ============================================================================
-# Lambda
-# ============================================================================
-
 <lambda-expr> ::= %"->" <lambda-params>? <lambda-body>
 
 <lambda-params> ::= %"(" <opt-formal-params> %")"
@@ -515,10 +392,6 @@
 
 <brace-block-body> ::= %"{" <compstmt> %"}"
 <do-block-body> ::= %"do" <compstmt> %"end"
-
-# ============================================================================
-# If / unless expressions
-# ============================================================================
 
 <if-expr> ::= %"if" <expr> <then-clause> <if-body> %"end"
 
@@ -536,10 +409,6 @@
 
 <unless-expr> ::= %"unless" <expr> <then-clause> <compstmt> <else-clause>? %"end"
 
-# ============================================================================
-# While / until expressions
-# ============================================================================
-
 <while-expr> ::= %"while" <expr> <do-clause> <compstmt> %"end"
 
 <until-expr> ::= %"until" <expr> <do-clause> <compstmt> %"end"
@@ -548,17 +417,9 @@
               | %"do"
               | <term> %"do"
 
-# ============================================================================
-# For expression
-# ============================================================================
-
 <for-expr> ::= %"for" <for-var> %"in" <expr> <do-clause> <compstmt> %"end"
 
 <for-var> ::= <mlhs-item> (%"," <mlhs-item>)*
-
-# ============================================================================
-# Case / when expression (traditional)
-# ============================================================================
 
 <case-expr> ::= %"case" <expr>? <opt-terms> <when-clauses> <else-clause>? %"end"
 
@@ -569,10 +430,6 @@
 <when-args> ::= <arg> (%"," <arg>)* (%"," %"*" <arg>)?
               | %"*" <arg>
 
-# ============================================================================
-# Case / in expression (Ruby 3.x pattern matching)
-# ============================================================================
-
 <case-in-expr> ::= %"case" <expr> <opt-terms> <in-clauses> <else-clause>? %"end"
 
 <in-clauses> ::= <in-clause>+
@@ -580,10 +437,6 @@
 <in-clause> ::= %"in" <pattern> <then-clause> <compstmt>
               | %"in" <pattern> %"if" <expr> <then-clause> <compstmt>
               | %"in" <pattern> %"unless" <expr> <then-clause> <compstmt>
-
-# ============================================================================
-# Patterns (Ruby 3.x pattern matching)
-# ============================================================================
 
 <pattern> ::= <pattern-alt>
 
@@ -604,7 +457,6 @@
                  | <pattern-paren>
                  | <pattern-deconstruct-keys>
 
-# Value patterns
 <pattern-value> ::= <literal>
                    | %STRING
                    | %SYMBOL
@@ -625,7 +477,6 @@
                    | %".." <pattern-value>
                    | %"..." <pattern-value>
 
-# Array pattern: [pat, pat, *rest, pat]
 <pattern-array> ::= %"[" <pattern-array-items>? %"]"
                   | <pattern-const> %"[" <pattern-array-items>? %"]"
                   | <pattern-const> %"(" <pattern-array-items>? %")"
@@ -636,11 +487,9 @@
 <pattern-splat> ::= %"*" %IDENTIFIER
                   | %"*"
 
-# Find pattern: [*pre, pat, ..., pat, *post]  (Ruby 3.x)
 <pattern-find> ::= %"[" <pattern-splat> %"," <pattern> (%"," <pattern>)* %"," <pattern-splat> %"]"
                  | <pattern-const> %"[" <pattern-splat> %"," <pattern> (%"," <pattern>)* %"," <pattern-splat> %"]"
 
-# Hash pattern: {key: pat, key: pat, **rest}
 <pattern-hash> ::= %"{" <pattern-hash-items>? %"}"
                  | <pattern-const> %"[" <pattern-hash-items> %"]"
 
@@ -656,33 +505,23 @@
                           | %"**" %"nil"
                           | %"**"
 
-# Pin operator: ^expr or ^(expr)
 <pattern-pin> ::= %"^" %IDENTIFIER
                 | %"^" %IVAR
                 | %"^" %CVAR
                 | %"^" %GVAR
                 | %"^" %"(" <expr> %")"
 
-# Constant pattern: Constant or Mod::Constant
 <pattern-const> ::= %CONSTANT
                    | <pattern-const> %"::" %CONSTANT
                    | %"::" %CONSTANT
 
-# Variable capture
 <pattern-capture> ::= %IDENTIFIER
 
-# Expression guard in pattern (using =>)
 <pattern-expr> ::= %"^" %"(" <expr> %")"
 
-# Parenthesized pattern
 <pattern-paren> ::= %"(" <pattern> %")"
 
-# deconstruct_keys variant (bare hash keys)
 <pattern-deconstruct-keys> ::= <pattern-hash-pair> (%"," <pattern-hash-pair>)* (%"," <pattern-double-splat>)?
-
-# ============================================================================
-# Begin / rescue / ensure / else
-# ============================================================================
 
 <begin-rescue-expr> ::= %"begin" <body-with-rescue> %"end"
 
@@ -698,10 +537,6 @@
 
 <ensure-clause> ::= %"ensure" <compstmt>
 
-# ============================================================================
-# Class definition
-# ============================================================================
-
 <class-def> @nospace($3) @hardline($4) @indent($4) @hardline($5) ::= %"class" <class-path> <superclass>? <term> <body-with-rescue> %"end"
 
 <singleton-class-def> ::= %"class" %"<<" <expr> <term> <body-with-rescue> %"end"
@@ -712,22 +547,13 @@
 
 <superclass> ::= %"<" <expr>
 
-# ============================================================================
-# Module definition
-# ============================================================================
-
 <module-def> ::= %"module" <class-path> <term> <body-with-rescue> %"end"
-
-# ============================================================================
-# Method definition
-# ============================================================================
 
 <method-def> @nospace($2) @nospace($3) @hardline($4) @indent($4) @hardline($5) ::= %"def" <method-name> <method-params>? <term> <body-with-rescue> %"end"
 
 <singleton-method-def> ::= %"def" <singleton> %"." <method-name> <method-params>? <term> <body-with-rescue> %"end"
                           | %"def" <singleton> %"::" <method-name> <method-params>? <term> <body-with-rescue> %"end"
 
-# Endless method definition (Ruby 3.x): def method = expr
 <endless-method-def> ::= %"def" <method-name> <method-params>? %"=" <arg>
 
 <endless-singleton-method-def> ::= %"def" <singleton> %"." <method-name> <method-params>? %"=" <arg>
@@ -739,17 +565,12 @@
                 | %CONSTANT
                 | <operator-method-name>
 
-# Method names for alias, undef (includes symbols)
 <method-name-or-symbol> ::= <method-name>
                            | %SYMBOL
 
 <method-params> @nospace ::= %"(" <opt-formal-params> %")"
 
 <opt-formal-params> ::= <formal-params>?
-
-# ============================================================================
-# Formal parameters
-# ============================================================================
 
 <formal-params> ::= <formal-param> (%"," <formal-param>)*
 
@@ -781,45 +602,4 @@
 <block-param-def> ::= %"&" %IDENTIFIER
                      | %"&"
 
-# Forwarding (...) parameter (Ruby 2.7+)
 <forward-param> ::= %"..."
-
-# ============================================================================
-# String interpolation
-# ============================================================================
-#
-# The lexer segments interpolated strings (double-quoted, heredocs, etc.)
-# into a sequence of STRING tokens and embedded expression delimiters.
-# The parser sees:
-#   STRING_BEG  string_content*  STRING_END
-# where string_content is either a literal STRING segment or:
-#   #{  compstmt  }
-#
-# Since this grammar treats STRING and HEREDOC as opaque lexer tokens
-# (the lexer handles the segmentation), no additional productions are
-# needed here. Numbered block parameters (_1 through _9) are likewise
-# recognized by the lexer as IDENTIFIER tokens.
-
-# ============================================================================
-# Operator precedence summary (for reference)
-# ============================================================================
-#
-# (Lowest to highest)
-#   1.  not                          (keyword)
-#   2.  or, and                      (keyword)
-#   3.  defined?
-#   4.  =, +=, -=, etc.             (assignment)
-#   5.  ?:                           (ternary)
-#   6.  ..  ...                      (range)
-#   7.  ||                           (logical or)
-#   8.  &&                           (logical and)
-#   9.  <=> == === != =~ !~          (equality / match)
-#  10.  <= >= < >                    (relational)
-#  11.  | ^                          (bitwise or/xor)
-#  12.  &                            (bitwise and)
-#  13.  << >>                        (shift)
-#  14.  + -                          (additive)
-#  15.  * / %                        (multiplicative)
-#  16.  -@ +@                        (unary plus/minus)
-#  17.  **                           (exponentiation)
-#  18.  ! ~ +                        (unary not/complement)

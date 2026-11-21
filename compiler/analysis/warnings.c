@@ -681,8 +681,6 @@ diagnose_ranges(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
-// What each function does to a lock, worked out once: its role plus 3,
-// and 1 while it is being worked out.
 struct lock_roles_t {
     core_dict_t roles;
 };
@@ -690,12 +688,8 @@ struct lock_roles_t {
 static ir_lock_role_t
 function_lock_role(lock_roles_t *roles, ir_func_t *function);
 
-// The lock states a path can be in: bit 0 when no lock is held, bit 1
-// when one is.
 enum { LOCK_FREE = 1, LOCK_HELD = 2 };
 
-// The states `function` can return in, starting from `entry`; 0 when it
-// never returns.
 static uint8_t
 lock_states_at_return(lock_roles_t *roles, ir_func_t *function, uint8_t entry)
 {
@@ -729,7 +723,6 @@ lock_states_at_return(lock_roles_t *roles, ir_func_t *function, uint8_t entry)
     return returned;
 }
 
-// Whether any call in `function` has `role`.
 static bool
 calls_with_role(lock_roles_t *roles, ir_func_t *function, ir_lock_role_t role)
 {
@@ -740,10 +733,6 @@ calls_with_role(lock_roles_t *roles, ir_func_t *function, ir_lock_role_t role)
     return false;
 }
 
-// A function that only takes a lock, and returns holding it on every path,
-// takes it, as a context manager's `__enter` does; one that only lets a
-// lock go, and returns without it on every path, lets it go. Anything
-// else, such as taking and letting go around its own work, is neither.
 static ir_lock_role_t
 function_lock_role(lock_roles_t *roles, ir_func_t *function)
 {
@@ -806,9 +795,6 @@ entry_param_mask(const core_list_t(entry_param_t) *params,
     return 0;
 }
 
-// A function that starts threads without saying which argument runs on
-// them, such as an FFI binding declared `effects threads, of entry`: any
-// callback it is given may be a thread's entry.
 static bool
 starts_threads(ir_summaries_t *summaries, const ir_func_t *function)
 {
@@ -818,9 +804,6 @@ starts_threads(ir_summaries_t *summaries, const ir_func_t *function)
         && (ir_summary_flags(summary) & IR_SUMMARY_STARTS_THREADS);
 }
 
-// The function a thread entry argument runs: a function value, or the
-// handler of a callback made from one. A raw binding takes the function's
-// address cast to a plain pointer.
 static const ir_value_t *
 entry_function_value(const ir_value_t *argument)
 {
@@ -1283,9 +1266,6 @@ report_unset_local(void *context, const ir_func_t *function,
     core_free(name.data);
 }
 
-// A local whose address is taken is set and read through it, a field at a
-// time or by the calls it's handed to, which the reaching definitions of
-// lowering can't see: every variable must be set in full before it's used.
 bool
 validate_unset_locals(n00bb_link_analysis_t *analysis)
 {
@@ -1669,8 +1649,6 @@ validate_assert_side_effects(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
-// The declared length of field `name` of `record`, when the field is an
-// array with a fixed size.
 static bool
 field_declared_length(n00bb_link_analysis_t *analysis, th_type *record,
                       core_string_t name, uint64_t *length)
@@ -1692,9 +1670,6 @@ field_declared_length(n00bb_link_analysis_t *analysis, th_type *record,
     return false;
 }
 
-// Writes the declared sizes of field `name` of `record` as text (`4`,
-// `3x4`) when it is an array with a size for every dimension; returns
-// whether it is.
 static bool
 field_declared_size(n00bb_link_analysis_t *analysis, th_type *record,
                     core_string_t name, core_buffer_t *out)
@@ -1709,10 +1684,6 @@ field_declared_size(n00bb_link_analysis_t *analysis, th_type *record,
     return false;
 }
 
-// A multi-dimensional array field with a size for every dimension is one
-// block of elements held inline, of which the record's layout only knows
-// the count. The address (`field`) or value (`extract`) of such a field
-// carries its declared shape, so the backend gives it the dimensions.
 static bool
 attach_field_shape(n00bb_link_analysis_t *analysis, ir_instr_t *in)
 {
@@ -1740,8 +1711,6 @@ attach_field_shape(n00bb_link_analysis_t *analysis, ir_instr_t *in)
     return true;
 }
 
-// Reports an array literal stored into field `name` of `record` whose
-// length differs from the field's declared size.
 static bool
 field_literal_fits(n00bb_link_analysis_t *analysis,
                    core_translation_unit_t *unit, th_type *record,
@@ -1765,11 +1734,6 @@ field_literal_fits(n00bb_link_analysis_t *analysis,
     return false;
 }
 
-// A fixed-size array field passed to a `modify` or `out` parameter must go
-// to a parameter declared with its size, and a parameter declared with a
-// size only takes such a field: the parameter works on the elements in
-// place. Lowering checks the other arguments; a field's record isn't known
-// to it.
 static bool
 field_references_fit(n00bb_link_analysis_t *analysis,
                      core_translation_unit_t *unit, const ir_instr_t *call)
@@ -1833,10 +1797,6 @@ field_references_fit(n00bb_link_analysis_t *analysis,
     return ok;
 }
 
-// Array literals stored into fixed-size array fields, by a field
-// assignment or in a record literal, must have the field's length. Lowering
-// can't tell which field a write reaches before types are solved, so this
-// runs after.
 bool
 check_field_array_lengths(n00bb_link_analysis_t *analysis)
 {
@@ -1858,8 +1818,6 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                         continue;
                     }
                     if (!attach_field_shape(analysis, in)) return false;
-                    // A function given the caller's elements can't be a
-                    // value: a function value's type can't say so.
                     ir_value_t *function_value = in->op == IR_OP_RETAIN_REF
                         && in->n_operands
                         ? ir_operand_value(&in->operands[0]) : nullptr;
@@ -1896,8 +1854,6 @@ check_field_array_lengths(n00bb_link_analysis_t *analysis)
                     if (in->op != IR_OP_AGGREGATE || !in->dest
                         || !ir_annot_get(&in->annots,
                                          N00BB_RECORD_LITERAL_KEY)) continue;
-                    // A record literal's values are in the order of the
-                    // record's definition.
                     th_type *definition = th_resolve(in->dest->type);
                     if (th_kind_of(definition) != TH_RECORD) {
                         definition = th_type_definition(types,
@@ -2008,9 +1964,6 @@ global_has_writer(n00bb_link_analysis_t *analysis,
     return false;
 }
 
-// Whether `read` only stores to `global`: it is a call to a builtin that
-// writes its first argument without reading it (an atomic store), given the
-// address of the global or of a part of it.
 static bool
 read_only_stores(const ir_instr_t *read, const ir_global_t *global)
 {
@@ -2161,9 +2114,6 @@ validate_thread_function_reads(
              scope = scope->all_next) {
             for (parse_sym_entry_t *thread_global = scope->first_in_scope;
                  thread_global; thread_global = thread_global->next_in_scope) {
-                // A thread-local, or a module variable with no initializer,
-                // is read from a function that may run before anything
-                // sets it.
                 if (thread_global->kind != PARSE_SYM_VARIABLE
                     || !is_module_global_symbol(analysis->grammar,
                                                 thread_global)

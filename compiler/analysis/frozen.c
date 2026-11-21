@@ -163,10 +163,6 @@ typedef struct {
     core_string_t      field;
 } field_sources_t;
 
-// A store reaching a load of a whole record from which one field is
-// extracted: a store into another field of the same record never supplies
-// it. (A member of an `out` or `modify` parameter is read so, through the
-// parameter's reference.)
 static bool
 push_field_stored(void *context, ir_instr_t *from, bool exact)
 {
@@ -626,8 +622,6 @@ store_target(ir_places_t *places, const ir_value_t *address)
     return out;
 }
 
-// Whether `address` lies in the place an `out` or `modify` parameter of its
-// function refers to.
 static bool
 in_reference_parameter(const ir_value_t *address)
 {
@@ -648,10 +642,6 @@ in_reference_parameter(const ir_value_t *address)
     return false;
 }
 
-// Whether the place an `out` or `modify` argument addresses outlives the
-// call. A local's own storage, or storage allocated for the caller (the
-// object a constructor fills), does not: what the callee stores there stays
-// with the caller, as its result would.
 static bool
 reference_place_outlives(ir_places_t *places, const ir_value_t *address)
 {
@@ -713,9 +703,6 @@ check_memory_write(n00bb_link_analysis_t *analysis,
         classify_place(&kept, &(ir_place_t){.kind = IR_PLACE_GLOBAL,
                                             .root = target});
     else kept = store_target(places, target);
-    // A store into the place of an `out` or `modify` parameter is the
-    // caller's to judge, as a copy-out to it was: it is checked where the
-    // call passes a place that outlives it.
     if (!kept.outlives || in_reference_parameter(target)) return true;
     frozen_root_t root = frozen_root(analysis, function, value, false);
     if (!root.parameter && !(frozen(root) && kept.writable)) {
@@ -853,8 +840,6 @@ check_call(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
     bool resolved = ir_summary_call_callees(analysis->summaries, call,
                                             merge_callee_flow, &merged);
     bool opaque = !resolved || !merged.known || merged.flow.opaque;
-    // What the callee stores into the place an `out` or `modify` argument
-    // addresses escapes when that place outlives the call.
     for (uint32_t p = 0; !opaque && merged.flow.stored_into
          && p < ir_call_argument_count(call); p++) {
         const ir_value_t *place = ir_call_argument(call, p).value;

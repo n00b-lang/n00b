@@ -1,6 +1,4 @@
 #!/bin/sh
-# Records with `align(N)`: their layouts, and their addresses at run time,
-# built twice so the second build reads the imported module's interface.
 set -eu
 
 compiler=$1

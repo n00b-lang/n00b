@@ -586,9 +586,6 @@ static bool same(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why)
         return true;
     }
 
-    // An outcome that can't fail is its value, before a variable takes it:
-    // a variable bound to the outcome itself would hold the outcome's type
-    // where everything after typing expects the value's.
     bool handled = false;
     bool held    = call_outcome(a) != call_outcome(b)
         && outcome_as_value(s, call_outcome(a) ? a : b,
@@ -726,8 +723,6 @@ static bool flow_record(ty_solver_t *s, th_type *target, th_type *given,
     return true;
 }
 
-// Whether `type` is a call's outcome (ir_call_outcome_type): a variant of
-// its success and its failure.
 static bool call_outcome(th_type *type)
 {
     core_string_t name = {0};
@@ -740,7 +735,6 @@ static bool call_outcome(th_type *type)
         && th_named_nargs(type) == 2;
 }
 
-// The failure type of a call's outcome, or null for any other type.
 static th_type *call_outcome_failure(th_type *type)
 {
     return call_outcome(type) ? th_resolve(th_named_arg(th_resolve(type),
@@ -748,11 +742,6 @@ static th_type *call_outcome_failure(th_type *type)
                               : nullptr;
 }
 
-// A call shaped as possibly failing (its callee's body may fail) whose
-// callee turns out not to fail is its value: `outcome` meets `value` as its
-// success does, flowing into it or `equal` to it. While the failure is
-// open, the meeting waits for it. `*handled` is false when the failure is
-// known and isn't `nil`: the outcome is then no value.
 static bool outcome_as_value(ty_solver_t *s, th_type *outcome,
                              th_type *value, bool equal, ty_why_t why,
                              bool *handled)
@@ -806,9 +795,6 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
         convert_at(s, why.at);
         return true;
     }
-    // A value flowing into a declared union becomes one of its members: the
-    // member it already is, or, for a value still open (a literal), the one
-    // member its requirements allow.
     th_comb comb;
     if (target && given && th_kind_of(target) == TH_SUM
         && th_sum_comb(target, &comb) && comb == TH_UNION) {
@@ -837,9 +823,6 @@ static bool flow(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why)
                                       .other   = target},
                           why);
     }
-    // An outcome that can't fail flows as its value, before a variable
-    // takes it: a variable bound to the outcome itself would hold the
-    // outcome's type where everything after typing expects the value's.
     bool handled = false;
     bool held    = given && !call_outcome(target)
         && outcome_as_value(s, given, slot, false, why, &handled);
@@ -1127,9 +1110,6 @@ static bool flow_call(ty_solver_t *s, th_type *shape, th_type *signature,
     th_type *callee  = th_func_error(signature) ? th_func_error(signature)
                                                 : th_nil(s->types);
 
-    // A callee that cannot fail puts nothing in the call's failure: the
-    // call's failure path is never taken. (A flow of `nil` would make the
-    // call's failure an option.)
     if (failure && !th_is_nil(th_resolve(failure))
         && !th_is_nil(th_resolve(callee))
         && !flow(s, failure, callee, why)) {
@@ -1295,8 +1275,6 @@ th_type *ty_dispatch_instance(ty_solver_t *s, const ir_instr_t *at)
 static verdict_t judge(ty_solver_t *s, pending_t *p)
 {
     th_type *subject = th_resolve(p->pred.subject);
-    // A call's outcome is asked about as its value once its callee turns
-    // out not to fail (outcome_as_value), and waits until that's known.
     th_type *failure = p->pred.kind != TY_PRED_OUTCOME_VALUE
         ? call_outcome_failure(subject) : nullptr;
 
@@ -1398,9 +1376,6 @@ static verdict_t judge(ty_solver_t *s, pending_t *p)
                                             p->pred.name, p->pred.other)
                                : nullptr;
 
-        // A receiver with an unsettled variable inside (`Set[A]` with `A`
-        // a literal not yet sized) may find its method once that variable
-        // settles, as a `where 'T : Hash` on `A` then can hold.
         if (!signature && !th_is_closed(s->types, subject)) {
             return OPEN;
         }
@@ -1494,14 +1469,10 @@ static verdict_t judge(ty_solver_t *s, pending_t *p)
                                                                    : FAILS;
     }
     case TY_PRED_OUTCOME_VALUE: {
-        // The failure is known: `nil` makes the outcome its value; any other
-        // leaves the outcome where a value was expected, a mismatch.
         th_type *met = th_is_nil(subject)
             ? th_named_arg(th_resolve(p->pred.result), 0)->type
             : p->pred.result;
 
-        // The mismatch is the error (a call that can fail used without
-        // `!`); the predicate itself is settled.
         if (!th_is_nil(subject)) {
             fail(s, TY_FAIL_MISMATCH, p->why, p->pred.other, met, nullptr);
             return HOLDS;
@@ -1619,8 +1590,6 @@ bool ty_require(ty_solver_t *s, ty_pred_t pred, ty_why_t why)
     if (unbound(other)) {
         link_pred(s, other, index);
     }
-    // An overloaded call waits on each of its arguments' types, not just
-    // its first.
     if (pred.kind == TY_PRED_DISPATCH && s->overloads && other
         && th_kind_of(other) == TH_FUNCTION) {
         core_list_t(ty_type_ptr_t) vars = core_list_new(ty_type_ptr_t);

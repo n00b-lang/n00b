@@ -2540,8 +2540,6 @@ static void *r_func(parse_reduce_t *r)
                 return nullptr;
             }
         } else if (p && !p->neg && p->refkind == IR_VAL_INSTR && p->type) {
-            // An `out` or `inout` parameter's value is a reference to the
-            // caller's place; the signature keeps the referent type.
             ir_param_add(f, p->text,
                          th_mode_by_reference((th_mode)p->uval)
                              ? th_ind(ir_module_types(b->m), 0, p->type)

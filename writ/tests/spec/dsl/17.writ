@@ -1,0 +1,16 @@
+fn sqlite3_open_v2(
+    filename: *cstr,
+    ppDb:     out *Db,
+    flags:    c_int as OpenFlags,
+    zVfs:     ?cstr,
+) -> c_int
+  error ret != SQLITE_OK
+  on error ppDb: own
+
+fn sqlite3_errmsg(db: Db) -> *cstr until next sqlite3_errmsg(db), release(db)
+
+fn sqlite3_column_text(stmt: Stmt, i: c_int)
+    -> ?[u8; sqlite3_column_bytes(stmt, i)]
+       until step(stmt), reset(stmt), finalize(stmt), sqlite3_column_text16(stmt, i)
+
+fn sqlite3_mprintf(fmt: *cstr, ...) -> own ?cstr release sqlite3_free

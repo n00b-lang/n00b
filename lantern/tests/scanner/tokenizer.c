@@ -157,8 +157,6 @@ drop_tid(parse_token_info_t *token, void *ud)
     return parse_token_tid(token) == *(int64_t *)ud;
 }
 
-// Appends every token's leading and trailing trivia, in stream order, so two
-// streams can be compared for where their trivia ended up.
 static size_t
 trivia_layout(parse_token_stream_t *stream, char *out, size_t cap)
 {

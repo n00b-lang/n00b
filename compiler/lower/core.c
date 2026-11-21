@@ -564,9 +564,6 @@ describe_parameter_target(th_mode mode, parse_sym_entry_t *callee,
                       N00BB_ARGS(ARG_TEXT(mode_keyword(mode))));
 }
 
-// Reports that `argument` cannot be passed to an `out` or `modify`
-// parameter. `variable` is the variable it names, when it names one whole,
-// which says why: a `let`, or a parameter not passed by reference.
 void
 report_unwritable_output(ir_lower_context_t *context,
                          parse_sym_entry_t *variable, parse_tree_t *argument,
@@ -860,9 +857,6 @@ n00bb_emit_local_read(ir_lower_context_t *context, ir_local_t *local,
     return instruction->dest;
 }
 
-// The length of `value` along `dimension` when it is known while lowering:
-// an array literal's element count, or a static extent of its shape. Only
-// arrays are shape checked; a literal's type can still be open here.
 static bool
 static_sequence_extent(ir_value_t *value, uint32_t dimension,
                        uint64_t *length)
@@ -885,10 +879,6 @@ static_sequence_extent(ir_value_t *value, uint32_t dimension,
     return true;
 }
 
-// A value whose length is known now and differs from a declared size can
-// never pass its shape check, so that is a compile-time error. The error
-// fails the build; lowering goes on as for a value that passed, since the
-// callers take a failed shape check for an internal error.
 void
 n00bb_report_static_shape_mismatch(ir_lower_context_t *context,
                                    ir_value_t *value, ir_shape_t *expected,
@@ -980,7 +970,6 @@ n00bb_attach_expression_shape(ir_lower_context_t *context,
                               parse_grammar_t *grammar,
                               parse_tree_t *expression, ir_value_t *value)
 {
-    // A variable read whole has the shape its declaration gave it.
     (void)grammar;
     (void)expression;
     if (!context || !value || ir_value_shape(value)) return true;

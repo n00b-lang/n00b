@@ -1,8 +1,5 @@
 import sys.os
 
-# sys.os on Linux: file descriptors through direct syscalls, failures as
-# sys.os.Errno.
-
 func bytes_of(text: string) -> Array[u8] {
     let length: uint = text.len()
     let bytes: Array[u8] = new[Array[u8]](cast[int](length))
@@ -17,14 +14,12 @@ func bytes_of(text: string) -> Array[u8] {
 func round_trip() -> bool fail: sys.os.Errno {
     let pipe: sys.os.Pipe = sys.os.pipe()!
     let sent: Array[u8] = bytes_of("hello, pipe")
-    # A partial range: only "pipe" goes through.
     require sys.os.write(pipe.write, sent, 7, 11)! == 4
     let got: Array[u8] = new[Array[u8]](8)
     let count: uint = sys.os.read(pipe.read, got, 2, 8)!
     require count == 4
     require got[2] == sent[7] and got[5] == sent[10]
     sys.os.close(pipe.write)!
-    # End of file once the write end is closed.
     require sys.os.read(pipe.read, got, 0, 8)! == 0
     sys.os.close(pipe.read)!
     return true
@@ -55,7 +50,6 @@ func write_closed() -> sys.os.Errno? {
     return seen
 }
 
-# open: create, write, reopen, read back, and the errors on either side.
 func file_round_trip(path: string) -> bool fail: sys.os.Errno {
     let fd: i32 = sys.os.open(path, sys.os.Access.write_only, create = true,
                               truncate = true)!
@@ -66,7 +60,6 @@ func file_round_trip(path: string) -> bool fail: sys.os.Errno {
     let got: Array[u8] = new[Array[u8]](16)
     require sys.os.read(again, got, 0, 16)! == 7
     require got[0] == sent[0] and got[6] == sent[6]
-    # The offset can be moved back to the start.
     require sys.os.seek(again, 0, sys.os.Whence.start)! == 0
     sys.os.close(again)!
     return true
@@ -84,7 +77,6 @@ func open_error(path: string, exclusive: bool) -> sys.os.Errno? {
     return seen
 }
 
-# A pipe is not a terminal: is_terminal says so, terminal_size fails.
 func terminal_checks() -> bool fail: sys.os.Errno {
     let pipe: sys.os.Pipe = sys.os.pipe()!
     require !sys.os.is_terminal(pipe.read)!
@@ -100,7 +92,6 @@ func terminal_checks() -> bool fail: sys.os.Errno {
     return seen != nil and seen == sys.os.Errno.ENOTTY
 }
 
-# random_bytes fills the whole range, past macOS's 256-byte chunks.
 func random_checks() -> bool fail: sys.os.Errno {
     let bytes: Array[u8] = new[Array[u8]](1002)
     sys.os.random_bytes(bytes, 1, 1001)!
@@ -112,8 +103,6 @@ func random_checks() -> bool fail: sys.os.Errno {
         }
         i += 1
     }
-    # 1000 random bytes are all but certain to hold many nonzero ones; the
-    # bytes outside the range are untouched.
     return nonzero > 900 and bytes[0] == 0 and bytes[1001] == 0
 }
 

@@ -377,8 +377,6 @@ static const ir_instr_t *rest_call(const ir_instr_t *pack,
     return nullptr;
 }
 
-// A method a `where` constraint requires, such as the `get` of
-// `Getter[string]`, that the argument's type has, but with another type.
 static bool bound_method_failure(const ty_failure_t *failure)
 {
     return failure->kind == TY_FAIL_PREDICATE
@@ -731,9 +729,6 @@ static bool report_unpropagated(th_ctx *types,
     if (!error) {
         return false;
     }
-    // A callee whose body may fail but whose failure settled on `nil` had
-    // its `fail` or `!` reported already; its callers' mismatches follow
-    // from that error.
     if (th_is_nil(th_resolve(error))) {
         return true;
     }
@@ -841,8 +836,6 @@ static void report_case_mismatch(th_ctx *types, core_translation_unit_t *unit,
     ir_annot_t   *named = ir_annot_get((ir_annots_t *)&test->annots,
                                        N00BB_CASE_KEY);
 
-    // A bare name that is not a value can only name an arm or an enum
-    // member, and this subject has neither.
     if (named && named->kind == IR_ANNOT_STR) {
         n00bb_report(core_translation_unit_diagnostics(unit), unit,
                      N00B_DIAG_UNRESOLVED_NAME, n00bb_span_location(test->span),
@@ -1158,8 +1151,6 @@ static void report_failure(th_ctx *types, const n00bb_dispatch_index_t *index,
         n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_REQUIREMENT, at,
                      N00B_TEXT_CANNOT_BE_USED_HERE,
                      N00BB_ARGS(ARG_TEXT(shown(types, failure->actual))));
-        // A distinct type keeps only equality from the type it was made
-        // from; say so, rather than leave the error opaque.
         if (underlying) {
             n00bb_report_note(diagnostics,
                 N00B_TEXT_DISTINCT_TYPE_HAS_ONLY_EQUALITY,
@@ -1261,13 +1252,9 @@ struct n00bb_dispatch_index {
     core_dict_t            functions;
     core_list_t(function_list_ptr_t) lists;
     core_list_t(th_trait_requirement) bounds;
-    // While typing, before literals are sized: an operator meeting an
-    // unbound operand waits for sizing (integer_promotion).
     bool                   sizing_pending;
 };
 
-// The trait whose bound a method call at `at` goes through, when its
-// receiver's type is a bound type variable.
 static core_string_t bound_trait_of_call(const n00bb_dispatch_index_t *index,
                                          const ir_instr_t *at,
                                          th_type **receiver)
@@ -1289,8 +1276,6 @@ static core_string_t bound_trait_of_call(const n00bb_dispatch_index_t *index,
     return (core_string_t){0};
 }
 
-// A call through a bound that gives a trait parameter another type than an
-// earlier call through it did.
 static bool report_trait_parameter(th_ctx *types,
                                    const n00bb_dispatch_index_t *index,
                                    core_translation_unit_t *unit,
@@ -1306,8 +1291,6 @@ static bool report_trait_parameter(th_ctx *types,
     }
 
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    // The receiver as written: the solver's copy of its type variable has
-    // no name to show.
     core_string_t       variable    = n00bb_value_text(unit,
         ir_operand_value(&failure->why.at->operands[1]),
         failure->why.at->span);
@@ -1330,21 +1313,12 @@ static bool report_trait_parameter(th_ctx *types,
 }
 
 typedef enum {
-    // Every failure at the call is reported.
     SITE_FREE,
-    // A type doesn't implement a bound's trait: it is told that, not how
-    // each of the trait's methods misses.
     SITE_IMPLEMENTS,
-    // A method doesn't fit a `where` constraint: that is the error, not the
-    // mismatches it causes there.
     SITE_BOUND_METHOD,
-    // A call through a bound gives a trait parameter another type than an
-    // earlier call did: one error, from its first mismatch.
     SITE_TRAIT_PARAMETER,
 } site_rule_t;
 
-// Which failure at the call `at` governs what is said about it, in that
-// order; `*rule` says how.
 static const ty_failure_t *governing_failure(
     ty_solver_t *solver, const n00bb_dispatch_index_t *index,
     const ir_instr_t *at, site_rule_t *rule)
@@ -1529,7 +1503,6 @@ static th_type *bitint_operator(th_ctx *types, th_type *receiver,
                         shift ? th_name(types, CORE_STRING_STATIC("uint"))
                               : receiver);
     }
-    // `i:N` and `u:N` are integers (the `Integer` trait); `bits:N` is not.
     if (core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
         return flavor == TH_BITINT_BITS
                  ? nullptr
@@ -1595,8 +1568,6 @@ th_type *n00bb_distinct_underlying(th_ctx *types, th_type *type)
                                                       : nullptr;
 }
 
-// A distinct type gets the default equality of the type it was made from,
-// when that type has one, but none of its other operators.
 static th_type *distinct_equality(const n00bb_dispatch_index_t *index,
                                   th_ctx *types, th_type *receiver,
                                   core_string_t method)
@@ -1784,7 +1755,6 @@ static th_type *in_function(th_ctx *types, ir_func_t *function, th_type *type)
     return mapped;
 }
 
-// A bound method's call shape with its receiver put back, passed in `mode`.
 static th_type *method_shape(th_ctx *types, th_type *receiver, th_mode mode,
                              th_type *call)
 {
@@ -1812,7 +1782,6 @@ static th_type *method_shape(th_ctx *types, th_type *receiver, th_mode mode,
     return shape;
 }
 
-// The mode the receiver of trait `trait`'s method `method` is passed in.
 static th_mode bound_receiver_mode(n00bb_link_analysis_t *analysis,
                                    core_string_t trait, core_string_t method)
 {
@@ -1850,7 +1819,6 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                 ? link_ir_function_for_symbol(analysis, symbol)
                 : nullptr;
 
-            // A trait's method constraints follow its `implements` one.
             core_string_t trait = {0};
 
             for (size_t r = 0; function && r < declared.len; r++) {
@@ -1890,8 +1858,6 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                                  (ty_pred_t){.kind = TY_PRED_IMPLEMENTS,
                                              .name = bound.iface},
                                  (ty_why_t){0});
-                // A bound that names no trait arguments still fixes the
-                // trait's parameters for every call through it.
                 bool given = r + 1 < declared.len
                     && declared.data[r + 1].kind == TH_CON_METHOD;
                 parse_sym_entry_t *trait_symbol = given ? nullptr
@@ -1901,7 +1867,6 @@ static void declare_bounds(ty_solver_t *solver, n00bb_dispatch_index_t *index)
                 core_list_t(th_trait_requirement) methods =
                     core_list_new(th_trait_requirement);
                 size_t parameters = 0;
-                // A trait with no parameters has nothing for a bound to fix.
                 if (trait_symbol
                     && n00bb_trait_method_instances(types, trait_symbol, var,
                                                     nullptr, &methods,
@@ -2104,9 +2069,6 @@ static parse_sym_entry_t *module_function(const n00bb_dispatch_index_t *index,
         int  bounds  = accepts ? receiver_bounds(types, symbol, self->type,
                                                  receiver)
                                : 0;
-        // An optional parameter takes its item type, as a call with one
-        // candidate does. Such a candidate ranks below any that take the
-        // receiver as it is.
         th_type *item    = accepts || coerced
             ? nullptr : th_option_item(th_resolve(self->type));
         bool     wrapped = item && th_env_type_pattern_subsumes(item, receiver)
@@ -2224,8 +2186,6 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
         target->kind = N00BB_TARGET_FLAGSET;
         return true;
     }
-    // A bit integer's `from_bits` is registered so it implements `Integer`,
-    // but has no body: it is a wrapping cast, chosen before that function.
     if (th_kind_of(receiver) == TH_BITINT
         && core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
         target->signature = bitint_operator(types, receiver, method);
@@ -2279,8 +2239,6 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
     }
     target->function = module_function(index, receiver, method, false, arity,
                                        nullptr);
-    // A type with no `__init` of any arity is built from zeroed storage, so
-    // `new` on it calls nothing, and takes no arguments.
     if (!target->function && th_kind_of(receiver) == TH_NAMED
         && core_string_eq(method, CORE_STRING_STATIC("__init"))
         && !visible_initializers(index, receiver)) {
@@ -2313,14 +2271,6 @@ bool n00bb_dispatch_target_for(const n00bb_dispatch_index_t *index,
     target->signature = function_signature(index, target->function);
     return true;
 }
-
-// Overloaded calls. A call to an overloaded function goes to the candidate
-// whose parameters fit its arguments most closely. Each argument fits its
-// parameter exactly, by a promotion, by a generic parameter (one with a
-// trait or `where` bound before one without), or by a conversion. One
-// candidate is chosen when it fits each argument at least as well as each
-// other candidate, and one argument better (or needs no defaults where the
-// other does).
 
 static bool coerces(void *context, th_type *to, th_type *from);
 static core_string_t function_parameter_name(
@@ -2420,9 +2370,6 @@ static bool float_type(th_type *type)
                     sizeof(float_names) / sizeof(*float_names));
 }
 
-// Whether a `from` value widens to `to` without loss: an integer to a wider
-// one of its signedness, or an unsigned one to a strictly wider signed one;
-// a float to a wider float. Integers never become floats.
 static bool numeric_promotes(ir_module_t *module, th_type *from, th_type *to)
 {
     from = th_resolve(from);
@@ -2488,15 +2435,10 @@ static overload_fit_t overload_fit(const n00bb_dispatch_index_t *index,
         return FIT_CONVERTED;
     }
 
-    // Any integer passes to an integer parameter through a checked
-    // conversion; that fits worst of all.
     return integer_type(arg) && integer_type(param) ? FIT_CHECKED
                                                     : FIT_NONE;
 }
 
-// How two candidates' parameters compare for one argument: -1 when the
-// first fits better, 1 when the second does, 0 when they fit alike, and 2
-// when neither is more specific than the other.
 static int compare_fit(ir_module_t *module, overload_fit_t first,
                        th_type *first_param, overload_fit_t second,
                        th_type *second_param)
@@ -2530,8 +2472,6 @@ static int compare_fit(ir_module_t *module, overload_fit_t first,
     return 0;
 }
 
-// Whether `first` is at least as specific as `second` for every argument
-// and more specific for one.
 static bool overload_beats(ir_module_t *module, const overload_option_t *first,
                            const overload_option_t *second, size_t count)
 {
@@ -2550,9 +2490,6 @@ static bool overload_beats(ir_module_t *module, const overload_option_t *first,
     return better || (!first->defaulted && second->defaulted);
 }
 
-// Whether a candidate takes `count` positional arguments and the call's
-// keywords, and whether it needs a default for a parameter the call leaves
-// out.
 static bool overload_takes(const n00bb_dispatch_index_t *index,
                            parse_sym_entry_t *symbol, th_type *signature,
                            th_type *call, size_t count, bool *defaulted)
@@ -2566,8 +2503,6 @@ static bool overload_takes(const n00bb_dispatch_index_t *index,
     if (count > params && !rest) {
         return false;
     }
-    // A parameter with a default is a keyword parameter: no positional
-    // argument fills it.
     for (size_t p = 0; function && p < count && p < params; p++) {
         if (ir_func_parameter_is_optional(function, p)) {
             return false;
@@ -2619,8 +2554,6 @@ static void overload_options_free(core_list_t(overload_option_t) *options)
     core_list_free(*options);
 }
 
-// Chooses among an overloaded call's candidates. `call` is the shape of its
-// arguments. On an ambiguity, `tied` gets the candidates none beats.
 static overload_outcome_t choose_overload(
     const n00bb_dispatch_index_t *index, const n00bb_overload_site_t *site,
     const ir_instr_t *at, th_type *call, parse_sym_entry_t **chosen,
@@ -2653,8 +2586,6 @@ static overload_outcome_t choose_overload(
         core_list_push(options, option);
     }
 
-    // An argument whose type is not yet known can only be passed over when
-    // each candidate takes the same type for it.
     for (size_t i = 0; i < count; i++) {
         th_type *arg = th_resolve(th_func_param(call, i)->type);
 
@@ -2747,11 +2678,6 @@ static overload_outcome_t choose_overload(
     return outcome;
 }
 
-// A method call, an operator or a trait method that goes to a module
-// function chooses among the functions of its name that the calling module
-// can see, anywhere in the program, as a call by name does. Those found
-// first (a type's own methods, an enum's or flagset's operators) keep
-// their place.
 static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
                                           const ir_instr_t *at,
                                           th_type *shape)
@@ -2765,8 +2691,6 @@ static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
     th_ctx    *types    = ir_ctx_types(analysis->ir_context);
     ir_func_t *function = at && at->block ? at->block->owner : nullptr;
 
-    // A generic function's body leaves its calls to trait requirements; a
-    // compound assignment goes to its type's assigning operator.
     if (!at || at->op != IR_OP_DISPATCH || !at->n_operands
         || ir_annot_get((ir_annots_t *)&at->annots, N00BB_COMPOUND_KEY)
         || at->operands[0].kind != IR_OPD_NAME || !receiver
@@ -2796,8 +2720,6 @@ static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
         return nullptr;
     }
 
-    // The candidates are the functions whose first parameter takes the
-    // receiver. With one at most, and none hidden, the call needs no choice.
     ir_module_t    *module  = function->owner;
     function_list_t fitting = core_list_new(parse_sym_entry_ptr_t);
     function_list_t visible = core_list_new(parse_sym_entry_ptr_t);
@@ -2842,8 +2764,6 @@ static n00bb_overload_site_t *method_site(const n00bb_dispatch_index_t *index,
 
 static th_type *best_integer_fit(th_ctx *types, ir_abcd_range_t found);
 
-// A built-in integer type an operation can promote: a named integer type, or
-// an `i:N` / `u:N` (not `bits:N`, and not a distinct type or enum).
 static bool promotable_integer(th_ctx *types, th_type *type,
                                ir_interval_t *range)
 {
@@ -2861,8 +2781,6 @@ static bool promotable_integer(th_ctx *types, th_type *type,
         *range = ir_interval_of_width(width, flavor == TH_BITINT_SIGNED);
         return true;
     }
-    // Compare names, not hashes: this runs each time the solver judges an
-    // operator, and building and hashing the twelve names there is costly.
     core_string_t name      = {0};
     size_t        arguments = 0;
 
@@ -2880,13 +2798,9 @@ static bool promotable_integer(th_ctx *types, th_type *type,
     return false;
 }
 
-// The smallest integer type holding every value of both operand types. It
-// stops at 64 bits unless an operand is 128-bit: `uint` with `int` is
-// `int`, and converting the `uint` operand is checked.
 static th_type *promoted_integer(th_ctx *types, ir_interval_t left,
                                  ir_interval_t right)
 {
-    // An operand is 128-bit: that is the explicit evidence to go past 64.
     bool wide = left.lo < (ir_int_t)INT64_MIN
              || left.hi > (ir_int_t)UINT64_MAX
              || right.lo < (ir_int_t)INT64_MIN
@@ -2922,12 +2836,6 @@ typedef enum {
     PROMOTION_FAILS,
 } promotion_t;
 
-// A built-in integer operator whose operands have different types runs at
-// a type holding both, and never narrows an operand: `u8 + u16` is a `u16`
-// addition and `u8 + i8` an `i16` one. An operand that is still an open
-// literal is sized from its own values first (`a + 1000` with `a: u8`
-// sizes `1000` as `u16`), so the call waits until it is.
-// A float literal, whose type is still open while typing starts.
 static bool float_constant(const ir_value_t *value)
 {
     const ir_instr_t *def = value ? value->def : nullptr;
@@ -2937,7 +2845,6 @@ static bool float_constant(const ir_value_t *value)
         && def->operands[0].lit.is_float;
 }
 
-// An integer literal (not a string or float one).
 static bool integer_constant(const ir_value_t *value)
 {
     const ir_instr_t *def = value ? value->def : nullptr;
@@ -2948,8 +2855,6 @@ static bool integer_constant(const ir_value_t *value)
         && !def->operands[0].lit.text.data;
 }
 
-// The smallest integer type holding an integer literal's value, and that
-// value as a range; null past 128 bits.
 static th_type *literal_integer_type(th_ctx *types, const ir_value_t *value,
                                      ir_interval_t *range)
 {
@@ -2972,11 +2877,6 @@ static th_type *literal_integer_type(th_ctx *types, const ir_value_t *value,
     return best_integer_fit(types, (ir_abcd_range_t){.seen = *range});
 }
 
-// Whether an open value comes from a float literal (or, with `!real`, an
-// integer one): directly, or through copies, a local's slot or a module
-// variable's stores (`var x = 0.5` then `x + 1`; `var n = 2` then
-// `f + n`). Only asked where an open value meets a literal or a float, so
-// the few steps of search stay off typing's hot path.
 static bool literal_origin(const ir_func_t *function, const ir_value_t *value,
                            bool real, int depth)
 {
@@ -3002,7 +2902,6 @@ static bool literal_origin(const ir_func_t *function, const ir_value_t *value,
             && literal_origin(function, ir_value_operand(def, 0), real,
                               depth + 1);
     }
-    // The values written to the local, slot or module variable.
     for (uint32_t b = 0; function && b < function->n_blocks; b++) {
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in      = function->blocks[b]->instrs[i];
@@ -3029,8 +2928,6 @@ static bool literal_origin(const ir_func_t *function, const ir_value_t *value,
             }
         }
     }
-    // A module variable is set in its module's initializer, which is
-    // usually not the function reading it.
     ir_module_t *owner = global ? global->owner : nullptr;
 
     for (size_t f = 0; owner && f < ir_func_count(owner); f++) {
@@ -3066,8 +2963,6 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
 {
     th_ctx *types = ir_ctx_types(index->analysis->ir_context);
 
-    // A `switch` case test is not a mixed operation: a case must have the
-    // switch value's type (`case 1.5` on a `uint` is an error).
     if (!at || at->op != IR_OP_DISPATCH || at->n_operands != 3
         || at->operands[0].kind != IR_OPD_NAME
         || ir_annot_get((ir_annots_t *)&at->annots, N00BB_SWITCH_KEY)) {
@@ -3101,11 +2996,6 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
     bool              r_open = rt && th_kind_of(rt) == TH_VAR
                             && !th_var_ref(rt);
 
-    // An integer literal beside a declared operand needs no waiting: its
-    // value is in the IR. If it fits the declared integer type it simply
-    // takes that type (the usual lookup); otherwise it is the smallest type
-    // holding its value, and the operation promotes now. Waiting would
-    // leave everything downstream unresolved through sizing.
     if ((lp || lf) && r_open && integer_constant(right)) {
         rt = literal_integer_type(types, right, &rr);
         if (!rt || (lp && rr.lo >= lr.lo && rr.hi <= lr.hi)) {
@@ -3123,13 +3013,6 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
         l_open = false;
     }
 
-    // Before literals are sized, an unbound operand may be one: wait. After
-    // sizing anything still unbound (a generic's type) resolves as usual.
-    // Two unbound operands where one is a float literal wait too, so the
-    // float settles before the integer is unified with it (`1.5 + 2`).
-    // A float operand only waits for an open integer, a literal or a value
-    // assigned one (`var n = 2` then `f + n`); an open float (`0.0` beside
-    // an `f32`) unifies with it as usual.
     const ir_func_t *function = at->block ? at->block->owner : nullptr;
 
     if (index->sizing_pending
@@ -3147,9 +3030,6 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
         return PROMOTION_WAIT;
     }
 
-    // An integer meeting a float in an arithmetic or comparison operator
-    // converts to the float's type: mixing ints and floats gives a float.
-    // Only here; an int is not otherwise a float.
     if ((lf && rp) || (rf && lp)) {
         if (binary && (binary->unsigned_only || binary->op == IR_OP_REM)) {
             return PROMOTION_NONE;
@@ -3157,8 +3037,6 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
 
         th_type *real = lf ? lt : rt;
 
-        // Each operand keeps its own type here: the solver never turns an
-        // int into a float, and the rewrite converts the integer operand.
         *out = contract(types,
                         equal ? th_name(types, CORE_STRING_STATIC("bool"))
                         : compare
@@ -3174,9 +3052,6 @@ static promotion_t integer_promotion(const n00bb_dispatch_index_t *index,
     th_type      *promoted = promoted_integer(types, lr, rr);
     ir_interval_t bounds   = {0};
 
-    // Bitwise operators exist only on unsigned integers. With a signed left
-    // operand the usual lookup reports that; with only a signed right one
-    // it would narrow that operand to the left's type, so fail here.
     if (binary && binary->unsigned_only
         && (!n00bb_type_interval(promoted, &bounds) || bounds.lo < 0)) {
         return lr.lo < 0 ? PROMOTION_NONE : PROMOTION_FAILS;
@@ -3688,8 +3563,6 @@ static bool report_operator(th_ctx *types,
     const ir_value_t *right = binary ? dispatch_operand(at, 2) : nullptr;
     ir_interval_t     right_bounds = {0};
 
-    // A bitwise operator with a signed right operand (integer_promotion
-    // refuses it): the operand types may differ, but neither may be signed.
     if (binary && binary->unsigned_only && right && right->type
         && n00bb_integer_promotion(types, receiver, right->type)
         && n00bb_type_interval(th_resolve(right->type), &right_bounds)
@@ -3863,7 +3736,6 @@ static void report_overload(th_ctx *types, const n00bb_dispatch_index_t *index,
     }
 }
 
-// The shape of a dispatch's arguments, as the call's type constraint has it.
 static th_type *dispatch_shape(th_ctx *types, const ir_instr_t *at)
 {
     th_param   *params = core_alloc_array(th_param, at->n_operands + 1);
@@ -3901,7 +3773,6 @@ static th_type *dispatch_shape(th_ctx *types, const ir_instr_t *at)
     return shape;
 }
 
-// Reports an overloaded call typing could not send to one function.
 static bool report_overload_site(th_ctx *types,
                                  const n00bb_dispatch_index_t *index,
                                  core_translation_unit_t *unit,
@@ -3950,7 +3821,6 @@ static bool report_overload_site(th_ctx *types,
     return true;
 }
 
-// Reports each overloaded call typing left waiting on its arguments' types.
 static bool check_overload_sites(th_ctx *types,
                                  const n00bb_dispatch_index_t *index,
                                  core_translation_unit_t *const *units,
@@ -4046,8 +3916,6 @@ static bool report_method_argument(th_ctx *types, parse_grammar_t *grammar,
 
         th_type *actual = th_resolve(value->type);
 
-        // A formal with the trait's variables in it (`'E?`) is what typing
-        // made of it for this call, not something to judge here.
         if (th_same_type(actual, formal) || !th_is_closed(types, formal)
             || is_integer_type(actual) == is_integer_type(formal)) {
             continue;
@@ -4161,8 +4029,6 @@ static bool report_iteration(th_ctx *types, core_translation_unit_t *unit,
     return true;
 }
 
-// A `with` manager's hook calls are the compiler's; one with no method to
-// reach means the value is not a manager.
 static bool report_with_manager(th_ctx *types, core_translation_unit_t *unit,
                                 const ir_instr_t *at, core_string_t method,
                                 th_type *receiver)
@@ -4754,8 +4620,6 @@ static core_string_t stored_name(core_translation_unit_t *unit,
     return text;
 }
 
-// True when `store` initializes a `var` or `let` that has no declared type,
-// so the literal is what gave the variable its type.
 static bool untyped_declaration(core_translation_unit_t *unit,
                                 const ir_instr_t        *store,
                                 const ir_instr_t        *literal)
@@ -4777,7 +4641,6 @@ static bool untyped_declaration(core_translation_unit_t *unit,
         }
     }
 
-    // The store's span starts at the name; the keyword comes before it.
     ir_span_t before = store->span;
 
     before.start_byte = store->span.start_byte > 16
@@ -4915,8 +4778,6 @@ static bool report_body_failure(th_ctx *types, core_translation_unit_t *unit,
                                           : nullptr;
 
     if (raised && raised->def && raised->def->op == IR_OP_VARIANT_PAYLOAD) {
-        // A call that can't fail passes nothing along: its `!` is the error
-        // (report_infallible_bang).
         if (th_is_nil(th_resolve(failure->actual))) {
             return true;
         }
@@ -5287,10 +5148,6 @@ static bool check_empty_lists(th_ctx *types,
     return ok;
 }
 
-// Whether a store to `address` writes the variable it starts from. A field
-// of an object is in the storage its handle refers to, not in the variable
-// holding the handle, so a field taken where an object is kept leaves the
-// variable unchanged.
 static bool reaches_root(th_ctx *types, const ir_value_t *address)
 {
     while (address && address->kind != IR_VAL_GLOBAL) {
@@ -5739,8 +5596,6 @@ static core_string_t function_parameter_name(
         return formal->name;
     }
 
-    // A function from an interface (an imported module's cached build) has
-    // no parse tree; its parameter names come from the interface.
     core_string_t name = {0};
 
     if (function && dispatch && dispatch->analysis) {
@@ -5780,7 +5635,6 @@ static bool coerces(void *context, th_type *to, th_type *from)
     if (n00bb_reference_views(from, to) || n00bb_value_views(from, to)) {
         return true;
     }
-    // A float widens to a wider float; f32 is the only narrower one.
     if (float_type(th_resolve(from)) && float_type(th_resolve(to))
         && th_named_info(th_resolve(from), &name, nullptr, nullptr)
         && core_string_eq(name, CORE_STRING_STATIC("f32"))) {
@@ -6031,7 +5885,6 @@ typedef struct {
     bool            bitwise;
     const ir_instr_t *negative_at;
     ir_int_t        negative;
-    // The integer types the overloaded calls it is passed to take for it.
     ir_module_t    *module;
     th_type        *choices[8];
     size_t          choice_count;
@@ -6064,10 +5917,6 @@ static void note_integer_value(core_list_t(integer_evidence_t) *evidence,
         ir_abcd_range_t range = unknown_integer();
 
         (void)ir_abcd_range_of(abcd, value, nullptr, &range);
-        // Without explicit evidence, the range analysis caps at 64 bits: a
-        // range past 64 bits that is not an exact constant (say, a product
-        // of loop-bounded values) counts as unbounded there, which sizes as
-        // a 64-bit type with overflow checks.
         if (range.seen.lo != range.seen.hi) {
             if (range.seen.hi > (ir_int_t)UINT64_MAX) {
                 range.unbounded_max = true;
@@ -6280,8 +6129,6 @@ static void note_choice(integer_evidence_t *entry, ir_module_t *module,
     entry->choices[entry->choice_count++] = type;
 }
 
-// An integer literal passed to an overloaded call notes the integer type
-// each candidate takes in its place.
 static bool note_overload_site(core_list_t(integer_evidence_t) *evidence,
                                const n00bb_dispatch_index_t *index,
                                ir_module_t *module, const ir_instr_t *in)
@@ -6327,8 +6174,6 @@ static bool note_overload_site(core_list_t(integer_evidence_t) *evidence,
     return true;
 }
 
-// Of the noted integer types that hold the literal's range, the one that
-// promotes to each other one, if there is one.
 static th_type *chosen_integer(const integer_evidence_t *entry,
                                ir_abcd_range_t range)
 {
@@ -6512,10 +6357,6 @@ static size_t evidence_index(core_list_t(integer_evidence_t) *evidence,
     return SIZE_MAX;
 }
 
-// Two open integer types in the same position of operands that must have
-// one type, as `Set[A]` and `Set[B]` in `s + t`, meet: sized apart they
-// could differ (u8 and u16), and the call would not type. Typing resolves
-// such a call after sizing, so sizing joins them here.
 static void note_meeting_types(core_list_t(integer_evidence_t) *evidence,
                                size_t *meets, const ir_instr_t *in)
 {
@@ -6548,10 +6389,6 @@ static void note_meeting_types(core_list_t(integer_evidence_t) *evidence,
     }
 }
 
-// An inferred integer that is an operand of a built-in integer operator
-// alongside a declared integer type is widened to hold that type too, and
-// again for each such type it meets. A literal constant is not: it stays
-// the smallest type holding its value, and the operation promotes.
 static void note_declared_meeting(core_list_t(integer_evidence_t) *evidence,
                                   th_ctx *types, const ir_instr_t *in)
 {
@@ -6589,8 +6426,6 @@ static void note_declared_meeting(core_list_t(integer_evidence_t) *evidence,
             entry->seen  = true;
             continue;
         }
-        // A side with no fixpoint stays unbounded (and so 64-bit); only a
-        // bounded side widens to hold the declared type.
         if (!entry->range.unbounded_min) {
             entry->range.seen.lo = ir_int_lesser(entry->range.seen.lo,
                                                  bounds.lo);
@@ -6602,7 +6437,6 @@ static void note_declared_meeting(core_list_t(integer_evidence_t) *evidence,
     }
 }
 
-// Every open type gets the joined range of the types it meets.
 static void join_met_evidence(core_list_t(integer_evidence_t) *evidence,
                               size_t *meets)
 {
@@ -6664,11 +6498,9 @@ static bool materialize_integers(ty_solver_t *solver, th_ctx *types,
         core_dict_put(&view.open, ty_open_at(solver, i),
                       ty_open_at(solver, i));
     }
-    // Union-find over the entries: open types that meet are sized together.
     size_t *meets = core_alloc_array(size_t, count);
     for (size_t i = 0; i < count; i++) meets[i] = i;
 
-    // Sizing literals, not proving checks (ir_abcd_hooks_t.literal_sizing).
     ir_abcd_hooks_t hooks = {.context = &view, .view = integer_view,
                              .literal_sizing = true};
 
@@ -6814,7 +6646,6 @@ static ir_instr_t *unmatched_jump(ir_func_t *f, uint64_t id)
     return nullptr;
 }
 
-// The constant a scalar `case` compares against, when it is one.
 static const ir_value_t *case_constant(const case_test_t *test, ir_lit_t *out)
 {
     const ir_instr_t *in    = test->test;
@@ -6834,8 +6665,6 @@ static const ir_value_t *case_constant(const case_test_t *test, ir_lit_t *out)
     return value;
 }
 
-// Two `case`s of a scalar `switch` that match the same value: the first
-// always wins, so the second is dead and almost certainly a mistake.
 static bool switch_constants_distinct(core_translation_unit_t *unit,
                                       const case_test_t       *tests,
                                       size_t                   count)
@@ -6997,8 +6826,6 @@ static bool switch_fits(const n00bb_dispatch_index_t *index,
                            (int)owner->name.u8_bytes, owner->name.data,
                            (int)member->name.u8_bytes, member->name.data);
     }
-    // An open enum holds values none of its items name, so naming every
-    // item never covers the subject.
     const n00bb_enum_range_t *enum_range = variant ? nullptr
         : parse_sym_binding(owner, CORE_STRING_STATIC("n00bb.enum-range"));
     bool open_enum = enum_range && enum_range->is_open;
@@ -7625,7 +7452,6 @@ static bool outcome_inspection(ir_instr_t *in, uint32_t operand, void *state)
     return !uses->escapes;
 }
 
-// The failure type a direct call's callee settled on.
 static th_type *callee_failure(const ir_instr_t *call)
 {
     const ir_func_t *callee = n00bb_direct_call_target(call);
@@ -7637,9 +7463,6 @@ static th_type *callee_failure(const ir_instr_t *call)
         : nullptr;
 }
 
-// A `with` manager's `__exit` returns nothing, or a `bool` saying whether
-// to drop the failure; a `with` used as a value can't have one that drops
-// failures. Which `__exit` a manager has is known once typing chose it.
 static bool check_with_exits(th_ctx *types,
                              core_translation_unit_t *const *units,
                              size_t count, ty_solver_t *solver)
@@ -7696,9 +7519,6 @@ static bool check_with_exits(th_ctx *types,
     return ok;
 }
 
-// A method call is dispatched by its receiver's type, so whether it can fail
-// is known only once typing chose the method. One written without `!` (or
-// a `try`) that reaches a method that can fail does not pass the failure on.
 static bool check_unpropagated_dispatches(
     th_ctx *types, core_translation_unit_t *const *units, size_t count,
     ty_solver_t *solver)
@@ -7719,8 +7539,6 @@ static bool check_unpropagated_dispatches(
             core_translation_unit_diagnostics(unit);
         core_string_t name = in->operands[0].name;
         bool shaped = ir_type_is_call_outcome(in->dest->type);
-        // A `!` on a method that cannot fail has nothing to pass on. The
-        // compiler's own calls (a `with` hook's) may reach such a method.
         if (shaped && th_is_nil(failure)
             && !ir_annot_get((ir_annots_t *)&in->annots,
                              N00BB_MAY_FAIL_KEY)) {
@@ -7746,8 +7564,6 @@ static bool check_unpropagated_dispatches(
     return ok;
 }
 
-// A call written with `!` whose callee's inferred failure type turned out
-// to be `nil`: there is nothing for the `!` to pass along.
 static bool report_infallible_bang(core_translation_unit_t *const *units,
                                    size_t count,
                                    core_translation_unit_t *unit,
@@ -7780,9 +7596,6 @@ static bool check_unpropagated_outcomes(
             continue;
         ir_value_visit_uses(call->block->owner, call->dest,
                             outcome_inspection, &uses);
-        // A callee whose failure settled on `nil` (its body's `fail` or `!`
-        // was itself an error, or its signature is) returns a plain value:
-        // only a written `!`, which inspects the outcome, is wrong.
         th_type *outcome = th_resolve(call->dest->type);
         th_type *failure = ir_type_is_call_outcome(outcome)
             ? th_resolve(th_named_arg(outcome, 1)->type)
@@ -8101,8 +7914,6 @@ bool n00bb_infer_types(n00bb_link_analysis_t *analysis,
                        th_apply(types,
                                 CORE_STRING_STATIC("builtin.containers.dict.Dict"),
                                 entry, 2));
-    // Until literals are sized, an operator meeting an unbound operand
-    // waits (integer_promotion). Constraining already judges some calls.
     typing->dispatch->sizing_pending = true;
     ty_constrain_group(solver, group, &coverage);
     ty_solve(solver);

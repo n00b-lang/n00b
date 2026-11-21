@@ -678,9 +678,6 @@ scan_stream_previous_token(parse_token_stream_t *ts,
     return ts->tokens[lo - 1];
 }
 
-// Fold `token` and its trivia into the leading trivia of `next`, or the
-// trailing trivia of `previous` when there is no next token, then free it.
-// The caller removes the token's slot from the stream.
 static bool
 fold_token_into_trivia(parse_token_stream_t *ts, parse_token_info_t *token,
                        parse_token_info_t *next, parse_token_info_t *previous)
@@ -777,9 +774,6 @@ scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
     return true;
 }
 
-// One-pass form of scan_stream_token_to_trivia over every token `drop`
-// selects. Removing tokens one at a time shifts the array tail per removal,
-// which is quadratic in the stream length.
 bool
 scan_stream_tokens_to_trivia(parse_token_stream_t *ts,
                              bool (*drop)(parse_token_info_t *, void *),

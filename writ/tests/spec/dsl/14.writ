@@ -1,0 +1,11 @@
+version query sqlite3_libversion_number() -> c_int
+        format "MAJOR*1000000 + MINOR*1000 + PATCH"
+
+fn sqlite3_error_offset(db: Db) -> c_int  since 3.38
+fn sqlite3_old_api(db: Db) -> c_int       removed 3.40
+
+when version >= 3.45 {
+    refine sqlite3_prepare_v3 {
+        pzTail: out ??c_char with zSql
+    }
+}

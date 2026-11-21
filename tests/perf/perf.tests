@@ -1,4 +1,3 @@
-# name	program
 hello	hello.n
 alloc-records	alloc_records.n
 string-churn	string_churn.n

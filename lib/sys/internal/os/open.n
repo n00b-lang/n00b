@@ -1,5 +1,3 @@
-# Opening a file.
-
 import internal.errno
 bring errno_of from internal.os.support
 
@@ -19,13 +17,11 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # Open flags, the same on x86_64 and aarch64.
     private const close_on_exec: u32 = 0x80000
     private const open_create: u32 = 0x40
     private const open_exclusive: u32 = 0x80
     private const open_truncate: u32 = 0x200
     private const open_append: u32 = 0x400
-    # AT_FDCWD: paths are relative to the working directory.
     private const at_working_directory: i32 = -100
 } else when target_os() == "macos" {
     [-
@@ -73,31 +69,23 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # _O_* open flags; _O_NOINHERIT keeps a descriptor from child processes.
     private const close_on_exec: u32 = 0x80
     private const open_create: u32 = 0x100
     private const open_exclusive: u32 = 0x400
     private const open_truncate: u32 = 0x200
     private const open_append: u32 = 0x8
     private const open_binary: u32 = 0x8000
-    # _SH_DENYNO: other opens of the file are allowed.
     private const share_any: i32 = 0x40
-    # _S_IREAD and _S_IWRITE.
     private const permit_read: u32 = 0x100
     private const permit_write: u32 = 0x80
 }
 
-# How a file is opened. The values are the same on every platform.
 enum Access {
     read_only = 0,
     write_only = 1,
     read_write = 2,
 }
 
-# Opens `path`, relative to the working directory, and returns its file
-# descriptor, which is closed on exec. `create` makes the file with `mode`
-# (0o644 by default) if it doesn't exist; with `exclusive`, an existing
-# file is EEXIST. An interrupted open is retried.
 func open(path: string, access: Access, create: bool = false,
           truncate: bool = false, append: bool = false,
           exclusive: bool = false, mode: u32 = 0x1a4) -> i32
@@ -107,7 +95,6 @@ func open(path: string, access: Access, create: bool = false,
         bytes = to_cstring(path, copy = true,
             buf = new[Array[u8]](cast[int](byte_len(path)) + 1))!
     } fail(failure) {
-        # The path holds a NUL byte, which C can't see past.
         fail internal.errno.Errno.EINVAL
     }
     let at: Ref[byte] = unsafe_cast[Ref[byte]] ref bytes[0]
@@ -150,7 +137,6 @@ func open(path: string, access: Access, create: bool = false,
                 } fail(failure) {
                     fail internal.errno.Errno.EINVAL
                 }
-                # Windows has only read and write permission bits.
                 var permission: u32 = permit_read
                 if mode & 0x80 != 0 {
                     permission = permission | permit_write

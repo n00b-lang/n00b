@@ -1,6 +1,6 @@
-tests/diagnostics/link/constructed_record_literal.n:7:28: error N00B-T1034: `Built` has an `__init`, so a field tuple outside its package cannot build it
+tests/diagnostics/link/constructed_record_literal.n:5:28: error N00B-T1034: `Built` has an `__init`, so a field tuple outside its package cannot build it
   help: call its constructor, or write `unsafe_cast[Built](...)` to build it without running the constructor
-tests/diagnostics/link/constructed_record_literal.n:9:38: error N00B-T1034: `Built` has an `__init`, so a field tuple outside its package cannot build it
+tests/diagnostics/link/constructed_record_literal.n:7:38: error N00B-T1034: `Built` has an `__init`, so a field tuple outside its package cannot build it
   help: call its constructor, or write `unsafe_cast[Built](...)` to build it without running the constructor
-tests/diagnostics/link/constructed_record_literal.n:15:14: error N00B-T1034: `cast` outside the package of `Built` cannot build it from a field tuple, because `Built` has an `__init`
+tests/diagnostics/link/constructed_record_literal.n:12:14: error N00B-T1034: `cast` outside the package of `Built` cannot build it from a field tuple, because `Built` has an `__init`
   help: call its constructor, or write `unsafe_cast[Built](...)` to build it without running the constructor

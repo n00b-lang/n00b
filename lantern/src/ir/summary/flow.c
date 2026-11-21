@@ -115,7 +115,6 @@ kind_bits(flow_dest_t *dest, ir_sflow_kind_t kind)
 static uint64_t
 dest_word(flow_dest_t *dest, size_t w)
 {
-    // Word `w` of every kind of flow into `dest`.
     const flow_bits_t *kinds[] = {&dest->data, &dest->control, &dest->alias,
                                   &dest->copy};
     uint64_t any = 0;
@@ -221,8 +220,6 @@ same_flow_bits(const flow_table_t *a, const flow_bits_t *have,
 static void
 join_flows(flow_table_t *into, const flow_table_t *from)
 {
-    // As flow_put for each flow, in the same order, but each source and
-    // destination is looked up once rather than once per flow.
     uint32_t  count  = (uint32_t)from->sources.len;
     uint32_t *mapped = core_alloc_array(uint32_t, count + 1);
     for (uint32_t s = 0; s < count; s++) mapped[s] = UINT32_MAX;

@@ -1,5 +1,3 @@
-# Asking about a terminal.
-
 import internal.errno
 bring errno_of from internal.os.support
 
@@ -19,7 +17,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # ioctl requests, the same on x86_64 and aarch64.
     private const get_terminal_attributes: u64 = 0x5401
     private const get_window_size: u64 = 0x5413
 } else when target_os() == "macos" {
@@ -76,7 +73,6 @@ record Terminal_Size {
     columns: u16
 }
 
-# True when `fd` is a terminal.
 func is_terminal(fd: i32) -> bool fail: internal.errno.Errno {
     when target_os() == "linux" {
         let attributes: Array[u8] = new[Array[u8]](64)
@@ -102,16 +98,13 @@ func is_terminal(fd: i32) -> bool fail: internal.errno.Errno {
             fail e
         }
     } else when target_os() == "windows" {
-        # A console or other character device.
         return isatty_raw(fd) != 0
     } else {
         fail internal.errno.Errno.ENOSYS
     }
 }
 
-# The size of the terminal `fd` refers to.
 func terminal_size(fd: i32) -> Terminal_Size fail: internal.errno.Errno {
-    # rows, columns, then the pixel sizes Linux also reports.
     let size: Array[u16] = new[Array[u16]](4)
     when target_os() == "linux" {
         _ = ioctl(fd, get_window_size,
@@ -125,8 +118,6 @@ func terminal_size(fd: i32) -> Terminal_Size fail: internal.errno.Errno {
             fail errno_of(failure)
         }
     } else when target_os() == "windows" {
-        # CONSOLE_SCREEN_BUFFER_INFO, as 16-bit units: the visible window's
-        # left, top, right and bottom are units 5 through 8.
         let info: Array[u16] = new[Array[u16]](11)
         let console: int = get_osfhandle_raw(fd)
         if console == -1 or console_buffer_info_raw(console,

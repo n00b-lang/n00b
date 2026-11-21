@@ -45,12 +45,6 @@ same_native_facts(const n00bb_ffi_symbol_t *left, const n00bb_ffi_symbol_t *righ
         && left->write_only == right->write_only;
 }
 
-// Records the C symbols a literal declares, for the missing-symbol report
-// and to hold every declaration of one C function to the same facts: the
-// summaries know a native by its symbol (n00bb_note_native_axioms), so two
-// differing declarations would make the analysis depend on which came
-// first. Returns false, having reported it, when a declaration differs from
-// another literal's.
 static bool
 remember_declared_symbols(const writ_n00b_externs_t *externs, const n00bb_native_declarations_t *natives,
                           core_translation_unit_t *unit, core_string_t literal, n00bb_literal_origin_t origin)
@@ -99,8 +93,6 @@ remember_declared_symbols(const writ_n00b_externs_t *externs, const n00bb_native
                 N00B_TEXT_FFI_NATIVE_OTHER_DECLARATION, N00BB_ARGS(ARG_TEXT(other->name)));
             ok = false;
         }
-        // A literal generated again (in a long-running compiler) replaces
-        // what it declared before.
         entry.symbol = core_string_dup(entry.symbol);
         entry.name = core_string_dup(entry.name);
         if (same) {
@@ -137,8 +129,6 @@ n00bb_ffi_declared_symbol(core_string_t symbol, n00bb_ffi_symbol_t *out)
 
 typedef struct {
     core_string_t              prefix;
-    // The C symbols the literal's externs call: its shims, and the C
-    // functions its raw bindings call directly.
     core_list_t(core_string_t) symbols;
     core_list_t(size_t)        shims;
     core_list_t(core_string_t) archives;
@@ -147,13 +137,8 @@ typedef struct {
     core_list_t(core_string_t) search_paths;
     bool                       exports;
     bool                       used;
-    // The program calls one of the literal's shims, so they're compiled; a
-    // literal used only through its raw bindings needs just its libraries.
     bool                       shims_used;
-    // The module the literal generated.
     core_string_t              module;
-    // The contract files the literal reads, so a cache can tell when it
-    // would generate something else.
     core_list_t(core_string_t) inputs;
 } ffi_literal_t;
 
@@ -175,8 +160,6 @@ struct n00bb_ffi {
     core_list_t(core_string_t)     search_paths;
     core_list_t(ffi_literal_t)     records;
     core_list_t(size_t)            selected_shims;
-    // The writ platform contracts are resolved for: the build target, or
-    // the host when the target has no writ platform.
     const char                    *platform;
 };
 
@@ -512,9 +495,6 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     if (!ffi) {
         return;
     }
-    // A literal is used when the program calls one of its shims, which are
-    // named with its prefix and an underscore, or a C function one of its
-    // raw bindings calls directly: either way its libraries are needed.
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
         record->shims_used = record->exports;
@@ -759,14 +739,10 @@ run_logged(char **arguments, core_string_t log)
 static bool
 library_found(n00bb_ffi_t *ffi, core_string_t library)
 {
-    // Every target has a C library.
     if (core_string_eq(library, CORE_STRING_STATIC("c"))
         || contains(&ffi->found_libraries, library) || contains(&ffi->transports, library)) {
         return true;
     }
-    // The probe links with the host's linker, which can't see another
-    // target's libraries; when cross-compiling, the program's own link
-    // reports a missing one.
     writ_str_t host = writ_platform_host_triple();
     if (ffi->platform && (strlen(ffi->platform) != host.length
                           || memcmp(ffi->platform, host.data, host.length) != 0)) {
@@ -1211,9 +1187,6 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         push_unique(&record.inputs, writ_unit_file_at(literal, i));
     }
     if (ok) {
-        // Named for the module the literal generates, so its C symbols are
-        // the same in every build, whatever else is compiled with it: a
-        // cached or separately compiled object still finds its shims.
         core_buffer_t prefix = {0};
         core_buffer_puts(&prefix, "n00b_ffi_");
         for (size_t c = 0; c < module.u8_bytes; c++) {
@@ -1480,12 +1453,8 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
         arguments[next++] = "-fPIC";
     }
     else {
-        // A shim declares the C runtime functions it calls, as _errno, which
-        // the runtime's headers declare dllimport; the call is the same.
         arguments[next++] = "-Wno-inconsistent-dllimport";
     }
-    // Linux programs link no libc, so nothing provides the stack
-    // protector's guard value.
     if (core_string_find(triple, CORE_STRING_STATIC("linux")) >= 0) {
         arguments[next++] = "-fno-stack-protector";
     }
@@ -1528,8 +1497,6 @@ shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, core_string_
     for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
         append_payload_text(&payload, ffi->contract_dirs.data[i]);
     }
-    // Only the headers the shim includes: which other literals' headers a
-    // build happens to have loaded mustn't change the key.
     for (size_t i = 0; i < ffi->shims.len; i++) {
         const ffi_output_t *header = &ffi->shims.data[i];
         if (core_string_ends_with(header->name, CORE_STRING_STATIC(".h"))

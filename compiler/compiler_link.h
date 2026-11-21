@@ -98,7 +98,6 @@ parse_sym_entry_t *trait_method_requirement_symbol(
     parse_grammar_t *grammar, n00bb_link_analysis_t *analysis,
     core_translation_unit_t *caller, core_string_t qualified_trait,
     core_string_t method_name);
-// The trait `qualified_trait` names, as `caller` sees it.
 parse_sym_entry_t *n00bb_link_trait_symbol(parse_grammar_t *grammar,
                                            n00bb_link_analysis_t *analysis,
                                            core_translation_unit_t *caller,
@@ -115,8 +114,6 @@ core_translation_unit_t *unit_for_ir_module(n00bb_link_analysis_t *analysis,
                                             ir_module_t *module);
 core_translation_unit_t *n00bb_unit_named(n00bb_link_analysis_t *analysis,
                                           core_string_t name);
-// Gives `binding`, a name that stands for `origin` elsewhere, the facts
-// lookups read from it: its type, kind and members.
 void copy_export_binding_facts(parse_sym_entry_t *binding,
                                parse_sym_entry_t *origin);
 
@@ -177,7 +174,6 @@ ir_module_t *library_ir_module(const n00bb_link_analysis_t *analysis,
                                core_string_t name);
 ir_module_t *interface_body_module(const n00bb_link_analysis_t *analysis,
                                    core_string_t name);
-// On failure, `*failed` names the package or export it stopped at.
 bool register_package_interfaces(n00bb_link_analysis_t *analysis,
     th_env *environment, core_string_t *failed);
 ir_func_t *link_ir_function_for_symbol(n00bb_link_analysis_t *analysis,
@@ -218,9 +214,6 @@ typedef struct {
 } n00bb_call_lookup_t;
 #define N00BB_MODULE_VIEW_NAMESPACE "module-view"
 #define N00BB_MODULE_VIEW_KEY "n00bb.package-module-view"
-// On a member a module literal put into its module: the declaration it
-// stands for, which belongs to the literal's generated module. Passes over a
-// module's own declarations skip these; lookups and exports see them.
 #define N00BB_INJECTED_MEMBER_KEY "n00bb.injected-member"
 
 static inline bool
@@ -241,8 +234,6 @@ core_string_t n00bb_describe_candidates(parse_grammar_t *grammar,
     const core_list_t(parse_sym_entry_ptr_t) *symbols);
 bool n00bb_function_has_overloads(n00bb_tu_state_t *state,
     parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
-// The functions a call names: those in the callee's scope and, for an
-// unqualified call, those its unqualified imports provide.
 core_list_t(parse_sym_entry_ptr_t) n00bb_call_candidates(
     n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
     n00bb_call_lookup_t lookup);
@@ -289,26 +280,17 @@ typedef enum : uint8_t {
     N00BB_CHECK_NOT,
 } n00bb_check_term_kind_t;
 
-// A `check` statement's condition, as lowering translated it: constants and
-// effect queries joined by `and`, `or` and `not`. A query carries what
-// lowering resolved for it, so it is answered once summaries exist without
-// going back to the source.
 typedef struct n00bb_check_term_t {
     n00bb_check_term_kind_t kind;
     bool constant;
     struct n00bb_check_term_t *left;
     struct n00bb_check_term_t *right;
     n00bb_query_t query;
-    // The effect, mark or parameter named, and the effect resolved to its
-    // declaration (qualified) when the query is about an effect or a mark.
     core_string_t name;
     core_string_t effect;
-    // The function asked about, as written, and its symbol.
     core_string_t function_text;
     parse_sym_entry_t *subject;
-    // The callback parameter asked about, or -1.
     int64_t callback;
-    // A `may_carry` query's question to the mark analysis.
     struct ir_instr_t *question;
     core_diag_location_t location;
 } n00bb_check_term_t;
@@ -456,8 +438,6 @@ typedef struct n00bb_link_analysis_t {
     bool keep_summaries;
     n00bb_resolver_t *resolver;
     struct n00bb_cache_t *cache;
-    // Field uses name resolution could not type, with the IR value lowering
-    // read the field from (see n00bb_note_lowered_field_use).
     core_list_t(n00bb_lowered_field_use_t) lowered_field_uses;
 } n00bb_link_analysis_t;
 

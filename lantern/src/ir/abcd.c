@@ -98,7 +98,6 @@ struct ir_abcd_t {
     core_dict_t                 trap_uses;
     bool                        narrowing;
     bool                        clamps_known;
-    // ir_abcd_hooks_t.literal_sizing.
     bool                        literal_sizing;
     core_list_t(length_t)       lengths;
     core_list_t(instr_ptr_t)    effects;
@@ -349,9 +348,6 @@ constant_range(ir_abcd_t *a, const ir_value_t *value, ir_abcd_range_t *out)
 {
     ir_int_t constant = 0;
     ir_interval_t type;
-    // Sizing literals: an immutable module variable holds its static
-    // initializer. (Not a fact to prove checks with: a module initializer
-    // with run-time work may set it again.)
     const ir_global_t *global = a->literal_sizing
             && value->kind == IR_VAL_GLOBAL && value->global
         ? ir_global_identity((ir_global_t *)value->global) : nullptr;
@@ -366,9 +362,6 @@ constant_range(ir_abcd_t *a, const ir_value_t *value, ir_abcd_range_t *out)
         *out = seen_range(ir_interval_point(constant));
         return true;
     }
-    // Before static initializers exist, the module initializer sets an
-    // immutable module variable with one `global.store`: it holds that
-    // value's range.
     const ir_instr_t *store = nullptr;
     for (uint32_t b = 0; global && global->mutability != IR_MUT_MUTABLE
          && b < a->f->n_blocks; b++)
@@ -1655,9 +1648,6 @@ zero_bound(ir_abcd_t *a, const ir_instr_t *in, const ir_instr_t *at,
         if (constant_of(in, &constant) && constant >= type.lo
             && constant <= type.hi)
             return seen_range(ir_interval_point(constant));
-        // Sizing a literal past 2^126: a non-negative one up to 2^128 - 1
-        // saturates, which sizes it as `u128`; a negative one down to
-        // -2^127 is exact, which sizes it as `i128`.
         if (a->literal_sizing && in->n_operands == 1
             && in->operands[0].kind == IR_OPD_CONST
             && !in->operands[0].lit.is_float) {
@@ -1719,8 +1709,6 @@ zero_bound(ir_abcd_t *a, const ir_instr_t *in, const ir_instr_t *at,
                              type, x.unbounded_min || y.unbounded_max,
                              x.unbounded_max || y.unbounded_min);
     case IR_OP_DIV:
-        // An empty range (lo above hi) says nothing about the divisor, and
-        // dividing by its `hi` could divide by zero.
         if (!pair || x.seen.lo < 0 || y.seen.lo <= 0
             || y.seen.hi < y.seen.lo || x.seen.hi < x.seen.lo)
             return unknown_range(type);
@@ -1954,8 +1942,6 @@ trip_count(ir_abcd_t *a, ir_block_t *header, ir_block_t *latch,
         else if (!rising && (op == IR_OP_GT || op == IR_OP_GE))
             span = start.seen.hi - limit.seen.lo + (op == IR_OP_GE);
         else continue;
-        // The step is one constant, not 0 (checked above), so a falling loop
-        // counts down by its magnitude; the most negative step has none.
         if (step.lo == ir_int_min) continue;
         ir_int_t stride = rising ? step.lo : -step.lo;
         if (limit.seen.hi == ir_int_max || limit.seen.lo == ir_int_min

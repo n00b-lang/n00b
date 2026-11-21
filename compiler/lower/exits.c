@@ -2,9 +2,6 @@
 #include "ir/pass.h"
 #include "static_branches.h"
 
-// Exit scopes: the one exit block of a `with` manager or a loop over a
-// container. See n00bb_exit_scope_t.
-
 static ir_local_t *
 exit_local(ir_lower_context_t *context, const char *role, th_type *type)
 {
@@ -30,7 +27,6 @@ reason_value(ir_lower_context_t *context, uint64_t reason, ir_span_t span)
         ? constant->dest : nullptr;
 }
 
-// The item of the option `local` holds.
 static ir_value_t *
 option_item(ir_lower_context_t *context, ir_local_t *local, th_type *item,
             ir_span_t span)
@@ -76,7 +72,6 @@ n00bb_exit_scope_jump(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                       uint64_t reason, ir_value_t *error, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    // The compiler's own code, which dead-code warnings don't point at.
     span.implied = true;
     if (!scope->exit)
         scope->exit = n00bb_branch_block(context, lower, "exit");
@@ -100,8 +95,6 @@ n00bb_exit_scope_jump(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
     return true;
 }
 
-// A `return`, `break` or `continue` leaves through `scope`'s exit block and
-// goes on from a block of its own, where lowering continues.
 static bool
 leave_through(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
               ir_span_t span)
@@ -130,7 +123,6 @@ n00bb_exit_scope_close(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
         && !n00bb_exit_scope_jump(context, scope, N00BB_EXIT_FALLTHROUGH,
                                   nullptr, span))
         return false;
-    // With no failure reaching it, the failure option holds nothing.
     if (!scope->failure_reachable)
         (void)th_var_bind(scope->failure_type,
                           th_nil(ir_module_types(context->module)));
@@ -146,8 +138,6 @@ n00bb_exit_scope_close(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
     return *failure != nullptr;
 }
 
-// Branches to `target` when the reason is `reason`, and continues lowering
-// where it isn't.
 static bool
 branch_on_reason(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                  uint64_t reason, ir_block_t *target, ir_span_t span)
@@ -168,8 +158,6 @@ branch_on_reason(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
     return true;
 }
 
-// Goes on from the exit block to the block for the reason: `failed` for a
-// failure, or `targets[reason]` (some of which may be missing).
 static bool
 dispatch_reason(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
                 ir_block_t *failed, ir_block_t **targets, size_t count,
@@ -190,11 +178,6 @@ dispatch_reason(ir_lower_context_t *context, n00bb_exit_scope_t *scope,
     return n00bb_emit_jump(context, targets[last - 1], span);
 }
 
-// Goes on to `after` when `verdict`, what the construct's exit code said
-// about a failure, drops it, and continues lowering where it doesn't. Only
-// a `bool` verdict can drop one, by being `true`: an `__exit` that returns
-// nothing never does. Which it is is known once types are, and the test
-// folds away then.
 static bool
 drop_failure(ir_lower_context_t *context, ir_value_t *verdict,
              ir_block_t *after, ir_span_t span)
@@ -311,7 +294,6 @@ n00bb_failure_handler(n00bb_lower_context_t *lower, uint64_t before_order,
     }
     *scope = n00bb_innermost_exit_scope(lower,
         *try_frame ? (*try_frame)->order : 0, before_order);
-    // Only the innermost of the two handles the failure.
     if (*scope) *try_frame = nullptr;
 }
 
@@ -349,9 +331,6 @@ n00bb_emit_function_failure(ir_lower_context_t *context, ir_value_t *error,
     return true;
 }
 
-// An option local that is `nil` from the function's entry, so every path
-// has written it: a value read after leaving through exit blocks, which
-// other paths reach too, is kept in one.
 static ir_local_t *
 carrier(ir_lower_context_t *context, th_type *option, ir_span_t span)
 {

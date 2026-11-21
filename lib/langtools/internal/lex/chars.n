@@ -4,7 +4,6 @@ import sort
 import containers.list
 import internal.scan
 
-// A fixed set of characters: ASCII as a bitmap, the rest sorted.
 record Char_Set {
     low:   u64
     high:  u64
@@ -46,9 +45,6 @@ func has(set: Char_Set, c: char) -> bool {
     return at < __array_length(set.other) and set.other[at] == code
 }
 
-// A character set built from named sets, ranges and characters with `+`
-// and `-`. Its steps apply in order: the last step that matches a character
-// decides whether the character is in the set. A step can name another set.
 enum Term_Kind { chars = 0, range, category, property, script, xid_start,
                  xid_continue, set }
 
@@ -64,7 +60,6 @@ record Step {
     set:   Char_Pred?
 }
 
-// The ASCII answers are worked out once, when the set is made.
 object Char_Pred {
     steps: List[Step]
     low:   u64
@@ -128,7 +123,6 @@ func contains(p: Char_Pred, c: char) -> bool {
     return evaluate(p, c)
 }
 
-// A set of exactly the characters in `text`.
 func fixed(text: string) -> Char_Pred {
     var steps: List[Step] = []
     if byte_len(text) > 0 {
@@ -137,7 +131,6 @@ func fixed(text: string) -> Char_Pred {
     return new[Char_Pred](steps)
 }
 
-// The ASCII members as a Char_Set, for digit and flag sets.
 func ascii_members(p: Char_Pred) -> Char_Set {
     return (low = p.low, high = p.high, other = new[Array[u32]](0))
 }
@@ -167,8 +160,6 @@ func set_term(named: Char_Pred) -> Step {
     return t
 }
 
-// A built-in set by name. `start` picks XID_Start for `XID`; otherwise it
-// means XID_Continue.
 func named_term(name: string, start: bool) -> Step? {
     if name == "XID" {
         if start {
@@ -242,8 +233,6 @@ private func bits(cats: Array[unicode.Gc]) -> u32 {
     return mask
 }
 
-// Unicode general categories as bit masks, by their short names, plus the
-// one-letter groups and their long names.
 private func categories() -> Dict[string, u32] {
     var out: Dict[string, u32] = new[Dict[string, u32]]()
     let letters: u32 = bits([unicode.Gc.lu, unicode.Gc.ll, unicode.Gc.lt,
@@ -283,8 +272,6 @@ private func categories() -> Dict[string, u32] {
     return out
 }
 
-// The character a spec word stands for: itself, an escape such as `\t`, or
-// `U+2028`. Returns nil when the word is not a single character.
 func char_of(word: string) -> char? {
     let n: uint = byte_len(word)
     if n == 0 {
@@ -319,8 +306,6 @@ func char_of(word: string) -> char? {
     return nil
 }
 
-// The text a spec word stands for when it names characters: escapes and
-// `U+XXXX` decoded, anything else as written.
 func decoded(word: string) -> string {
     let c: char? = char_of(word)
     if c != nil {

@@ -1,7 +1,5 @@
 #include "lower_internal.h"
 
-// A call to a function names the function rather than reading it, so the
-// part of the call that names it is not lowered as a value.
 bool
 n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
                         bool entering, void *state)

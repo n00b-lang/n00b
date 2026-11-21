@@ -1,0 +1,5 @@
+fn gtk_widget_show(w: Widget)       thread main
+fn sqlite3_close_v2(db: consume Db) thread any
+fn pthread_mutex_unlock(m: *Mutex)  thread same_as lock(m)
+fn write(...)                       signal_safe
+fn qsort(...)                       reentrant no

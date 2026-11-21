@@ -399,8 +399,6 @@ zero_fixed_shape_initializer(core_translation_unit_t *unit,
         .aggregate = {.items = items, .count = count},
     };
     bool nested = th_kind_of(element) == TH_SEQUENCE;
-    // A dimension past the declared rectangular prefix is ragged: each of
-    // its arrays starts zero-sized, until an `Array` is assigned to it.
     ir_shape_storage_t storage = {0};
     bool ragged = nested && ir_shape_storage(shape, &storage)
         && storage.classification_known
@@ -433,8 +431,6 @@ zero_fixed_shape_initializer(core_translation_unit_t *unit,
             items[i].kind = IR_GLOBAL_INIT_FLOAT;
         else if (category == IR_CLASS_VOID)
             items[i].kind = IR_GLOBAL_INIT_NIL;
-        // Each zeroed object is a fresh one, which static storage can't
-        // hold: the module's initializer allocates such an array.
         else if (unit && !th_option_item(element)
                  && !n00bb_object_type(ir_module_types(module), element)) {
             bool shaped = false;
@@ -530,7 +526,6 @@ zero_member_initializer(core_translation_unit_t *unit, ir_module_t *module,
         *out = (ir_global_init_value_t){.kind = IR_GLOBAL_INIT_STRING};
         return true;
     }
-    // Enums and flagsets are stored as their integers.
     th_type *definition = category == IR_CLASS_OPAQUE
         && th_kind_of(resolved) == TH_NAMED
         ? ir_type_definition(module, resolved) : nullptr;
@@ -563,7 +558,6 @@ initialize_static_global(parse_grammar_t *grammar,
         if (symbol->mutability == PARSE_SYM_CONST) {
             ir_lower_context_t span_context = {
                 .file_id = file_id, .diagnostics = diagnostics};
-            // A destructured constant is set where it is unpacked.
             if (parse_tree_in_pattern(declaration)) return true;
             lower_report(&span_context, N00B_DIAG_CONST_WITHOUT_VALUE,
                 lower_symbol_name_span(&span_context, symbol),
@@ -573,8 +567,6 @@ initialize_static_global(parse_grammar_t *grammar,
                 N00BB_ARGS(ARG_TEXT(symbol->name)));
             return false;
         }
-        // An array whose elements have no zero value gets no static storage:
-        // its module's initializer allocates it, which reports them.
         th_type *element = global->type ? th_resolve(global->type) : nullptr;
         ir_shape_storage_t storage = {0};
         uint32_t prefix = global->shape
@@ -1218,8 +1210,6 @@ register_optional_parameter_metadata(parse_grammar_t *grammar,
             core_buffer_release(&fixed);
             return false;
         }
-        // A fixed-size array passed by reference is passed as its elements:
-        // every dimension's size is known.
         ir_shape_t *shape = formal && th_mode_by_reference(mode)
             ? parse_sym_binding(formal, CORE_STRING_STATIC("ir.array-shape"))
             : nullptr;
@@ -1282,8 +1272,6 @@ attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
 {
     ir_value_t *address = body ? ir_func_address(body->owner, body) : nullptr;
     if (body) function->definition = body;
-    // A function with no written return type gets it from its body. The
-    // interface keeps it open; the build that cached the body settled it.
     th_type *declared = body && th_kind_of(th_resolve(function->type))
             == TH_FUNCTION
         ? th_resolve(th_func_ret(th_resolve(function->type))) : nullptr;
@@ -1963,7 +1951,6 @@ self_derived(core_dict_t *derived, const ir_instr_t *in)
         || (local && core_dict_contains(derived, local));
 }
 
-// The values and locals that hold `self`, or its address.
 static void
 collect_self_values(ir_func_t *function, core_dict_t *derived)
 {
@@ -1988,8 +1975,6 @@ collect_self_values(ir_func_t *function, core_dict_t *derived)
     }
 }
 
-// An object handle or a reference has no meaningful zero value, so unless it
-// is optional, a constructor must set it.
 static bool
 required_field(th_ctx *types, th_type *type)
 {
@@ -2000,12 +1985,10 @@ required_field(th_ctx *types, th_type *type)
     return n00bb_object_type(types, type);
 }
 
-// The fields of `type` that must be set, at most 64 of them.
 static size_t
 required_fields(th_ctx *types, th_type *type, core_string_t *names,
                 th_type **kinds)
 {
-    // A variant's arms are alternatives, so none of them has to be set.
     bool variant = false;
     if (type && th_named_info(th_resolve(type), nullptr, &variant, nullptr)
         && variant)
@@ -2023,8 +2006,6 @@ required_fields(th_ctx *types, th_type *type, core_string_t *names,
     return count;
 }
 
-// The required fields (bits of `wanted`, named by `names`) that `block`
-// stores through `self`. Storing all of `self` sets every field.
 static uint64_t
 fields_set_in(const ir_block_t *block, core_dict_t *derived,
               const core_string_t *names, size_t count)
@@ -2067,8 +2048,6 @@ check_required_fields(core_translation_unit_t *unit, ir_func_t *function)
     size_t count = required_fields(types, self, names, kinds);
     if (!count) return true;
 
-    // Forward must-analysis: a field is set at a block's end if it is set at
-    // the end of every predecessor, or in the block itself.
     core_dict_t derived;
     core_dict_init(&derived, nullptr, nullptr);
     collect_self_values(function, &derived);
@@ -2118,8 +2097,6 @@ check_required_fields(core_translation_unit_t *unit, ir_func_t *function)
     return !missing;
 }
 
-// Whether `value` is the address of a field of the tracked value; sets
-// `*bit` to the field's bit when it is a required one.
 static bool
 tracked_field(core_dict_t *derived, const ir_value_t *value,
               const core_string_t *names, size_t count, uint64_t *bit)
@@ -2145,8 +2122,6 @@ local_slot(const ir_value_t *address)
             || address->def->op == IR_OP_ALLOCA);
 }
 
-// What `in` does to the tracked value: the required fields it sets, or
-// whether it uses the value, which needs them all set first.
 static uint64_t
 zeroed_effect(const ir_instr_t *in, core_dict_t *derived,
               const core_string_t *names, size_t count, bool *uses)
@@ -2184,8 +2159,6 @@ zeroed_effect(const ir_instr_t *in, core_dict_t *derived,
     return 0;
 }
 
-// `new` on a type with no `__init` gives zeroed storage, so fields with no
-// zero value must be set on every path before anything uses the value.
 static bool
 check_zeroed_value(core_translation_unit_t *unit, ir_func_t *function,
                    ir_instr_t *seed, th_type *built, ir_doms_t *doms)
@@ -2227,8 +2200,6 @@ check_zeroed_value(core_translation_unit_t *unit, ir_func_t *function,
     uint64_t all = count == 64 ? ~(uint64_t)0 : ((uint64_t)1 << count) - 1;
     uint64_t *out = core_alloc_array(uint64_t, function->n_blocks);
     for (uint32_t b = 0; b < function->n_blocks; b++) out[b] = all;
-    // Fields are unset where the value is made, and set everywhere it does
-    // not exist yet, so blocks before it impose nothing.
     bool ok = true;
     for (bool changed = true, report = false; changed || report;) {
         bool reporting = report;
@@ -2288,7 +2259,6 @@ check_zeroed_values(core_translation_unit_t *unit, ir_func_t *function)
     return ok;
 }
 
-// The length an array value written to a `let` is known to have.
 static bool
 known_array_length(const ir_value_t *value, uint64_t *length)
 {
@@ -2321,12 +2291,6 @@ declaration_default(const ir_instr_t *in)
     return mark && mark->kind == IR_ANNOT_BOOL && mark->b;
 }
 
-// A `let` array declared without a size or a value takes its length from
-// its assignment; where the assignment hasn't run, it holds that many
-// zeroed elements (the default `made`, given a placeholder length when
-// lowered). When some read can come before the assignment, this sets the
-// length, which every assignment must agree on, and checks that the
-// elements have a zero value.
 static bool
 size_let_default(core_translation_unit_t *unit, ir_func_t *function,
                  ir_instr_t *made, ir_doms_t *doms)
@@ -2362,7 +2326,6 @@ size_let_default(core_translation_unit_t *unit, ir_func_t *function,
         core_dict_free(&addresses);
         return true;
     }
-    // The values that are the local's address.
     for (bool changed = true; changed;) {
         changed = false;
         for (uint32_t b = 0; b < function->n_blocks; b++)
@@ -2380,7 +2343,6 @@ size_let_default(core_translation_unit_t *unit, ir_func_t *function,
                 }
             }
     }
-    // Each instruction's part: an assignment of the whole local, or a use.
     uint64_t length = 0;
     bool lengths_known = true, any_assignment = false;
     uint32_t n = function->n_blocks;
@@ -2477,7 +2439,6 @@ size_let_default(core_translation_unit_t *unit, ir_func_t *function,
     return true;
 }
 
-// An integer constant, through copies and casts that keep its value.
 static bool
 constant_index(const ir_value_t *value, int64_t *out)
 {
@@ -2499,8 +2460,6 @@ constant_index(const ir_value_t *value, int64_t *out)
     return false;
 }
 
-// The values `value` can take at `at`, as far as range analysis can tell:
-// each end, and whether it is bounded.
 typedef struct {
     int64_t lo, hi;
     bool    has_lo, has_hi;
@@ -2532,9 +2491,6 @@ value_range(ir_abcd_t *abcd, const ir_value_t *value, const ir_instr_t *at,
     return out->has_lo || out->has_hi;
 }
 
-// An index into an array whose length is known without running the
-// program, that can only be out of range: every value range analysis
-// allows for it is outside -length .. length - 1.
 static bool
 check_index_range(core_translation_unit_t *unit, ir_func_t *function,
                   ir_abcd_t *abcd, ir_instr_t *in)
@@ -2571,9 +2527,6 @@ check_index_range(core_translation_unit_t *unit, ir_func_t *function,
     return false;
 }
 
-// A slice bound's values once resolved against the array's length `n`:
-// negative ones count from the end, and `to` takes the end item too. Only
-// when they all count from the same end can they be resolved as a range.
 static bool
 resolved_bound(const known_range_t *bound, int64_t n, bool inclusive_end,
                known_range_t *out)
@@ -2587,10 +2540,6 @@ resolved_bound(const known_range_t *bound, int64_t n, bool inclusive_end,
     return true;
 }
 
-// A slice of an array of known length (a `__slice` or `__write_slice`
-// call: the receiver, each bound as an option, whether `to` includes the
-// end) whose start can only come after its end. (Bounds past the array's
-// ends just stop there, as in Python.)
 static bool
 check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
                   ir_abcd_t *abcd, ir_instr_t *in)
@@ -2618,8 +2567,6 @@ check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
         known[b] = bound && value_range(abcd, bound, in, &bounds[b]);
     }
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    // The start always after the end, before either stops at the array's
-    // ends.
     known_range_t start = bounds[0], end = bounds[1];
     if (!known[0] || !known[1]
         || (written[0] && !resolved_bound(&bounds[0], n, false, &start))
@@ -2635,9 +2582,6 @@ check_slice_range(core_translation_unit_t *unit, ir_func_t *function,
     return false;
 }
 
-// Indexes and slices that range analysis shows can only be out of range,
-// for arrays of known length, are reported here rather than panicking
-// when the program runs.
 static bool
 check_known_ranges(core_translation_unit_t *unit, ir_func_t *function)
 {

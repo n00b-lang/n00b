@@ -18,8 +18,6 @@ struct n00bb_native_inputs {
     size_t framework_count;
     const core_string_t *search_paths;
     size_t search_path_count;
-    // Chooses again for the runtime program, from the C symbols its runtime
-    // code calls: the compile-time program may call more.
     bool (*select_runtime)(void *context, const core_string_t *symbols,
                            size_t count, n00bb_native_inputs_t *out);
     void *select_context;

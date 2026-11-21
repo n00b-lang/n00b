@@ -1,0 +1,21 @@
+# leading comment
+
+// another leading comment
+func strip_layout(flag: bool) -> int {
+    # a comment line inside a body
+
+    let value: int = 1 /* inline */ + 2  # trailing
+    let text = "# not // a /* comment */"
+    let mark = '#'
+    let fenced = [- # kept inside a fence -]
+    /** a /* nested */ block **/
+    if flag {
+
+        // only a comment here
+
+        return value
+    }
+    return value + text.len() + fenced.len()
+}
+
+# a comment at the end

@@ -34,8 +34,6 @@ restore_frames(n00bb_lower_context_t *lower, frame_marks_t marks)
     lower->typecases.len = marks.typecases;
 }
 
-// Whether `value` is `reference` or an address derived from it, or, when
-// `through_reads`, a value read through such an address.
 static bool
 n00bb_reaches_reference(const ir_value_t *value,
                         const ir_value_t *reference, bool through_reads)
@@ -55,9 +53,6 @@ n00bb_reaches_reference(const ir_value_t *value,
     return false;
 }
 
-// Whether `in` writes the place an `out` parameter's Ref addresses: it
-// stores through the Ref, or hands the Ref (or, to a method resolved later,
-// the parameter's value) to a call.
 static bool
 n00bb_writes_reference(const ir_instr_t *in, const ir_value_t *reference)
 {
@@ -78,10 +73,6 @@ n00bb_writes_reference(const ir_instr_t *in, const ir_value_t *reference)
     }
 }
 
-// A member of a by-reference parameter is reached through the parameter's
-// address, but its base is still lowered as a read of the whole parameter,
-// which goes unused. Left in, it would read the caller's whole place (an
-// `out` place before it is set), so unused reads are dropped.
 static bool
 n00bb_erase_unused_reference_reads(ir_func_t *function)
 {
@@ -118,9 +109,6 @@ n00bb_erase_unused_reference_reads(ir_func_t *function)
     return ok;
 }
 
-// An `out` parameter must be written on every path to a successful return.
-// Its writes go through its Ref, so this is a must-write flow over the
-// body's reachable blocks.
 static void
 n00bb_check_out_parameter(ir_lower_context_t *context,
                           parse_sym_entry_t *parameter,
@@ -522,10 +510,6 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             continue;
         }
 
-        // `out` and `modify` parameters are references to the caller's
-        // place. The parameter's value is that Ref; the symbol is bound to
-        // it as address-backed storage, so reads load through it and
-        // writes store through it, visible to the caller at once.
         bool mode_matches = parameter->has_mode && th_mode_by_reference(mode);
         th_type *reference_type = mode_matches
             ? th_ind(ir_module_types(module), 0, parameter_type) : nullptr;

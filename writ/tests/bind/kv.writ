@@ -27,7 +27,6 @@ fn kv_put(db: Db, key: *[u8; klen], klen: usize, val: *[u8; vlen], vlen: usize)
     -> c_int as kv_status
   error ret != KV_OK
 
-# value is copied into a kv-heap buffer the caller owns
 fn kv_get(db: Db, key: *[u8; klen], klen: usize,
           out_val: out **[u8; *out_len] own release kv_free,
           out_len: out *usize)
@@ -41,7 +40,6 @@ fn kv_get(db: Db, key: *[u8; klen], klen: usize,
 fn kv_iter_new(db: Db, prefix: ?[u8; plen], plen: usize) -> own ?Iter with db
   error ret == null
 
-# the entry is borrowed from the iterator and invalidated by the next advance
 fn kv_iter_next(it: Iter) -> ?kv_entry until next kv_iter_next(it), release(it)
 
 fn kv_errstr(s: c_int) -> *cstr static

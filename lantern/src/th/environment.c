@@ -1974,8 +1974,6 @@ static bool receiver_cannot_match(const th_env_function_t *function,
       && !core_string_eq(expected->named.name, actual->named.name);
 }
 
-// The trait's own `where` requirements, on the type variables its matched
-// methods have bound (`trait Keyed where 'K: Integer`).
 static bool trait_requirements_hold(th_ctx *ctx, th_type *methods) {
   th_type *trait = methods ? th_resolve(methods) : nullptr;
   if (!trait || th_kind_of(trait) != TH_TRAIT) return true;

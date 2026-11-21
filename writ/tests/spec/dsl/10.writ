@@ -1,0 +1,9 @@
+enum ValueKind : c_int {
+    VK_INT = 1, VK_REAL = 2, VK_TEXT = 3, VK_NULL = 5,
+}
+
+enum Level : c_int { LOW = 0, HIGH = 1 } closed
+
+flags OpenFlags : c_int {
+    READONLY = 0x1, READWRITE = 0x2, CREATE = 0x4,
+}

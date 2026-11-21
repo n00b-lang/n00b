@@ -12,10 +12,6 @@ typedef struct {
     uint64_t mutates[N00BB_FLOW_KINDS];
     uint64_t escapes[N00BB_FLOW_KINDS];
     uint64_t leaks[N00BB_FLOW_KINDS];
-    // Parameters stored into the place an `out` or `modify` parameter
-    // refers to, and those by-reference parameters. Such a store keeps the
-    // source only as long as the caller's place lives, so it is not counted
-    // in `escapes`: a call site decides from the place it passes.
     uint64_t stored[N00BB_FLOW_KINDS];
     uint64_t stored_into;
     bool     writes_nonlocal;

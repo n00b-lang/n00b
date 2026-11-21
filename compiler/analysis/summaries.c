@@ -80,16 +80,11 @@ runtime_init_entries(parse_grammar_t *grammar,
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
-                // Thread-locals start unset on every thread, and a module
-                // variable without an initializer is unset until code sets
-                // it: reads of either are checked from every entry.
                 if (symbol->kind == PARSE_SYM_VARIABLE
                     && is_module_global_symbol(grammar, symbol)
                     && (symbol->is_thread_local
                         || !global_has_explicit_initializer(grammar,
                                                             symbol))) {
-                    // A module variable nothing lowered has no storage to
-                    // read; a thread-local always has.
                     ir_global_t *global = link_ir_global_for_symbol(analysis,
                                                                     symbol);
                     if ((global || symbol->is_thread_local)
@@ -243,8 +238,6 @@ n00bb_bookkeeping_receiver(const ir_func_t *function)
     return type && th_kind_of(type) == TH_NAMED ? type : nullptr;
 }
 
-// A field holding a reference to storage of its own: a `Ref` or an
-// `object`.
 static bool
 n00bb_field_refers_elsewhere(n00bb_link_analysis_t *analysis, th_type *type)
 {
@@ -257,9 +250,6 @@ n00bb_field_refers_elsewhere(n00bb_link_analysis_t *analysis, th_type *type)
                                     CORE_STRING_STATIC("object"));
 }
 
-// Whether a finalizer writes through its receiver into another object,
-// rather than only into the receiver's own fields (inline records included).
-// A path it can't follow counts as reaching another object.
 static bool
 n00bb_finalizer_reaches_other(n00bb_link_analysis_t *analysis,
                               const ir_summary_t *summary,
@@ -272,8 +262,6 @@ n00bb_finalizer_reaches_other(n00bb_link_analysis_t *analysis,
         parse_scope_t *scope = fields;
         bool through_reference = false;
         for (uint32_t step = 0; step < path->depth; step++) {
-            // Any step past a field that refers elsewhere lands in the
-            // storage it refers to.
             if (through_reference) return true;
             if (n00bb_builtin_member(path->steps[step])) continue;
             parse_sym_entry_t *field = scope
@@ -306,10 +294,6 @@ n00bb_summary_bookkeeping(void *context, const ir_func_t *function,
     th_type *receiver = n00bb_bookkeeping_receiver(function);
     parse_scope_t *fields = receiver
         ? record_scope_for_type(analysis, receiver, nullptr) : nullptr;
-    // Nothing observes the fields of a value being finalized, so writes to
-    // them are free. A write that reaches another object (past a reference
-    // or `object` field) is a real effect: then none of the finalizer's
-    // writes count as reads.
     if (core_string_eq(root, CORE_STRING_STATIC("__finalize")))
         return n00bb_finalizer_reaches_other(analysis, summary, fields)
             ? 0 : 1;

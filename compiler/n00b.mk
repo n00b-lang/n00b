@@ -9,9 +9,6 @@ COMPTIME_RUNTIME_SRC := runtime/comptime/n00b_comptime.c
 N00B_SRCS := $(wildcard compiler/*.c) $(wildcard compiler/lower/*.c) $(wildcard compiler/analysis/*.c) abi/abi_directory.c abi/abi_string.c \
     runtime/runtime_native_roots.c
 
-# Programs on Linux run without libc (runtime/linux_start.c), so there the
-# program runtime is built libc-free. The compiler and the C tests are
-# ordinary libc programs and link a hosted build of the same sources.
 ifeq ($(UNAME),Linux)
 PROGRAM_RUNTIME_SRCS := $(RUNTIME_SRCS) runtime/linux_start.c
 HOST_RUNTIME_OBJ := $(BUILD)/runtime-host
@@ -55,8 +52,6 @@ N00B_CFLAGS := $(BASE_CFLAGS) $(OPT) $(N00B_INC) -I$(SRC)/writ/include \
     $(LLVM_CFLAGS) $(N00B_DEFINES)
 HOST_RUNTIME_CFLAGS := $(BASE_CFLAGS) -O3 -g -fno-omit-frame-pointer $(N00B_INC) \
     -DN00BB_SOURCE_ROOT="\"$(NATIVE_SRC)\"" -DN00BB_STACK_OBJECT_LIMIT_BYTES=4096
-# The libc-free build also keeps atomics inline: the out-of-line aarch64
-# helpers live in a compiler support library, not in the runtime.
 RUNTIME_CFLAGS := $(HOST_RUNTIME_CFLAGS) \
     $(if $(filter Linux,$(UNAME)),-DN00B_LIBC_FREE \
         $(if $(filter aarch64 arm64,$(shell uname -m)),-mno-outline-atomics))

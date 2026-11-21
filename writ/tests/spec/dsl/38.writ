@@ -1,0 +1,19 @@
+profile java {
+    memory gc moving
+    pin    for call  via "Linker.Option.critical(true)"
+    pin    longer    via copy
+    keep_alive       via "Reference.reachabilityFence"
+}
+profile csharp {
+    memory gc moving
+    pin    for call  via "fixed"
+    pin    longer    via "GCHandle.Alloc(Pinned)" release "GCHandle.Free"
+}
+profile go {
+    memory gc moving
+    pin    any       via "runtime.Pinner.Pin" release "runtime.Pinner.Unpin"
+}
+profile python {
+    memory rc + gc nonmoving
+    pin    buffer    via "PyObject_GetBuffer" release "PyBuffer_Release"
+}

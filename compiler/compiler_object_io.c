@@ -16,16 +16,9 @@ const char *const *
 n00bb_system_libraries(const core_target_desc_t *target, bool libc)
 {
     static const char *const mach_o[] = {nullptr};
-    // Linux programs link no libc and no C startup files: the runtime's
-    // _start begins the program. Compiler-rt still supplies the compiler's
-    // own helpers, such as 128-bit division.
     static const char *const elf[] = {"-static", "-nostartfiles", "-nolibc",
                                       "--rtlib=compiler-rt",
                                       "--unwindlib=none", nullptr};
-    // A program whose FFI contracts link "c" still starts at the runtime's
-    // _start, with the same runtime: libc is linked dynamically, and the
-    // dynamic loader sets it up before _start runs. The runtime's malloc
-    // and free interpose libc's, so C code allocates from the n00b pool.
     static const char *const elf_libc[] = {"-nostartfiles",
                                            "--rtlib=compiler-rt",
                                            "--unwindlib=none", nullptr};

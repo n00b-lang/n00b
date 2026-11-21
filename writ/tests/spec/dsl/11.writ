@@ -1,0 +1,2 @@
+fn resharp_is_match(r: Regex, input: bytes[len] null if empty, len: usize) -> i32 as bool
+  error ret == -1 via last_error

@@ -8,7 +8,6 @@
 
 typedef struct n00bb_native_frames_t n00bb_native_frames_t;
 
-/* Collect final native stack offsets from LLVM objects before final linking. */
 n00bb_native_frames_t *n00bb_native_frames_new(
     core_target_object_format_t format);
 bool n00bb_native_frames_add(n00bb_native_frames_t *frames,

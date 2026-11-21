@@ -322,26 +322,13 @@ block_in_cycle(ir_block_t *block)
     return cycle;
 }
 
-// The arrays a function keeps in its frame share this many bytes. That is
-// well under the smallest guard page a thread stack gets (4 KiB), so keeping
-// arrays in the frame neither lets an overflow step over the guard nor
-// makes deep recursion run out of stack noticeably sooner than it would with
-// the arrays on the heap. Arrays past the budget are allocated.
 enum { FRAME_ARRAY_BUDGET = 2048 };
 
-// A bounded array of plain scalars (integers, floats, bools, bytes), made
-// whole by one instruction: zeroed (`array.new`) or from its elements (an
-// array literal). Its storage holds no references, so it can live in the
-// frame when it doesn't outlive the call. Returns the bytes its elements
-// take there, or 0 when it isn't such an array or alone exceeds the budget.
 static uint64_t
 frame_array(ir_module_t *module, const ir_instr_t *in)
 {
     if ((in->op != IR_OP_AGGREGATE && in->op != IR_OP_ARRAY_NEW)
         || !in->dest) return 0;
-    // A rectangular array (a shape with a size for every dimension) is one
-    // block of its innermost elements; a flattened literal's operands are
-    // those elements.
     ir_shape_t *shape = ir_value_shape(in->dest);
     uint32_t rank = shape ? ir_shape_rank(shape) : 1;
     th_type *element = th_resolve(in->dest->type);
@@ -362,8 +349,6 @@ frame_array(ir_module_t *module, const ir_instr_t *in)
     bool scalar = element && (th_kind_of(element) == TH_BITINT
                               || (builtin && builtin->scalar));
     if (!scalar) return 0;
-    // An element's width rounded up to a power of two bytes is never less
-    // than the stride the backend gives it.
     uint32_t bits = ir_machine_of(module, element).width;
     uint64_t stride = 1;
     while (stride * 8 < bits) stride *= 2;
@@ -394,7 +379,6 @@ typedef struct {
 core_list_decl(placed_use_t);
 typedef core_list_t(placed_use_t) placed_uses_t;
 
-// Each value's uses in the function, built once for the arrays it holds.
 static void
 index_uses(ir_func_t *function, core_dict_t *uses)
 {
@@ -438,9 +422,6 @@ uses_of(core_dict_t *uses, const ir_value_t *value)
     return found ? list : nullptr;
 }
 
-// Whether every use of `value`, an element's address, loads or stores
-// through it. A row's address (in a multi-dimensional array) may also be
-// indexed for an element's address that is.
 static bool
 only_accessed(core_dict_t *uses, const ir_value_t *value)
 {
@@ -452,8 +433,6 @@ only_accessed(core_dict_t *uses, const ir_value_t *value)
             if (!only_accessed(uses, user->dest)) return false;
             continue;
         }
-        // A row loaded whole is an array over the same storage, which
-        // could be kept.
         if ((user->op != IR_OP_LOAD && user->op != IR_OP_STORE)
             || (user->op == IR_OP_LOAD && user->dest
                 && th_kind_of(th_resolve(user->dest->type))
@@ -462,8 +441,6 @@ only_accessed(core_dict_t *uses, const ir_value_t *value)
     return value != nullptr;
 }
 
-// Whether every use of `value`, the address of a local holding an array,
-// takes an element's address that is only loaded or stored through.
 static bool
 only_indexed(core_dict_t *uses, const ir_value_t *value)
 {
@@ -476,10 +453,6 @@ only_indexed(core_dict_t *uses, const ir_value_t *value)
     return value != nullptr;
 }
 
-// Whether `user` uses the array `value` (operand `at`) only for its
-// elements, keeping it within the call. An element's address may only be
-// loaded or stored through, and a copy may go to a local or into an inline
-// array field of a record literal.
 static bool
 array_use_stays(ir_func_t *function, core_dict_t *uses,
                 const ir_instr_t *user, uint32_t at,
@@ -487,8 +460,6 @@ array_use_stays(ir_func_t *function, core_dict_t *uses,
 {
     switch (user->op) {
     case IR_OP_SEQUENCE_GET:
-        // A row of a multi-dimensional array is itself an array over the
-        // same storage, and must stay too.
         if (at == 0 && user->dest
             && th_kind_of(th_resolve(user->dest->type)) == TH_SEQUENCE)
             core_list_push(*follow, user->dest);
@@ -500,7 +471,6 @@ array_use_stays(ir_func_t *function, core_dict_t *uses,
     case IR_OP_INDEX:
         return at == 0 && only_accessed(uses, user->dest);
     case IR_OP_ADDRESS_OF:
-        // The address of a local holding the array, to set an element.
         return at == 0 && only_indexed(uses, user->dest);
     case IR_OP_COPY:
         if (user->dest_kind == IR_DEST_LOCAL) {
@@ -525,7 +495,6 @@ array_use_stays(ir_func_t *function, core_dict_t *uses,
     }
 }
 
-// The function's use index, built the first time an array needs it.
 static core_dict_t *
 indexed_uses(ir_func_t *function, core_dict_t *uses, bool *indexed)
 {
@@ -534,8 +503,6 @@ indexed_uses(ir_func_t *function, core_dict_t *uses, bool *indexed)
     return uses;
 }
 
-// An array stays in the call when every use of it, and of each copy of it,
-// only reaches its elements.
 static bool
 array_stays(ir_func_t *function, core_dict_t *uses, const ir_value_t *array)
 {
@@ -557,9 +524,6 @@ array_stays(ir_func_t *function, core_dict_t *uses, const ir_value_t *array)
     return stays;
 }
 
-// An index into a multi-dimensional array's outer dimension: in a
-// rectangular array the row has no array value of its own, so the index
-// makes one (a view over the row's elements) for the reference to address.
 static bool
 row_view(const ir_instr_t *in)
 {
@@ -574,13 +538,6 @@ row_view(const ir_instr_t *in)
         && th_kind_of(th_resolve(th_seq_elem(array))) == TH_SEQUENCE;
 }
 
-// A row view can live in the frame when every use of the row comes right
-// after it, in its own block, and only reaches the row's elements: for a
-// reference, indexing it or writing it whole (which copies into the row);
-// for a row read as a value (`sequence.get`), reading its elements. A row
-// read whole could be kept, and its descriptor is the view's. A later run of the index
-// (in a loop) can't then replace a view still in use, and nothing keeps
-// the row.
 static size_t
 position_in_block(const ir_instr_t *in)
 {
@@ -666,7 +623,6 @@ annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
     return true;
 }
 
-// How many operands in `function` use `value`.
 static size_t
 value_uses(ir_func_t *function, const ir_value_t *value)
 {
@@ -682,7 +638,6 @@ value_uses(ir_func_t *function, const ir_value_t *value)
     return uses;
 }
 
-// An array literal built from its elements.
 static ir_instr_t *
 element_literal(const ir_value_t *value)
 {
@@ -695,8 +650,6 @@ element_literal(const ir_value_t *value)
             || form == IR_AGGREGATE_ELEMENTS) ? in : nullptr;
 }
 
-// Whether `literal` is rows of literals, `depth` levels down, each with the
-// extent the shape gives its level, used only by their parent.
 static bool
 rows_of_literals(ir_func_t *function, const ir_instr_t *literal,
                  const ir_shape_t *shape, uint32_t depth)
@@ -716,8 +669,6 @@ rows_of_literals(ir_func_t *function, const ir_instr_t *literal,
     return true;
 }
 
-// Moves the innermost elements under `literal` into `leaves`, in order, and
-// erases the row literals.
 static void
 take_leaves(ir_instr_t *literal, uint32_t levels,
             core_list_t(placed_value_ptr_t) *leaves)
@@ -735,8 +686,6 @@ take_leaves(ir_instr_t *literal, uint32_t levels,
     }
 }
 
-// Makes `literal`, rows of literals matching `shape`, a literal of its
-// innermost elements carrying `shape`, and erases the row literals.
 static bool
 flatten_literal(ir_instr_t *literal, ir_shape_t *shape)
 {
@@ -750,9 +699,6 @@ flatten_literal(ir_instr_t *literal, ir_shape_t *shape)
     return ok && ir_value_set_shape(literal->dest, shape);
 }
 
-// The shape of a nested array literal whose rows, at every level its type
-// nests, are literals of one length used only by their parent; nullptr for
-// any other value.
 static ir_shape_t *
 literal_structure_shape(ir_ctx_t *context, ir_func_t *function,
                         const ir_value_t *value)
@@ -781,7 +727,6 @@ literal_structure_shape(ir_ctx_t *context, ir_func_t *function,
                                                                  : nullptr;
 }
 
-// Whether `record`'s member `name` holds its array inline.
 static bool
 inline_member(ir_func_t *function, th_type *record, core_string_t name)
 {
@@ -790,14 +735,6 @@ inline_member(ir_func_t *function, th_type *record, core_string_t name)
         && ir_layout_member_inline(function->owner, record, name, &known);
 }
 
-// A multi-dimensional array literal (`[[1, 2], [3, 4]]`) bound for storage
-// whose every dimension has a size is one rectangular block: it becomes a
-// literal of the innermost elements carrying the shape, and the row
-// literals go. Its type stays the nested array type the solver gave it;
-// the shape says the storage is flat. Such storage is a shape check's (a
-// declared size), or a record's inline array field, given the literal in a
-// record literal or by assigning the field; those take the shape the
-// literal's own rows give.
 static bool
 flatten_rectangular_literals(ir_ctx_t *context, ir_func_t *function)
 {
@@ -861,7 +798,6 @@ flatten_rectangular_literals(ir_ctx_t *context, ir_func_t *function)
                     flattened = true;
                 }
             }
-            // Erasing rows moved this block's instructions.
             if (flattened) i = 0;
         }
     }

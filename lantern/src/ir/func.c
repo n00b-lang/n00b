@@ -1613,8 +1613,6 @@ ir_lit_t ir_lit_hex(ir_uint_t v)
 
 ir_int_t ir_lit_signed(ir_lit_t v)
 {
-    // Negated as unsigned, so the most negative value (magnitude 2^127)
-    // comes out as itself rather than overflowing.
     return v.neg ? (ir_int_t)((ir_uint_t)0 - v.mag) : (ir_int_t)v.mag;
 }
 

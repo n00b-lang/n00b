@@ -1,7 +1,3 @@
-// A generic object type with a finalizer, named only by `typeof`: nothing
-// makes one, so no finalizer is specialized for it and the build must not
-// expect one. The static literal adds a build-time program, which names the
-// type too.
 import sys.abi
 
 object Box {

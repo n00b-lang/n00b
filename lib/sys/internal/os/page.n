@@ -1,5 +1,3 @@
-# The size of a memory page.
-
 when target_os() == "linux" {
     [-
     library n00b
@@ -14,7 +12,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # The auxiliary vector's page size entry, AT_PAGESZ.
     private const auxv_page_size: u64 = 6
 } else when target_os() == "macos" {
     [-
@@ -44,7 +41,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # Windows' SYSTEM_INFO.
     record Windows_System_Info layout(c) {
         architecture:           u32
         page_size:              u32
@@ -58,7 +54,6 @@ when target_os() == "linux" {
         processor_revision:     u16
     }
 
-    # GetSystemInfo fills all of it.
     func windows_system_info() -> Windows_System_Info {
         var info: Windows_System_Info
         get_system_info_raw(unsafe_cast[Ref[byte]] (ref info))
@@ -66,7 +61,6 @@ when target_os() == "linux" {
     }
 }
 
-# The size of a memory page, or 0 if it can't be found.
 func page_size() -> uint {
     when target_os() == "linux" {
         return n00b_linux_auxv_raw(cast[uint](auxv_page_size))

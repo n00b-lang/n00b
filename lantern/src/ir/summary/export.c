@@ -466,7 +466,6 @@ sources_at(pt_t *pt, pt_loc_t at, site_sources_t *entry, pt_set_t *next)
             && !slot_pointer(pt, held);
         uint32_t             count  = narrow
             ? at.path.depth - held->depth : 0;
-        // A path with no steps has none to point into (`steps` may be null).
         const core_string_t *rest   = count ? at.path.steps + held->depth
                                             : nullptr;
         if (held->loc.site != PT_EXTERNAL) {

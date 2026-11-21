@@ -1,5 +1,3 @@
-# A finalizer may write any field of the value it finalizes, and its
-# writes into other objects are ordinary writes: neither is an error.
 object Owner {
     live: int
 }

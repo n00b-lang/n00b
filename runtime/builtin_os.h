@@ -41,9 +41,6 @@ const uint8_t *n00b_os_arg_at(uint64_t index);
 void n00b_os_thread_capture_self(n00b_os_thread_context *context);
 void n00b_os_gc_enter_blocking(void);
 #if defined(__linux__)
-// The addresses sys.os installs for its stop-the-world signal: the handler,
-// which saves the stopped thread's registers, and its rt_sigreturn
-// trampoline.
 uintptr_t n00b_linux_stw_handler(void);
 uintptr_t n00b_linux_stw_restorer(void);
 #endif

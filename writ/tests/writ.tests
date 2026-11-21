@@ -7,8 +7,8 @@ headers-c11	dev	2	"$CC" -std=c11 -pedantic-errors -Werror -fsyntax-only -x c "-I
 headers-c++17	dev	2	"$CC" -std=c++17 -pedantic-errors -Werror -fsyntax-only -x c++ "-I$SRC/include" "-I$SRC/../lantern/include" "$SRC/tests/host/headers.h"
 model-header-current	dev	2	python3 "$SRC/tools/gen_model.py" "$SRC/defs/model_fields.def" --check "$SRC/include/writ/model.h"
 keywords-are-identifiers	dev	2	"$BUILD/writ" parse tests/keywords.writ
-spec-examples	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/spec/examples.out" -- "$(command -v python3)" "$SRC/tests/spec_examples.py" "$BUILD/writ" dsl.md call-plan.md
-fmt-roundtrip	pr	6	python3 "$SRC/tests/fmt_roundtrip.py" "$BUILD/writ" "$SRC/dsl.md" "$SRC/call-plan.md" "$SRC/tests/libc/libc.writ" "$SRC/contracts/zlib.writ" "$SRC/contracts/zlib/$HOST_TRIPLE.writ" "$SRC/tests/skeleton/zlib.writ" "$SRC/ffi-spec.md" "$SRC/contracts/resharp.writ" "$SRC/tests/resharp/resharp.derived.writ" "$SRC/tests/spans/spans.writ" "$SRC/profiles/c.writ" "$SRC/profiles/rust.writ" "$SRC/profiles/n00b.writ" "$SRC/tests/bind/kv.export.writ" "$SRC/tests/embedded/zlib_search.writ" "$SRC/tests/embedded/export.writ" "$SRC/tests/embedded/refine.writ" "$SRC/tests/unions/unions.writ" "$SRC/tests/check/union.writ"
+spec-examples	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/spec/examples.out" -- "$(command -v python3)" "$SRC/tests/spec_examples.py" "$BUILD/writ" tests/spec/dsl tests/spec/call-plan
+fmt-roundtrip	pr	6	python3 "$SRC/tests/fmt_roundtrip.py" "$BUILD/writ" "$SRC/tests/spec/dsl" "$SRC/tests/spec/call-plan" "$SRC/tests/libc/libc.writ" "$SRC/contracts/zlib.writ" "$SRC/contracts/zlib/$HOST_TRIPLE.writ" "$SRC/tests/skeleton/zlib.writ" "$SRC/tests/spec/ffi-spec" "$SRC/contracts/resharp.writ" "$SRC/tests/resharp/resharp.derived.writ" "$SRC/tests/spans/spans.writ" "$SRC/profiles/c.writ" "$SRC/profiles/rust.writ" "$SRC/profiles/n00b.writ" "$SRC/tests/bind/kv.export.writ" "$SRC/tests/embedded/zlib_search.writ" "$SRC/tests/embedded/export.writ" "$SRC/tests/embedded/refine.writ" "$SRC/tests/unions/unions.writ" "$SRC/tests/check/union.writ"
 fuzz-parse	pr,asan	5	"$BUILD/tests/fuzz-parse" -runs=3000 -max_len=2048 "-seed_inputs=$SRC/tests/fuzz/duplicate_records.writ,$SRC/tests/fuzz/directory_use.writ,$SRC/tests/fuzz/ambiguous_alternatives_a.writ,$SRC/tests/fuzz/ambiguous_alternatives_b.writ,$SRC/tests/libc/libc.writ,$SRC/tests/zlib/zlib.writ,$SRC/tests/skeleton/zlib.writ,$SRC/tests/resharp/resharp.derived.writ,$SRC/tests/bind/kv.n00b.writ,$SRC/tests/embedded/zlib_search.writ,$SRC/tests/embedded/export.writ,$SRC/tests/embedded/e0510.writ,$SRC/tests/unions/unions.writ,$SRC/contracts/zlib/$HOST_TRIPLE.writ"
 grammar-audit	dev	2	"$BUILD/tests/grammar-audit"
 zlib-plans	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/plan/zlib.full.plan" -- ./writ --platform aarch64-apple-darwin plan tests/zlib/zlib.writ
@@ -109,5 +109,5 @@ check-containers	dev	2	python3 "$SRC/tools/check_containers.py" "$SRC/src"
 check-containers-planted	dev,xfail	2	python3 "$SRC/tools/check_containers.py" "$SRC/tests/enforce/containers"
 check-dupes	pr	4	python3 "$SRC/tools/dupes.py" "$SRC/src"
 check-dupes-planted	dev,xfail	2	python3 "$SRC/tools/dupes.py" "$SRC/tests/enforce/dupes"
-check-budget	dev	2	python3 "$SRC/tools/loc_budget.py" "$SRC/implementation.md" "$SRC/src"
-check-budget-planted	dev,xfail	2	python3 "$SRC/tools/loc_budget.py" "$SRC/tests/enforce/budget/plan.md" "$SRC/src"
+check-budget	dev	2	python3 "$SRC/tools/loc_budget.py" "$SRC/tests/loc-budget.tsv" "$SRC/src"
+check-budget-planted	dev,xfail	2	python3 "$SRC/tools/loc_budget.py" "$SRC/tests/enforce/budget/loc-budget.tsv" "$SRC/src"

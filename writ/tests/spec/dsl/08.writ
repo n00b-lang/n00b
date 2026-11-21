@@ -1,0 +1,16 @@
+struct z_stream @size(112) @align(8) {
+    next_in:   ?[u8; avail_in]       @0
+    avail_in:  c_uint                 @8
+    total_in:  c_ulong                @16
+    next_out:  ?[u8; avail_out]      @24
+    avail_out: c_uint                 @32
+    total_out: c_ulong                @40
+    msg:       ?cstr static          @48
+    state:     ?void private         @56
+    zalloc:    ?alloc_func            @64
+    zfree:     ?free_func             @72
+    opaque:    ?void userdata(zalloc, zfree)  @80
+    data_type: c_int                  @88
+    adler:     c_ulong                @96
+    reserved:  c_ulong private        @104
+}

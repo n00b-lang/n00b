@@ -10,19 +10,11 @@
 #include "ir/layout.h"
 #include "lib/dict.h"
 
-// Reads of locals that may not be set, for the locals the reaching
-// definitions can't follow: those whose address is taken. Such a local is
-// set and read through its address, a field at a time (`r.a = 1`), or by
-// a call that's handed `ref r`. Each local is split into leaves, the
-// fields of its record (recursively), and a forward analysis finds the
-// leaves set on every path to each read.
-
 enum { LEAF_LIMIT = 512, DEPTH_LIMIT = 8 };
 
 typedef struct node_t node_t;
 struct node_t {
     core_string_t name;
-    // An array stored in its record, which a record's declaration zeroes.
     bool          inline_array;
     node_t       *parent;
     node_t      **children;
@@ -42,8 +34,6 @@ typedef struct {
 
 core_list_decl(tracked_t);
 
-// EVENT_ZERO is a record's zeroing where it's declared without a value,
-// which sets only the arrays stored in it.
 typedef enum : uint8_t { EVENT_READ, EVENT_SET, EVENT_ZERO } event_kind_t;
 
 typedef struct {
@@ -120,8 +110,6 @@ child_named(node_t *node, core_string_t name)
     return nullptr;
 }
 
-// The tracked local a place is part of, and the node it names; an element
-// of an array names the array, since setting one element doesn't set it.
 static bool
 place_node(U *u, uint32_t id, uint32_t *tracked, node_t **node,
            bool *element)
@@ -173,8 +161,6 @@ uses_of(U *u, const ir_value_t *value)
     return found ? list : nullptr;
 }
 
-// A copy of a whole local reads only what is taken out of it: the fields
-// its extracts name, or nothing when the copy goes unused.
 static void
 read_value(U *u, ir_instr_t *in, const ir_value_t *value, uint32_t tracked,
            node_t *node, uint32_t depth)
@@ -216,8 +202,6 @@ typedef struct {
     uint32_t                callees;
 } callee_t;
 
-// The node a callee's path names under the argument's node: the path
-// starts at the parameter, whose `__value` is what the argument points at.
 static node_t *
 path_node(node_t *node, const ir_spath_t *path)
 {
@@ -254,9 +238,6 @@ visit_callee(void *context, const ir_func_t *target,
     }
 }
 
-// A reference handed over with `consume` gives up a value the caller owns,
-// which the compiler only does once it is set (finalization is guarded by
-// the value's ownership), so it reads nothing here.
 static bool
 consumed(const ir_value_t *argument)
 {
@@ -264,9 +245,6 @@ consumed(const ir_value_t *argument)
         && argument->def->op == IR_OP_CONSUME;
 }
 
-// A call handed an address in a tracked local reads what the callee reads
-// of what the parameter held on entry, and sets what the callee must write
-// (a contract's `out` pointer is filled by the call).
 static void
 call_events(U *u, ir_instr_t *in)
 {
@@ -290,8 +268,6 @@ call_events(U *u, ir_instr_t *in)
                 core_list_push(c.reads, node);
             for (size_t i = 0; i < c.reads.len; i++)
                 event(u, in, EVENT_READ, tracked, c.reads.data[i]);
-            // Only one target's writes are sure, into one place, and not
-            // through an element.
             for (size_t i = 0; count == 1 && !element && c.callees == 1
                  && i < c.sets.len; i++)
                 event(u, in, EVENT_SET, tracked, c.sets.data[i]);
@@ -366,8 +342,6 @@ index_uses(U *u)
                 core_list_push(*list, ((use_t){.instr = in, .operand = o}));
             }
         }
-    // Every value that's defined gets an empty list, so an unused copy is
-    // known to read nothing.
     for (uint32_t b = 0; b < u->f->n_blocks; b++)
         for (uint32_t i = 0; i < u->f->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = u->f->blocks[b]->instrs[i];
@@ -412,7 +386,6 @@ set_inline_arrays(uint64_t *state, uint32_t offset, const node_t *node)
         set_inline_arrays(state, offset, node->children[i]);
 }
 
-// The first leaf under `node` that isn't set.
 static node_t *
 unset_leaf(node_t *node, const uint64_t *state, uint32_t offset)
 {
@@ -444,8 +417,6 @@ node_path(const ir_local_t *local, const node_t *node)
     return path;
 }
 
-// Applies the events of block `b` to `state`; with `report`, also reports
-// each tracked local's first read of something not set.
 static void
 transfer(U *u, uint32_t b, uint64_t *state, bool *reported,
          ir_unset_read_fn report, void *context)
@@ -521,9 +492,6 @@ ir_unset_locals(ir_summaries_t *summaries, ir_func_t *f,
     }
     u.block_events[f->n_blocks] = u.events.len;
 
-    // Events only ever set, so a block adds what it sets to what holds on
-    // entry, and what holds on entry is what every predecessor passes on.
-    // Starting from everything set, it shrinks to a fixpoint.
     uint32_t words = (u.bits + 63) / 64;
     size_t   bytes = words * sizeof(uint64_t);
     uint64_t *in_state = core_alloc_array(uint64_t, (size_t)words * f->n_blocks);

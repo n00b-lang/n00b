@@ -214,7 +214,6 @@ private func run_norm_suite(blob: Array[u8]) -> u32 {
     var failed: u32 = 0
 
     for c from 0 until cases {
-        // `List` has no zero value, so the array is given its lists.
         var cols: Array[List[char]][5] = [[], [], [], [], []]
         var strs: Array[string][5] = new[Array[string][5]]()
         var ok: bool = true

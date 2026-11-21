@@ -526,8 +526,6 @@ th_type *ir_type_intern(ir_module_t *m, th_type *t);
 bool     ir_module_reintern_types(ir_module_t *m);
 th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
-// Whether `type` is an outcome ir_call_outcome_type made: a variant of
-// the call's success (arm `ok`) and failure (arm `error`).
 bool     ir_type_is_call_outcome(th_type *type);
 bool     ir_callable_returns_value(ir_module_t *m, th_type *callable);
 th_type *ir_call_function_type(const ir_instr_t *call);

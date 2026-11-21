@@ -62,9 +62,6 @@ LANTERN_LIB := $(BUILD)/lantern/libir.a
 WRIT_LIB := $(BUILD)/writ/libwrit.a
 RUNTIME_LIB := $(BUILD)/libn00b-abi-runtime.a
 RUNTIME_BITCODE := $(BUILD)/libn00b-abi-runtime.bc
-# The runtime the compiler and the C tests link. On Linux, programs' runtime
-# links no libc (compiler/n00b.mk), and these are ordinary libc programs, so
-# this is a separate build there. Elsewhere it is the one runtime.
 HOST_RUNTIME_LIB := $(if $(filter Linux,$(UNAME)),$(BUILD)/libn00b-abi-runtime-host.a,$(RUNTIME_LIB))
 COMPTIME_RUNTIME := $(BUILD)/n00b-comptime.o
 N00B := $(BUILD)/n00b

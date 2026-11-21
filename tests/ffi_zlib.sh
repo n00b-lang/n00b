@@ -61,8 +61,6 @@ modules)
     test ! -s "$tmp/show-ffi.log"
     test ! -e zlib_const
 
-    # A manifest re-exports a literal's names like any other member, and
-    # two literals' failures share `Ffi_Error`, so one handler takes both.
     if ! "$compiler" check --contract-dir "$contract_dir" zlib_renamed_export.n \
         zlib_mixed_try.n >"$tmp/renamed.log" 2>&1; then
         cat "$tmp/renamed.log" >&2

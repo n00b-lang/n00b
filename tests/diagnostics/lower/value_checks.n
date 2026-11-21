@@ -229,12 +229,12 @@ func mismatched_cast() -> int {
     return converted.x
 }
 
-func constructed_cast() -> int { // as may `cast`, within its package
+func constructed_cast() -> int {
     let converted = cast[Tuple_Built]((x = 1))
     return converted.x
 }
 
-func constructed_literal() -> int { // its own module may skip `__init`
+func constructed_literal() -> int {
     let built: Tuple_Built = (x = 2)
     return built.x
 }

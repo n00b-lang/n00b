@@ -113,8 +113,6 @@ struct ir_summary_t {
     const uint8_t             *encoded;
     size_t                     encoded_size;
     ir_summary_resolver_t      resolver;
-    // points_to_content's answer once the summary is final (see
-    // stamp_component).
     uint64_t                   points_to;
     bool                       hashed;
     bool                       points_hashed;
@@ -122,8 +120,6 @@ struct ir_summary_t {
     bool                       proof_free;
     bool                       bookkept;
     bool                       explained;
-    // Bumped whenever the contents are replaced (a solving round, decoding
-    // a stored body), which frees the lists a callee view shares with them.
     uint64_t                   revision;
 };
 
@@ -145,8 +141,6 @@ struct ir_summaries_t {
     core_dict_t               sites;
     ir_func_t *const         *members;
     size_t                    member_count;
-    // Callee summaries as callers behind a barrier see them, by callee and
-    // the caller's module.
     core_dict_t               views;
 };
 
@@ -170,13 +164,9 @@ typedef struct {
     const ir_spath_t  *leaf;
     core_dict_t       *path_places;
     core_dict_t       *stores;
-    // Calls' effects on the place `effects_place`, and on each of its
-    // leaves: `leaf_effects` maps a leaf's interned steps to its own dict.
     core_dict_t       *effects;
     core_dict_t       *leaf_effects;
     ir_splace_t        effects_place;
-    // Per callee summary, its paths indexed by the place they reach; and
-    // what the finalizer and thread entries touch, per place.
     core_dict_t       *access_index;
     core_dict_t       *entry_access;
 } flow_query_t;
@@ -328,8 +318,6 @@ core_list_decl(pt_access_t);
 typedef struct {
     core_list_t(ir_spath_t) cells;
     core_dict_t             gens;
-    // Calls that must write places through `out` or `modify` arguments:
-    // each maps to a uint64_t array, a count then the cells it sets.
     core_dict_t             call_gens;
     uint64_t               *in;
     uint64_t               *state;
@@ -371,7 +359,6 @@ struct pt_t {
     core_dict_t            escaped;
     bool                   escaped_built;
     core_dict_t            flow_groups;
-    // Per callee, whether each of its store destinations is surely written.
     core_dict_t            must_dests;
     core_dict_t            value_groups;
     core_list_t(pt_external_writes_t) external_writes;

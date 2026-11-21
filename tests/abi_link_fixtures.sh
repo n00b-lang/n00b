@@ -12,10 +12,6 @@ interface_programs="$script_dir/programs/interfaces"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-# Builds INPUT... as one library with N00B_PATH set to PATH_DIR, writing every
-# module's own ABI object as DIR/MODULE.n00bm. One build gives the objects of
-# all its roots and everything they import, so a group of fixtures costs one
-# compile.
 library_dump() {
     path_dir=$1
     dir=$2
@@ -30,12 +26,8 @@ library_dump() {
 
 library_dump "$abi_programs" "$tmp/abi" import_root c_foreign \
     abi_value_root foreign_enum_user builtin.cycle_first
-# These builds' linked libraries are checked below as well.
 library_dump "$abi_programs" "$tmp/cycle_long" builtin.cycle_long_a
 library_dump "$abi_programs" "$tmp/cycle_self" builtin.cycle_self
-# A module's object depends only on the module, not on what else the build
-# has in it (the cache reuses it in other programs). The other root is
-# cheap on purpose: this build is only here for the comparison.
 library_dump "$abi_programs" "$tmp/alone" empty builtin.cycle_first
 cmp "$tmp/abi/builtin.cycle_first.n00bm" \
     "$tmp/alone/builtin.cycle_first.n00bm" || {
@@ -59,8 +51,6 @@ cycle_self="$tmp/cycle_self"
 "$abi_record_object_test" "$rec/record_root.n00bm" import-record
 "$abi_link_input_test" --field "$rec/record_dep.n00bm"
 
-# The builtin library's modules, the ones its literals generate among them,
-# come with every build.
 set --
 for object in "$rec"/*.n00bm; do
     case "$(basename "$object")" in
@@ -75,7 +65,6 @@ N00B_PATH="$records" "$compiler" library \
 "$abi_register_object_test" "$tmp/import_record_linked.n00bm" '>=2'
 "$abi_link_input_test" --function-import "$rec/shared_link_first.n00bm" \
     "$rec/shared_link_dep.facade.n00bm" "$rec/shared_link_dep.impl.n00bm" "$@"
-# A root named relative to another working directory.
 mkdir -p "$tmp/nested"
 (cd "$script_dir/programs" \
     && N00B_PATH="$records" "$compiler" library \

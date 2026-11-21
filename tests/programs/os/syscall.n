@@ -1,6 +1,5 @@
 import errs
 
-# A writ `syscall` enters the Linux kernel directly: no libc, no shim.
 [-
 library kernel
 platforms x86_64-linux-gnu, aarch64-linux-gnu
@@ -49,15 +48,12 @@ func write(text: string) -> int fail: errs.Errno {
 var wrote: int = 0
 var failed: errs.Errno = cast[errs.Errno](0)
 try {
-    # Success: the byte count comes back.
     wrote = write("wrote\n")!
-    # Failure: the kernel's -EBADF arrives as errs.Errno.EBADF.
     wrote = say(-1, "x")!
 } fail(e) {
     failed = e
 }
 require wrote == 6
 require failed == errs.Errno.EBADF
-# `infallible`: no failure channel at all.
 require getpid() > 0
 __fd_write(2, "ok")

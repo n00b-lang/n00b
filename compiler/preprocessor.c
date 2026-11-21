@@ -266,8 +266,6 @@ decode_quoted_literal(core_string_t raw, char quote, core_buffer_t *buffer)
         case '\\': core_buffer_putc(buffer, '\\'); break;
         case '"': core_buffer_putc(buffer, '"'); break;
         case '\'': core_buffer_putc(buffer, '\''); break;
-        // The lexer's `escape_literal` set: the escaped character itself.
-        // `«` (C2 AB) and `»` (C2 BB) are two bytes in UTF-8.
         case '[': core_buffer_putc(buffer, '['); break;
         case 0xc2:
             if (i + 2 >= raw.u8_bytes) goto invalid;
@@ -920,7 +918,6 @@ find_external_definition(pp_context_t *ctx, core_string_t name,
         core_string_t definition = ctx->options->definitions[i - 1];
         int64_t equals = definition.data
             ? core_string_find_byte(definition, '=') : -1;
-        // A bare `-D NAME` defines NAME as `true`.
         if (equals < 0) {
             if (!core_string_eq(definition, name)) continue;
             *raw = CORE_STRING_STATIC("true");
@@ -1389,7 +1386,6 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("target_arch"))) {
-        // Triples are `arch-os` (`arm64-macos`, `x86_64-linux`).
         int64_t dash = core_string_find_byte(target.triple, '-');
         size_t length = dash < 0 ? target.triple.u8_bytes : (size_t)dash;
         *out = (pp_value_t){.kind = PP_STRING, .as.string = own_string(ctx,
@@ -1868,8 +1864,6 @@ remember_const(pp_context_t *ctx, parse_tree_t *decl)
     }
 }
 
-// The node names of the two `when` forms: in a function body, and at
-// module level, where the branches hold module declarations.
 typedef struct {
     const char *body;
     const char *else_when;
@@ -1982,7 +1976,6 @@ evaluate_when_condition(pp_context_t *ctx, parse_tree_t *condition,
     return true;
 }
 
-/* Validate form independently of value evaluation, including skipped operands. */
 static bool
 validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -2416,8 +2409,6 @@ import_node(pp_context_t *ctx, core_string_t name)
     return nullptr;
 }
 
-// A module literal declares its names into the module it's written in, so
-// it isn't a value: one that initializes a variable is an error.
 static bool
 module_literal_assigned(pp_context_t *ctx, parse_visit_t *visit)
 {
@@ -2442,10 +2433,6 @@ module_literal_assigned(pp_context_t *ctx, parse_visit_t *visit)
     return false;
 }
 
-// A module literal standing alone at module level. The compiler generates
-// the literal's declarations as a module of their own, imported under a
-// name no code can write, and puts its public declarations into this
-// module's scope (see inject_literal_declarations), as if declared here.
 static bool
 module_literal_statement(pp_context_t *ctx, parse_visit_t *visit,
                          bool module_level)
@@ -2564,8 +2551,6 @@ process_import(pp_context_t *ctx, parse_tree_t *import,
     return succeeded;
 }
 
-// The type annotation (`expr: T`) an operand holds outside any bracket, if
-// it holds one: only the operator chain and a postfix's base are searched.
 static parse_tree_t *
 bare_annotation(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -2594,8 +2579,6 @@ bare_annotation(pp_context_t *ctx, parse_tree_t *node)
     return nullptr;
 }
 
-// Where `:` separates (dict and set literals, slices, ranges, `case`
-// ranges), an operand may not hold an unparenthesized type annotation.
 static bool
 check_separated_operands(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -2631,10 +2614,6 @@ wrap_node(pp_context_t *ctx, const char *name, int32_t rule,
     return nullptr;
 }
 
-// `place: T = value` assigns `(value): T` to `place`: the statement is
-// rewritten in that form, so an assignment's checks and an implicit
-// declaration's typing apply to it unchanged. The productions named are
-// those of an expression that is just a parenthesized, annotated value.
 static bool
 rewrite_annotated_assignment(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -2713,8 +2692,6 @@ preprocess_prepare(parse_visit_t *visit)
         ? &walk->frames.data[visit->depth - 1] : nullptr;
     if (frame->revisit_body == node
         && is_name(ctx->grammar, node, "top-when-body")) {
-        // A module-level `when` branch stays at module level: its imports,
-        // constants and module literals are the module's own.
         frame->selected_import_body = parent ? parent->selected_import_body
                                              : nullptr;
         frame->current_body = parent ? parent->current_body : nullptr;
@@ -2922,8 +2899,6 @@ bare_operand(parse_tree_t *node)
     return node;
 }
 
-// A type annotation, `operand: T`: a `unary-expr` whose second child is
-// the `:`.
 static bool
 annotation_node(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -3139,9 +3114,6 @@ report_prefix_mix(pp_discovery_t *discovery, parse_tree_t *parent,
                      grouped_left, grouped_right);
 }
 
-// The annotation that ends an operand, unparenthesized: `b: int` in
-// `a + b: int`, seen through any sign or `not` before it. A sign or `not`
-// leaves the type alone, so either reading of `-x: int` is the same.
 static parse_tree_t *
 trailing_annotation(pp_context_t *ctx, parse_tree_t *node)
 {
@@ -3154,8 +3126,6 @@ trailing_annotation(pp_context_t *ctx, parse_tree_t *node)
     return nullptr;
 }
 
-// An annotation after an operator could type the operator's last operand
-// or the whole operation: `a + b: int` is `(a + b): int` or `a + (b: int)`.
 static void
 report_annotation_mix(pp_discovery_t *discovery, n00bb_diag_t id,
                       parse_tree_t *owner, parse_tree_t *op,
@@ -3211,8 +3181,6 @@ check_operator_mix(pp_discovery_t *discovery, parse_tree_t *node)
                               core_tree_child(node, 1), annotation);
 }
 
-// A word prefix (`cast[T]`, `unsafe_cast[T]`, `ref`) before an annotated
-// operand could apply before or after the annotation.
 static void
 check_prefixed_annotation(pp_discovery_t *discovery, parse_tree_t *node)
 {
@@ -3454,7 +3422,6 @@ style_spelling(pp_context_t *ctx, parse_tree_t *node)
     if (is_name(ctx->grammar, node, "return-type"))
         return core_string_eq(text, CORE_STRING_STATIC("->"))
             ? PP_SPELL_ARROW : PP_SPELL_RETURN_COLON;
-    // `true` / `false` versus `True` / `False`: one style per pair.
     if (is_name(ctx->grammar, node, "bool-lit"))
         return core_string_eq(text, CORE_STRING_STATIC("True"))
             || core_string_eq(text, CORE_STRING_STATIC("False"))
@@ -3695,8 +3662,6 @@ preprocess_discover(parse_visit_t *visit)
                 .has_location = true,
             };
     }
-    // Statements inside a module-level `when` branch are processed when the
-    // chosen branch replaces the `when`; the others are discarded with it.
     bool in_when_branch = false;
     for (parse_tree_t *at = parse_tree_parent(node); at && !in_when_branch;
          at = parse_tree_parent(at))

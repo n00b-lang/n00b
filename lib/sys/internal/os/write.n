@@ -1,5 +1,3 @@
-# Writing to a file descriptor.
-
 import internal.errno
 bring errno_of from internal.os.support
 
@@ -40,8 +38,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 } else when target_os() == "windows" {
-    # The descriptor's handle is written directly: the C runtime's _write
-    # would turn each newline into CRLF on a descriptor in text mode.
     [-
     library c
     platforms x86_64-w64-windows-gnu
@@ -61,8 +57,6 @@ when target_os() == "linux" {
     bring chunk from internal.os.support
 }
 
-# Writes `data[start:end]`; returns the number of bytes written, which may
-# be fewer than asked. An interrupted write is retried.
 func write(fd: i32, data: Array[u8], start: uint, end: uint) -> uint
     fail: internal.errno.Errno {
     require start <= end and end <= __array_length(data)
@@ -73,8 +67,6 @@ func write(fd: i32, data: Array[u8], start: uint, end: uint) -> uint
         end - start)!
 }
 
-# Writes the `count` bytes at `at`; returns the number written, which may
-# be fewer than asked. An interrupted write is retried.
 func write_bytes(fd: i32, at: Ref[byte], count: uint) -> uint
     fail: internal.errno.Errno {
     if count == 0 {

@@ -1233,11 +1233,12 @@ static bool term_char(char c, bool first) {
          (!first && c >= '0' && c <= '9');
 }
 
-size_t parse_bnf_declare_terminals(parse_grammar_t *g, core_string_t bnf_text) {
-  if (!g || !bnf_text.data) {
+size_t parse_bnf_declare_terminals(parse_grammar_t *g, core_string_t raw) {
+  if (!g || !raw.data) {
     return 0;
   }
 
+  core_string_t bnf_text = parse_bnf_strip_comments(raw);
   size_t n = 0;
 
   for (size_t i = 0; i + 1 < bnf_text.u8_bytes; i++) {
@@ -1262,6 +1263,7 @@ size_t parse_bnf_declare_terminals(parse_grammar_t *g, core_string_t bnf_text) {
     i = e - 1;
   }
 
+  core_free(bnf_text.data);
   return n;
 }
 

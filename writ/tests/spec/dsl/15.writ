@@ -1,0 +1,6 @@
+feature capture_groups = cargo "experimental_capture_groups"
+feature column_metadata = define "SQLITE_ENABLE_COLUMN_METADATA"
+
+when feature capture_groups {
+    fn resharp_capture_slots(r: Regex) -> usize  pure
+}

@@ -31,8 +31,6 @@ struct ir_value_numbers_t {
     const ir_pdg_t               *pdg;
     ir_pdg_memory_t                  *memssa;
     core_dict_t                   of_value;
-    // A global's number, by its identity: the same global can be named by
-    // more than one value (as in IR read back from an archive).
     core_dict_t                   of_global;
     core_dict_t                   by_key;
     core_list_t(vn_key_ptr_t)     keys;

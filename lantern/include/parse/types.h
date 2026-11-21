@@ -136,56 +136,31 @@ typedef struct parse_node_facts_t {
     core_string_t           unresolved_name;
     parse_node_resolution_t resolution;
     bool                    direct_symbol_reference;
-    // An assignment that introduces the variable it assigns: its name was
-    // not bound when name resolution reached it.
     bool                    declares_binding;
-    // An assignment to `_`, which evaluates its value and discards it.
     bool                    discards_value;
-    // The variable a `switch` or `typecase` narrows: its subject, when that
-    // names a variable or parameter.
     parse_sym_entry_t      *narrowed_subject;
-    // What name resolution found a call, a `ref` of a function, or an
-    // unwrap (`!`) of a call refers to: the function, and for a method call
-    // the receiver and the method's name. `call_callee` is the part of the
-    // call that names what is called, which is not evaluated as a value.
     parse_sym_entry_t      *call_function;
-    void                   *call_receiver; // parse_tree_t *
-    void                   *call_callee;   // parse_tree_t *
+    void                   *call_receiver;
+    void                   *call_callee;
     core_string_t           call_method;
     core_string_t           call_spelled;
     bool                    call_classified;
     bool                    call_unqualified;
     bool                    call_propagated;
-    // A call written as one (`f(x)`, `r.m(x)`), not an index or an operator.
     bool                    call_written;
-    // For `e!`: `e`, whose successful value this is.
     void                   *unwrapped;
-    // A field use that lowering stored to (an assignment's target, or the
-    // place a write-only builtin writes), and whether it also read it.
     bool                    field_written;
     bool                    field_write_reads;
-    // For an effect query: the function it is written in, if any.
     void                   *query_function;
-    // A name that is called or referenced (`f()`, `ref f`), as opposed to
-    // used as a value.
     bool                    names_called;
     bool                    index_address_access;
-    // `a and b` / `a or b`: which short-circuit junction this node is.
     parse_junction_t        junction;
-    // A comparison (`a == b`, `a < b`) whose operands are children 0 and 2.
     bool                    comparison;
-    // Inside an effect query's operands, which are never evaluated.
     bool                    in_effect_query;
-    // For a value statement (`-> e`): the construct whose value it gives
-    // (a function or statement body, a value body, or a block value).
     void                   *value_owner;
-    // For a labeled loop, switch or typecase: its label.
     core_string_t           control_label;
-    // An integer literal written with a `-` in front of it.
     bool                    negated_literal;
-    // Inside a destructuring pattern.
     bool                    in_pattern;
-    // For a switch case written as a bare name: the name.
     core_string_t           case_spelled;
 } parse_node_facts_t;
 
@@ -195,8 +170,6 @@ typedef struct {
     th_type            *type;
     void               *frontend_data;
     parse_node_facts_t *facts;
-    // The expression this node only wraps (a parenthesized or single-child
-    // node), when it is one; recorded by the front end.
     void               *core;
 } parse_node_semantic_t;
 

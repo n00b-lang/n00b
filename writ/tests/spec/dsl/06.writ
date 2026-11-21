@@ -1,0 +1,2 @@
+handle Regex = *opaque release resharp_free  shared
+handle Window = *GtkWindow release gtk_window_destroy  thread_affine

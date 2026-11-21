@@ -126,8 +126,6 @@ static th_type *call_outcome(gen_t *g, ir_instr_t *call, th_type *type)
     }
     ty_unify(g->s, th_named_arg(dest, 0)->type, th_func_ret(type),
              why_of(call, 28));
-    // The outcome fails as its callee does, exactly: a `nil` flowed into
-    // an open failure would make it an option instead.
     if (th_func_error(type)) {
         ty_equate(g->s, th_named_arg(dest, 1)->type, th_func_error(type),
                   why_of(call, 28));
@@ -232,8 +230,6 @@ static void dispatch_constraints(gen_t *g, ir_instr_t *in)
                                               params, n, nullptr, kws, nkw)
                          : th_func(g->types, in->dest->type, params, n,
                                    nullptr, kws, nkw);
-    // A call with no positional arguments (an overloaded function's) has no
-    // receiver; nil stands in for one.
     th_type *subject = n ? params[0].type : th_nil(g->types);
 
     core_free(params);
@@ -606,9 +602,6 @@ static th_type *result_of(gen_t *g, ir_instr_t *in, bool *handled)
         }
         return nullptr;
     case IR_OP_OPTION_GET:
-        // The operand is an option of the result: equate rather than flow,
-        // since a flow would accept a plain value as the operand and type
-        // the result as the whole option.
         if (in->dest) {
             ty_equate(g->s, th_option(g->types, in->dest->type),
                       operand_type(in, 0), why_of(in, 11));
@@ -702,10 +695,6 @@ static void constrain_function(gen_t *g, ir_func_t *f)
     }
 }
 
-// Once a function's inference finishes, a failure type nothing bound means
-// the function can't fail: it is `nil`, so callers' copies of it are too.
-// One that a parameter's type also names (failing as a callback it is
-// given fails) stays open, to be generalized.
 static bool settle_failure(ty_solver_t *s, ir_func_t *f)
 {
     th_ctx  *types     = ty_solver_types(s);
@@ -756,8 +745,6 @@ bool ty_constrain_group(ty_solver_t *s, const ir_group_pdg_t *g,
         for (uint32_t i = 0; i < ir_group_pdg_component_size(g, c); i++) {
             settled |= settle_failure(s, ir_group_pdg_component_at(g, c, i));
         }
-        // A call in the component that waited on one of those failures
-        // (TY_PRED_OUTCOME_VALUE) can now finish.
         if (settled) {
             ty_solve(s);
         }

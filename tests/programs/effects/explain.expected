@@ -39,40 +39,40 @@ builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
   param self      reader, lends
   detail          may_collect allocates_direct
 sys.internal.fs.read_file: (string) -> Array[u8] fail: Errno
-  input           sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_31.open_variadic (142:28) -> sys.internal.os.__ffi_open___ffi_literal_31.open (7:19)
-  blocks          sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_31.open_variadic (142:28) -> sys.internal.os.__ffi_open___ffi_literal_31.open (7:19)
+  input           sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_27.open_variadic (142:28) -> sys.internal.os.__ffi_open___ffi_literal_27.open (7:19)
+  blocks          sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> sys.internal.os.__ffi_open___ffi_literal_27.open_variadic (142:28) -> sys.internal.os.__ffi_open___ffi_literal_27.open (7:19)
   allocates       sys.internal.fs.open_read (30:19) -> sys.internal.os.open.open (8:12) -> here (105:28)
   panics          here (41:13)
   param path      reader
   detail          may_io may_collect allocates_direct reinterprets
 sys.internal.env.args: () -> List[string]
-  env             sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count (3:12)
-  reads_globals   sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_4.n00b_os_arg_count (3:12)
+  env             sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count (3:12)
+  reads_globals   sys.internal.os.process.arg_count (17:24) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count_raw (45:12) -> sys.internal.os.__ffi_process___ffi_literal_1.n00b_os_arg_count (3:12)
   allocates       here (16:29)
   panics          here (20:24)
   detail          may_collect allocates_direct reinterprets
 sys.internal.env.exit: (int) -> nil
-  output          sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit (3:5)
+  output          sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit (3:5)
   panics          here (27:27)
-  noreturn        always: sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_4.n00b_os_exit (3:5)
+  noreturn        always: sys.internal.os.exit.exit (27:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit_raw (17:5) -> sys.internal.os.__ffi_exit___ffi_literal_1.n00b_os_exit (3:5)
   param code      untouched
   detail          may_io
 sys.internal.clock.now_ns: () -> uint
-  clock           sys.internal.os.clock.now_ns (4:12) -> sys.internal.os.__ffi_clock___ffi_literal_21.clock_gettime_nsec_np_raw (66:16) -> sys.internal.os.__ffi_clock___ffi_literal_21.clock_gettime_nsec_np (3:12)
+  clock           sys.internal.os.clock.now_ns (4:12) -> sys.internal.os.__ffi_clock___ffi_literal_19.clock_gettime_nsec_np_raw (66:16) -> sys.internal.os.__ffi_clock___ffi_literal_19.clock_gettime_nsec_np (3:12)
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
-  random          sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_21.getentropy (86:17) -> sys.internal.os.__ffi_random___ffi_literal_21.getentropy (5:19)
+  random          sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_19.getentropy (86:17) -> sys.internal.os.__ffi_random___ffi_literal_19.getentropy (5:19)
   panics          sys.internal.os.random.random_bytes (5:5) -> here (64:13)
   param buffer    writer
   detail          reinterprets
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
-  random          sys.internal.random.fill (10:5) -> sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_21.getentropy (86:17) -> sys.internal.os.__ffi_random___ffi_literal_21.getentropy (5:19)
+  random          sys.internal.random.fill (10:5) -> sys.internal.os.random.random_bytes (5:5) -> sys.internal.os.__ffi_random___ffi_literal_19.getentropy (86:17) -> sys.internal.os.__ffi_random___ffi_literal_19.getentropy (5:19)
   allocates       here (9:28)
   panics          here (14:17)
   param value     writer
   detail          may_collect allocates_direct reinterprets
 builtin.io.debug.raw_debug: (string) -> nil
-  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_23.c_write (89:39) -> sys.internal.os.__ffi_write___ffi_literal_23.write (5:19)
-  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_23.c_write (89:39) -> sys.internal.os.__ffi_write___ffi_literal_23.write (5:19)
+  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_21.c_write (89:39) -> sys.internal.os.__ffi_write___ffi_literal_21.write (5:19)
+  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (277:9) -> sys.internal.os.write.write_bytes (261:31) -> sys.internal.os.__ffi_write___ffi_literal_21.c_write (89:39) -> sys.internal.os.__ffi_write___ffi_literal_21.write (5:19)
   panics          builtin.string.core.__fd_write (6:5) -> here (283:12)
   param s         reader
   detail          may_io reinterprets

@@ -8,22 +8,18 @@
 extern "C" {
 #endif
 
-/* Review draft. All serialized integer fields are little-endian. On the
- * three initial little-endian targets, validated records may be exposed as
- * these C views; readers must validate bytes before returning a view. */
-
 typedef union {
     struct {
         uint8_t bytes[15];
-        uint8_t selector; /* length bits 0-3, encoding 4-5, tag 6-7 */
+        uint8_t selector;
     } short_value;
     struct {
         uint8_t *data;
-        uint64_t selector; /* length bits 0-59, encoding 60-61, tag 62-63 */
+        uint64_t selector;
     } long_value, span_value;
     struct {
         uint8_t *body;
-        uint64_t selector; /* reserved bits 0-59, encoding 60-61, tag 62-63 */
+        uint64_t selector;
     } rich_value;
     uint64_t words[2];
 } n00b_abi_string_v1;
@@ -42,7 +38,6 @@ typedef enum {
     N00B_ABI_STRING_ASCII = 1,
     N00B_ABI_STRING_UTF8 = 2,
 } n00b_abi_string_encoding_v1;
-/* Runtime value-layout views, not metadata table records. */
 typedef struct {
     void *base;
     uint32_t type_index;
@@ -61,7 +56,6 @@ typedef struct {
     uint32_t flat_rank;
     uint32_t flags;
     uint32_t reserved_zero;
-    /* `rank` uint64_t extents follow this header. */
 } n00b_abi_array_descriptor_header_v1;
 
 enum { N00B_ABI_ARRAY_ORIGIN_BIT_MASK = 7u };
@@ -71,7 +65,6 @@ typedef struct {
     uint64_t origin_bit;
     uint32_t rank;
     uint32_t flags;
-    /* `rank` uint64_t extents, then `rank` int64_t bit strides follow. */
 } n00b_abi_view_descriptor_header_v1;
 
 typedef struct {
@@ -92,8 +85,6 @@ typedef struct {
     n00b_abi_box_payload_v1 payload;
 } n00b_abi_box_v1;
 
-/* `first` is an element ordinal in the global U32/U64 stream, or a byte
- * offset in the byte stream. The containing field selects the stream. */
 typedef struct { uint32_t first, count; } n00b_abi_range_v1;
 
 #define N00B_ABI_V1_CONTAINER_VERSION 1u
@@ -403,11 +394,9 @@ typedef struct {
     uint32_t typevar_ordinal;
     uint32_t specialization_start_ix;
     uint32_t specialization_end_ix;
-    /* Link-only: identifies the imported function requirement that owns this
-     * variable. Zero in a consolidated image and on locally owned types. */
     uint32_t typevar_import_requirement_index;
     n00b_abi_string_v1 named_constructor;
-    n00b_abi_range_v1 named_arguments; /* Direct TYPE_ARGUMENT row span. */
+    n00b_abi_range_v1 named_arguments;
     uint32_t finalizer_function_index;
     uint32_t typevar_owner_type_index;
 } n00b_abi_type_v1;
@@ -415,17 +404,14 @@ typedef struct {
 typedef struct {
     uint32_t owner_type_index;
     uint32_t ordinal;
-    uint32_t kind; /* n00b_abi_type_arg_kind_v1 */
-    uint32_t type_index; /* Only for TYPE; nil is index zero. */
-    uint64_t scalar_bits; /* UINT or two's-complement SINT. */
+    uint32_t kind;
+    uint32_t type_index;
+    uint64_t scalar_bits;
     n00b_abi_string_v1 string_value;
 } n00b_abi_type_argument_v1;
 
-/* Fixed-width table row; zero is the reserved row, never a parent type. */
 typedef uint32_t n00b_abi_specialization_link_v1;
 
-/* Two's-complement 128-bit bit pattern, low word first. The parent type
- * supplies signedness and semantic width. Composite flag names add no bits. */
 typedef struct {
     n00b_abi_string_v1 name;
     uint32_t parent_type_index;
@@ -461,8 +447,7 @@ typedef struct {
 
 typedef struct {
     uint32_t type_index;
-    uint32_t policy; /* n00b_abi_layout_policy_v1 */
-    /* U32-stream indexes into PHYSICAL_RUN. Occupied runs union all arms. */
+    uint32_t policy;
     n00b_abi_range_v1 occupied_runs;
     n00b_abi_range_v1 reserved_runs;
     uint32_t tag_extractor_index;
@@ -518,7 +503,7 @@ typedef struct {
     uint32_t unit_width_bits;
     uint32_t lsb_position;
     uint32_t tag_width_bits;
-    uint32_t kind; /* n00b_abi_tag_kind_v1 */
+    uint32_t kind;
 } n00b_abi_tag_extractor_v1;
 
 typedef struct {
@@ -563,8 +548,6 @@ typedef struct {
     uint32_t symbol_index;
     uint32_t success_type_index;
     uint32_t failure_type_index;
-    /* U32-stream indexes into the parameter table. `keywords` is a subset
-     * in declaration order; its ordinal is the omission bitmap bit. */
     n00b_abi_range_v1 parameters;
     n00b_abi_range_v1 keywords;
     n00b_abi_range_v1 constraints;
@@ -585,8 +568,6 @@ typedef struct {
     n00b_abi_range_v1 keyword_parameters;
 } n00b_abi_call_signature_v1;
 
-/* A retained METHOD obligation's call pattern, not a callable TYPE.
- * NO_TYPE_INDEX means its failure channel remains unconstrained. */
 typedef struct {
     uint32_t success_type_index;
     uint32_t failure_type_index;
@@ -609,7 +590,7 @@ typedef struct {
     uint32_t function_index;
     uint32_t generation;
     uint64_t byte_length;
-    const void *start; /* Native relocation; never a serialized process VA. */
+    const void *start;
 } n00b_abi_code_range_v1;
 
 typedef struct {
@@ -674,9 +655,9 @@ enum { N00B_ABI_FRAME_ROOT_OFFSET = 8 };
 
 typedef struct {
     uint32_t function_index;
-    uint32_t shadow_frame_type_index; /* Traceable type of payload at FRAME_ROOT_OFFSET; 0 if absent. */
+    uint32_t shadow_frame_type_index;
     n00b_abi_range_v1 pointer_bitmap_bytes;
-    uint64_t frame_byte_extent; /* Stack record: link, word, bounds, then root slots. */
+    uint64_t frame_byte_extent;
 } n00b_abi_frame_layout_v1;
 
 typedef struct {
@@ -692,7 +673,7 @@ typedef struct {
     uint32_t end_column;
     uint32_t reserved_zero;
     uint64_t start_byte_offset;
-    uint64_t end_byte_offset; /* Exclusive. */
+    uint64_t end_byte_offset;
 } n00b_abi_source_location_v1;
 
 typedef struct {
@@ -738,10 +719,9 @@ typedef struct {
 typedef struct {
     uint64_t name_hash;
     uint32_t symbol_index;
-    uint32_t ambiguous; /* One when the path names multiple functions. */
+    uint32_t ambiguous;
 } n00b_abi_name_slot_v1;
 
-/* Link-only. Neither record appears in a fully resolved final image. */
 typedef struct {
     n00b_abi_string_v1 full_path;
     uint32_t symbol_kind;
@@ -763,9 +743,6 @@ typedef struct {
     uint32_t reserved_zero_2;
 } n00b_abi_index_patch_v1;
 
-/* A final image exposes one of these to its loader. It is relocated before
- * registration. The compiler/linker validates a main image's file checksum;
- * the n00b loader validates a dynamic image's file before native loading. */
 typedef struct {
     uint32_t descriptor_version;
     uint32_t reserved_zero;
@@ -773,12 +750,6 @@ typedef struct {
     uint64_t metadata_bytes;
 } n00b_abi_image_descriptor_v1;
 
-/* Immutable merged view. Its indexed records contain snapshot-global indexes
- * even when copied from an image with different local indexes. Old views
- * and their record pointers remain valid for the process lifetime; dynamic
- * load publishes a new generation. A
- * query returning int32_t returns 1 when found, 0 when absent, and -1 for
- * invalid arguments or metadata. Query functions never print diagnostics. */
 typedef struct n00b_abi_snapshot_v1 n00b_abi_snapshot_v1;
 
 typedef enum {
@@ -798,14 +769,10 @@ typedef struct {
     uint64_t byte_offset;
 } n00b_abi_error_v1;
 
-/* Registration is transactional and does not write stdout/stderr. The
- * loader reports a nonzero status through its own diagnostics. */
 uint32_t n00b_abi_v1_register_image(
     const n00b_abi_image_descriptor_v1 *image,
     uint64_t *published_generation, n00b_abi_error_v1 *error);
 
-/* The linker validates its complete image before native code emission.
- * Only compiler-generated entry points may use the trusted registration path. */
 uint32_t n00b_abi_v1_validate_image(
     const n00b_abi_image_descriptor_v1 *image, n00b_abi_error_v1 *error);
 uint32_t n00b_abi_v1_register_linked_image(
@@ -828,15 +795,11 @@ int32_t n00b_abi_v1_u64_at(const n00b_abi_snapshot_v1 *snapshot,
 int32_t n00b_abi_v1_bytes(const n00b_abi_snapshot_v1 *snapshot,
                           n00b_abi_range_v1 range,
                           const uint8_t **data_out);
-/* For an inline string the returned bytes may alias `value`; retain that
- * record or value for as long as the returned pointer is used. */
 int32_t n00b_abi_v1_string_bytes(const n00b_abi_snapshot_v1 *snapshot,
                                  const n00b_abi_string_v1 *value,
                                  const uint8_t **data_out,
                                  uint64_t *byte_count_out);
 
-/* One unformatted write of at most INT32_MAX bytes. Returns bytes written,
- * including a possible short write, or -1 on failure. No libc is required. */
 int32_t n00b_abi_v1_raw_fd_write(int32_t fd, const uint8_t *bytes,
                                  uint64_t count);
 
@@ -851,10 +814,7 @@ void *n00b_allocate(uint32_t allocator, uint32_t type_index,
                     const void *instance_descriptor);
 
 #if defined(_WIN32)
-/* Register a live Windows handle as a nonstandard n00b descriptor. The
- * caller retains ownership and must unregister before closing the handle. */
 int32_t n00b_abi_v1_fd_register_handle(void *handle);
-/* Returns 1 if removed, 0 if absent, -1 for a standard/invalid descriptor. */
 int32_t n00b_abi_v1_fd_unregister_handle(int32_t fd);
 #endif
 
@@ -862,7 +822,6 @@ const n00b_abi_type_v1 *n00b_abi_v1_type(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t type_index);
 const n00b_abi_type_argument_v1 *n00b_abi_v1_type_argument(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t argument_index);
-/* Follows transitive specialization links. Returns 1, 0, or -1. */
 int32_t n00b_abi_v1_type_specializes(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t type_index,
     uint32_t general_type_index);
@@ -906,7 +865,6 @@ const n00b_abi_storage_v1 *n00b_abi_v1_storage(
 const n00b_abi_baked_node_v1 *n00b_abi_v1_baked_node(
     const n00b_abi_snapshot_v1 *snapshot, uint32_t node_index);
 
-/* Returns only concrete type rows; non-concrete shape hashes are not unique. */
 int32_t n00b_abi_v1_find_typehash(const n00b_abi_snapshot_v1 *snapshot,
                                   uint64_t typehash, uint32_t *type_index);
 int32_t n00b_abi_v1_find_unary_type(const n00b_abi_snapshot_v1 *snapshot,
@@ -920,7 +878,6 @@ int32_t n00b_abi_v1_find_named_type(const n00b_abi_snapshot_v1 *snapshot,
 int32_t n00b_abi_v1_find_module(const n00b_abi_snapshot_v1 *snapshot,
                                 n00b_abi_string_v1 full_path,
                                 uint32_t *module_index);
-/* Returns -1 for an ambiguous name or invalid input, 0 for no match. */
 int32_t n00b_abi_v1_find_symbol(const n00b_abi_snapshot_v1 *snapshot,
                                 n00b_abi_string_v1 full_path,
                                 uint32_t *symbol_index);

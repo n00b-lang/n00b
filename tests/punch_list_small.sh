@@ -1,6 +1,4 @@
 #!/bin/sh
-# Regression checks for the small punch-list fixes that need a built
-# program or a command other than `n00b check`.
 set -eu
 
 compiler=$1
@@ -8,7 +6,6 @@ src=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-# The behaviors in punch_list_small.n; `-D PUNCH_FLAG` has no `=`.
 "$compiler" build --no-syntax-warnings -D PUNCH_FLAG \
     --output "$tmp/small" "$src/tests/programs/punch_list_small.n" \
     >"$tmp/compile.out" 2>"$tmp/compile.err"
@@ -16,7 +13,6 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 test ! -s "$tmp/stdout"
 test "$(cat "$tmp/stderr")" = ok
 
-# Reaching `unreachable()` stops the program with its own message.
 cat >"$tmp/unreachable.n" <<'EOF'
 func f(x: int) -> int {
     if x > 0 { return 1 }
@@ -31,8 +27,6 @@ status=0
 test "$status" -eq 101
 grep -q '^panic: reached code marked `unreachable()`$' "$tmp/stderr"
 
-# `fmt --normalize` writes inferred types that parse and check again,
-# tuples, records and builtin containers included.
 cat >"$tmp/normalize.n" <<'EOF'
 let t = (1, 2)
 let r = (a = 1, b = 2)
@@ -54,9 +48,6 @@ fi
     exit 1
 }
 
-# Literal sizing: a product of literals fits its value; a module constant
-# sizes what it meets; set literals that meet get one element type; a
-# literal past 2^127 is `u128`.
 cat >"$tmp/sizing.n" <<'EOF'
 let product = 2_000_000_000 * 3
 let base = 2_000_000_000
@@ -69,7 +60,6 @@ func meet() {
 }
 EOF
 "$compiler" fmt --normalize "$tmp/sizing.n"
-# The formatter aligns the declarations, so allow spaces after the colon.
 grep -q 'let product: *uint ' "$tmp/sizing.n"
 grep -q 'let base: *uint ' "$tmp/sizing.n"
 grep -q 'let scaled: *uint ' "$tmp/sizing.n"
@@ -77,8 +67,6 @@ grep -q 'let huge: *u128 ' "$tmp/sizing.n"
 grep -q 'let small: *Dict\[u16, nil\]' "$tmp/sizing.n"
 grep -q 'let large: *Dict\[u16, nil\]' "$tmp/sizing.n"
 
-# A result that doesn't fit a smaller declared target fails its checked
-# narrowing rather than wrapping.
 cat >"$tmp/narrow.n" <<'EOF'
 func narrowed(a: u16, b: u8) -> u8 {
     let r: u8 = a + b
@@ -93,9 +81,6 @@ status=0
 test "$status" -eq 101
 grep -q 'overflows `u8`' "$tmp/stderr"
 
-# A loop counter bounded by a declared `uint` stays 64-bit even when a
-# product of it passes 64 bits: without explicit evidence the range
-# analysis caps at 64.
 cat >"$tmp/counter.n" <<'EOF'
 func g(n: uint) -> uint {
     var i = 4

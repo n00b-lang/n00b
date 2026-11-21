@@ -1,0 +1,4 @@
+fn resharp_find_all(r: Regex, input: bytes[len] null if empty, len: usize,
+                    out: out *[Span; cap cap / 2, len min(ret, cap / 2)] as *usize,
+                    cap: usize) -> isize
+  sizing retry needs ret

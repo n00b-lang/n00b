@@ -330,8 +330,6 @@ n00bb_emit_primitive(ir_lower_context_t *context, core_string_t method,
     if (right && core_string_eq(method, CORE_STRING_STATIC("__equal")))
         return n00bb_emit_binary_ir(context, IR_OP_EQ, result, left, right,
                                     span);
-    // A bit integer's `from_bits` (`Integer`): the low bits of the `u128`,
-    // unchecked, as `unsafe_cast` would take them.
     if (right && core_string_eq(method, CORE_STRING_STATIC("from_bits"))) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
                                                      span);
@@ -687,8 +685,6 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
 
-// The `typespec` descriptor of `described`, a type written in place. A
-// trait's descriptor is its own row, not one built from its arguments.
 ir_lower_result_t
 n00bb_emit_type_literal(ir_lower_context_t *context, th_type *described,
                         ir_span_t span)
@@ -713,7 +709,6 @@ n00bb_emit_type_literal(ir_lower_context_t *context, th_type *described,
               : lower_internal(context, span, "could not emit a type literal");
 }
 
-// `typespec[T]`: the `typespec` descriptor of the type written in it.
 ir_lower_result_t
 n00bb_lower_typespec_literal(ir_lower_context_t *context,
                              parse_visit_t *visit,
@@ -748,9 +743,6 @@ n00bb_emit_value_instruction(ir_lower_context_t *context, ir_op_t op,
     return instruction->dest;
 }
 
-// The integer or float a distinct type was created from (`type Id = i32`
-// gives `i32`), or nullptr. Enums and flagsets also have integer
-// definitions, but they have their own cast rules, so they are excluded.
 static th_type *
 distinct_scalar_base(ir_lower_context_t *context, n00bb_tu_state_t *caller,
                      th_type *type)
@@ -767,7 +759,6 @@ distinct_scalar_base(ir_lower_context_t *context, n00bb_tu_state_t *caller,
         || machine.class == IR_CLASS_FLOAT ? definition : nullptr;
 }
 
-// The fixed-width integer type an open enum's values are stored as.
 static th_type *
 enum_storage_integer(th_ctx *types, const n00bb_enum_range_t *range)
 {
@@ -805,9 +796,6 @@ foreign_pointer_type(th_type *type)
         && th_ind_attrs(resolved, &attrs) && (attrs & TH_FOREIGN);
 }
 
-// True inside the errno conversion the writ n00b generator emits for each
-// syscall, `__<name>_syscall_errno`: there, a cast that fails means the
-// binding chose an errno type that can't hold every errno.
 static bool
 in_syscall_errno(const ir_lower_context_t *context)
 {
@@ -843,8 +831,6 @@ report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
         return report_syscall_errno_type(context, target, span);
     core_string_t from_text = n00bb_print_type(types, from);
     core_string_t target_text = n00bb_print_type(types, target);
-    // Any cast into or out of a reference (or an option of one) reads its
-    // address as something else, which only `unsafe_cast` may do.
     th_type *from_item = th_option_item(th_resolve(from));
     th_type *target_item = th_option_item(th_resolve(target));
     bool references = th_kind_of(th_resolve(from_item ? from_item : from))
@@ -881,10 +867,6 @@ structural_field_fits(ir_lower_context_t *context, th_type *from,
                             ir_machine_of(context->module, to));
 }
 
-// `cast[T]` follows the field tuple rules: outside the module that defines
-// `T`, it cannot set a private field, and outside `T`'s package, it cannot
-// bypass `T`'s `__init`. Reports and returns true when the cast is refused;
-// `unsafe_cast[T]` is never checked.
 static bool
 cast_bypasses_constructor(ir_lower_context_t *context, th_type *target,
                           ir_span_t span, ir_lower_result_t *result)
@@ -893,8 +875,6 @@ cast_bypasses_constructor(ir_lower_context_t *context, th_type *target,
     core_translation_unit_t *owner = nullptr;
     parse_scope_t *scope = record_scope_for_type(
         tu_state(lower->unit)->link_analysis, th_resolve(target), &owner);
-    // A union's arms are not filled in by the cast (an accessor selects
-    // one), so only the other fields count.
     uint64_t record_hash = th_hash(ir_module_types(context->module), target);
     parse_sym_entry_t *hidden = nullptr;
     for (parse_sym_entry_t *field = scope && owner != lower->unit
@@ -1059,8 +1039,6 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *target = spec ? parse_tree_type(spec) : nullptr;
     parse_sym_entry_t *trait = spec ? n00bb_cast_trait(visit->grammar, spec)
                                     : nullptr;
-    // A cast to a trait keeps the value as it is; once its type is known,
-    // the rewrite checks that type implements the trait.
     if (trait && operand_count == 1 && operands && operands[0]) {
         n00bb_lower_context_t *lower = context->user;
         core_buffer_t name = {0};
@@ -1103,10 +1081,6 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
 }
 
-// `value: T`: the value, as a T. The value is stored in a T and read back,
-// as a declaration `let x: T = value` would hold it: a literal takes the
-// type, a value that converts to it (an integer that widens) converts, and
-// any other value is an error.
 ir_lower_result_t
 n00bb_lower_type_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                             ir_value_t *const *operands, size_t operand_count,
@@ -1577,8 +1551,6 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     if (!lower || !lower->grammar) return true;
     ir_lit_t magnitude = {0};
-    // The literal is the operand of a negation (recorded by the front end),
-    // so its magnitude may be one past the type's largest positive value.
     if (!parse_tree_negated_literal(visit->node)) return true;
     parse_tree_t *literal = visit->node;
     bool negative = true;
@@ -1600,8 +1572,6 @@ n00bb_skip_i128_min_magnitude(ir_lower_context_t *context,
     return ir_lower_set_node_value(context, visit->node, constant->dest);
 }
 
-// The reference `ref` makes to the place at `storage`; `text` is the
-// operand's source, for the escape check.
 ir_value_t *
 n00bb_emit_reference(ir_lower_context_t *context, ir_value_t *storage,
                      core_string_t text, ir_span_t span)
@@ -1614,9 +1584,6 @@ n00bb_emit_reference(ir_lower_context_t *context, ir_value_t *storage,
             th_var(ir_module_types(context->module)))
         && ir_instr_operand_name(open, N00BB_REF_METHOD)
         && ir_instr_operand_fresh(open, storage)
-        // An address a reference type lends may only be passed straight
-        // to a call; rewrite checks how the `ref` is used once the
-        // reference types are known.
         && ir_annot_set(lower->ir_context, &open->annots,
                (ir_annot_t){.key = N00BB_REFERENCE_ESCAPES_KEY,
                             .kind = IR_ANNOT_STR,
@@ -1626,8 +1593,6 @@ n00bb_emit_reference(ir_lower_context_t *context, ir_value_t *storage,
     return referenced;
 }
 
-// The function `ref` names, when its operand names one (recorded by name
-// resolution); the operand is returned in `operand_out`.
 static parse_sym_entry_t *
 referenced_function(ir_lower_context_t *context, parse_visit_t *visit,
                     parse_tree_t **operand_out)
@@ -1655,8 +1620,6 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     if (is_ref) {
         if (entering) {
             parse_tree_t *operand = nullptr;
-            // A function is named, not read; any other operand is lowered
-            // as a value, and its place recovered from how it was read.
             bool function_reference =
                 referenced_function(context, visit, &operand) != nullptr;
             if (!operand || (function_reference

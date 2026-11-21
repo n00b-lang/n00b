@@ -34,7 +34,7 @@ typedef struct {
     core_list_t(writ_n00b_field_t) *fields;
     core_list_t(record_handle_t) *record_handles;
     core_list_t(plan_patch_t) *patches;
-    bool                  libc; // shims check they aren't on a runtime thread (linux_start.c)
+    bool                  libc;
 } n00b_t;
 
 static bool
@@ -226,10 +226,7 @@ mark(const n00b_t *g, const writ_emit_t *emit, writ_span_t span, writ_str_t name
 typedef enum {
     PARAM_SCALAR,
     PARAM_VALUE,
-    // A handle's or other C memory's address, as `uint`.
     PARAM_ADDRESS,
-    // A pointer into n00b memory, as `Ref[byte]`, so the GC keeps the
-    // object alive through the call.
     PARAM_POINTER,
     PARAM_RECORD,
     PARAM_STORAGE,
@@ -410,8 +407,6 @@ item_tree(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
     }
 }
 
-// A rest pack the binding presents as a `List`. C reads an array, so the
-// wrapper copies the list into one before the call.
 static bool
 list_pack(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
 {
@@ -439,8 +434,6 @@ is_pointer(writ_str_t c_type)
     return ends_with(c_type, "*");
 }
 
-// A pointer to void, whose elements have no size: `void *` or
-// `const void *`.
 static bool
 void_pointer(writ_str_t c_type)
 {
@@ -461,9 +454,6 @@ is_handle(const writ_plan_item_view_t *item)
     return item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE);
 }
 
-// A pointer argument to bytes, integers or floats: n00b passes the memory it
-// points into as `Ref[byte]`, as a raw binding does, so the GC keeps the
-// object alive through the call. Pointers to declared types stay addresses.
 static bool
 pointer_input(const writ_plan_item_view_t *item)
 {
@@ -970,8 +960,6 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
             writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
                            S(p->name), S(p->name), S(p->name));
-            // The borrowed length counts elements; the copy is in bytes,
-            // with a terminating zero byte for text.
             if (void_pointer(p->c_type)) {
                 writ_emit_line(emit, "size_t %.*s_bytes = %.*s_length;", S(p->name), S(p->name));
             } else {
@@ -1502,9 +1490,6 @@ sibling_field(const n00b_t *g, const writ_record_view_t *record, uint32_t expr, 
     return false;
 }
 
-// The extent of a pointer field in a generated `layout(c)` record, for the
-// compiler (writ_n00b_field_t); false when the contract's extent can't be
-// described that way.
 static bool
 foreign_extent(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field,
                writ_n00b_field_t *out)
@@ -1590,7 +1575,6 @@ field_name(const n00b_t *g, const writ_slot_view_t *field)
     return writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
 }
 
-// The private field that holds one arm of a C union.
 static writ_str_t
 arm_storage(const n00b_t *g, const writ_slot_view_t *owner, const writ_slot_view_t *member)
 {
@@ -1613,11 +1597,6 @@ unviewed(const writ_type_view_t *type)
     return type && type->kind == WRIT_TYPE_VIEW ? unviewed(type->target) : type;
 }
 
-// A C union in a `layout(c)` record becomes one private field per arm, all
-// sharing the union's storage, plus an accessor and a setter per arm (see
-// emit_union); writ_n00b_field_t tells the compiler which fields overlap
-// and which tag selects each. That needs an integer tag field, and arm
-// names that don't collide with the record's own fields.
 static bool
 union_expressible(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field)
 {
@@ -1680,10 +1659,9 @@ expressible(const n00b_t *g, const writ_record_view_t *record)
         }
         unions += record->fields[f].type->kind == WRIT_TYPE_UNION;
     }
-    return unions <= 1; // the compiler traces at most one union per record
+    return unions <= 1;
 }
 
-// Notes the extent of a foreign pointer field for the compiler.
 static void
 note_field(const n00b_t *g, const writ_record_view_t *record, const writ_slot_view_t *field, writ_n00b_field_t fact)
 {
@@ -1691,15 +1669,12 @@ note_field(const n00b_t *g, const writ_record_view_t *record, const writ_slot_vi
     inner.type = unviewed(field->type);
     bool pointer = inner.type && (inner.type->kind == WRIT_TYPE_POINTER || inner.type->kind == WRIT_TYPE_ARRAY)
                    && foreign_pointee(g, inner.type->target).length;
-    (void)(pointer && foreign_extent(g, record, &inner, &fact)); // the extent stays NONE if it fails
+    (void)(pointer && foreign_extent(g, record, &inner, &fact));
     if (fact.extent != WRIT_N00B_EXTENT_NONE || fact.tag_field.length) {
         core_list_push(*g->fields, fact);
     }
 }
 
-// A record's C union, as private fields inside the record, or as the
-// accessors that follow it: each arm reads as an option, nil unless the tag
-// selects it, and setting an arm sets the tag too.
 static void
 emit_union(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record, const writ_slot_view_t *field,
            bool accessors)
@@ -1773,7 +1748,7 @@ emit_opaque_record(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t 
         writ_str_t name = field_name(g, field), value = scalar_type(g, t);
         writ_str_t layout = writ_str_format(g->session, "%c%u", t && t->kind == WRIT_TYPE_FLOAT ? 'f'
                                             : t && t->is_signed ? 'i' : 'u', t ? t->size * 8 : 0);
-        bool same = writ_str_eq(value, layout); // or a uint, bool or enum, cast from its bytes
+        bool same = writ_str_eq(value, layout);
         writ_str_t read = writ_str_format(g->session, "__ffi_read_%.*s(self.storage, %u)", S(layout), field->offset);
         read = same ? read : writ_str_format(g->session, "unsafe_cast[%.*s](%.*s)", S(value), S(read));
         writ_str_t back = same ? writ_cstr("value") : writ_str_format(g->session, "unsafe_cast[%.*s](value)", S(layout));
@@ -2052,7 +2027,7 @@ handle_sources(const n00b_t *g, const writ_handle_view_t *handle, writ_str_t *ou
         for (size_t s = 0; s < count && !seen; s++) {
             seen = writ_str_eq(out[s], type);
         }
-        out[count] = type; // overwritten by the next source if already seen
+        out[count] = type;
         count += !seen;
     }
     return count;
@@ -2085,8 +2060,6 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_str_t raw = raw_of(g, handle->type, writ_cstr("self.__value"));
     writ_str_t initial = typed ? writ_str_format(g->session, "unsafe_cast[%.*s] raw", S(typed->raw_type))
                                : writ_cstr("raw");
-    // An object, so only the cell's storage is finalized, once, however many
-    // handles share it.
     writ_emit_open(emit, "private object %.*s_Cell", S(type));
     writ_emit_line(emit, "raw: %.*s", S(typed ? typed->raw_type : writ_cstr("uint")));
     for (size_t s = 0; s < source_count; s++) {
@@ -2184,8 +2157,6 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             emit_flagset(g, emit, view);
             continue;
         }
-        // A C enum can hold values the contract doesn't list unless the
-        // contract says `closed`, and its storage is the C base type.
         writ_str_t base = view->base ? scalar_type(g, view->base) : (writ_str_t){0};
         writ_emit_open(emit, "%senum %.*s%s%.*s", view->closed ? "" : "open ",
                        S(writ_binding_type(g->b, view->name)), base.length ? ": " : "", S(base));
@@ -2306,9 +2277,6 @@ receiver_type(const wrapper_t *w, uint32_t item)
 static writ_str_t
 error_type(const wrapper_t *w)
 {
-    // The default is the builtin `Ffi_Error`, shared by every literal, since
-    // a literal's declarations join the module it's written in.
-    // A binding's own `error * -> "Type"` is used as written.
     writ_str_t error = w->bound.error;
     return writ_str_eq(error, writ_cstr("Error")) ? writ_cstr("Ffi_Error") : error;
 }
@@ -2789,7 +2757,6 @@ emit_wrapper_params(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bo
         bool modify = (i == w->receiver && consumes(w, i))
                    || (plan->items[i].role == WRIT_ROLE_INPUT_OUTPUT && record_target(&plan->items[i]));
         writ_str_t type = i == keywords ? options_type_name(w) : receiver_type(w, i);
-        // A rest pack is only read: its elements are copied to C.
         bool view = !modify && plan->items[i].shape == WRIT_SHAPE_REST_PACK;
         writ_emit_text(emit, "%s%s%.*s: %.*s", *first ? "" : ", ", modify ? "modify " : view ? "view " : "",
                        S(local_name(w, i)), S(type));
@@ -2823,8 +2790,6 @@ emit_wrapper_arguments(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords,
     }
 }
 
-// `new` allocates a handle (an object) before `__init` runs, so the opened
-// handle's state moves into it and the opened one is emptied: one releases.
 static void
 emit_static_init(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool options_record,
                  const writ_handle_view_t *handle)
@@ -3415,9 +3380,6 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
 
 static writ_str_t raw_type(const n00b_t *g, const writ_type_view_t *type);
 
-// A raw binding passes a pointer argument as `Ref[byte]` (`Ref[byte]?` when
-// nullable): the GC sees the reference, so the object stays alive through
-// the call. Results stay addresses (`uint`), since C memory isn't GC memory.
 static const writ_n00b_type_t *
 raw_param_type(const n00b_t *g, const writ_type_view_t *type)
 {
@@ -3507,9 +3469,6 @@ emit_policy_dispatch(const n00b_t *g, writ_emit_t *emit, size_t fn)
     writ_emit_close(emit, nullptr);
 }
 
-// A `syscall` slot as n00b sees it (ffi-spec.md §7.1): integers keep their
-// width, pointer arguments are `Ref[byte]` (`Ref[byte]?` when nullable),
-// and a pointer result is the address as `uint`.
 static const writ_n00b_type_t *
 syscall_type(const n00b_t *g, const writ_type_view_t *type, bool result)
 {
@@ -3523,7 +3482,6 @@ syscall_type(const n00b_t *g, const writ_type_view_t *type, bool result)
     return named(g, scalar_type(g, type));
 }
 
-// Raw and syscall parameters go to C or the kernel as they are.
 static const writ_n00b_type_t **
 direct_params(const n00b_t *g, const writ_fn_view_t *fn, bool syscall, const writ_n00b_access_t **access)
 {
@@ -3554,7 +3512,6 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
     }
     writ_emit_line(emit, ") -> %.*s {", S(result));
     if (g->libc) {
-        // As a shim does (emit_c_shim): no libc call from a runtime thread.
         writ_emit_line(emit, "    __ffi_libc_thread_check()");
     }
     writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
@@ -3566,10 +3523,6 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
     writ_emit_line(emit, "}");
 }
 
-// Emits a `syscall` as an extern whose symbol `n00b.syscall.<number>.<name>` the
-// n00b compiler lowers to the kernel-entry instruction, and a wrapper that
-// does the in-band errno check, the result conversion and, for `blocking`
-// calls, the collector's blocking transitions.
 static void
 emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
 {
@@ -3582,9 +3535,6 @@ emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
     const writ_n00b_type_t **types = direct_params(g, fn, true, &access);
     bool has_result = fn->result != nullptr;
     writ_str_t entry = writ_str_format(g->session, "__%.*s_syscall", S(name));
-    // The name after the number keeps each declaration's facts apart: the
-    // compiler knows a native by its symbol, and two declarations of one
-    // call (futex wait and wake) can differ in their effects.
     writ_str_t symbol = writ_str_format(g->session, "n00b.syscall.%lld.%.*s_%.*s", (long long)fn->syscall_number,
                                         S(g->shim), S(name));
     add_extern_as(g, entry, symbol, types, fn->slots_count, named(g, writ_cstr(has_result ? "int" : "nil")),
@@ -3599,9 +3549,6 @@ emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
     writ_str_t result = has_result ? type_text(g, syscall_type(g, fn->result->type, true)) : writ_cstr("nil");
 
     if (fails) {
-        // The errno conversion is its own function so the compiler can tell
-        // it apart: a type that can't take every errno is reported as the
-        // wrong failure type, at the binding's `error` item.
         writ_emit_line(emit, "");
         writ_emit_line(emit, "private func __%.*s_syscall_errno(code: int) -> %.*s {", S(name), S(error));
         mark(g, emit, error_at, fn->contract_name);
@@ -3650,7 +3597,6 @@ emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
     writ_emit_line(emit, "}");
 }
 
-// Emits `import module` unless `seen` already holds it.
 static void
 emit_import_once(const n00b_t *g, writ_emit_t *emit, core_list_t(writ_sym_t) *seen, writ_sym_t module)
 {
@@ -3664,8 +3610,6 @@ emit_import_once(const n00b_t *g, writ_emit_t *emit, core_list_t(writ_sym_t) *se
     writ_emit_line(emit, "import %.*s", S(name));
 }
 
-// A syscall's error type may live in another module (`errs.Errno`); the
-// generated module imports each such module once.
 static void
 import_error_module(const n00b_t *g, writ_emit_t *emit, core_list_t(writ_sym_t) *seen, writ_str_t error)
 {
@@ -3678,8 +3622,6 @@ import_error_module(const n00b_t *g, writ_emit_t *emit, core_list_t(writ_sym_t) 
     }
 }
 
-// The generated module imports the modules of the error types its binding
-// names, so `error * -> "pkg.Type"` resolves.
 static void
 emit_error_imports(const n00b_t *g, writ_emit_t *emit)
 {

@@ -475,9 +475,6 @@ func __finalize(consume self: Ref[Twin]) {
     twin_finalized += 1
 }
 
-// An object's handle is the address of its fields, so a raw payload
-// allocated with the object's type row is the object: read the address back
-// as a handle.
 func twin_at(payload: Ref[byte]) -> Twin {
     var address: uint = __abi_ref_address(payload)
     return (unsafe_cast[Ref[Twin]] (ref address)).__value
@@ -526,8 +523,6 @@ func construct_finalized() -> Finalized_Object {
     return new[Finalized_Object](42)
 }
 
-// The type row of object `probe` (an optional object), which carries the
-// finalizer, and the row of its fields (the object is a reference to them).
 func object_rows(probe: typespec) -> Tuple[i64, Ref[sys.abi.Type_Record]] {
     let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(probe)
     require option_row != nil
@@ -1164,8 +1159,6 @@ func gc_los_allocate() {
                         heap.__value.los = nil
                         sys.gc.los.release(heap, object)
                     } else { require false }
-                    // A small object is here only for its alignment, so
-                    // releasing it must not file it under a size class.
                     let small: Ref[byte]? = sys.gc.los.allocate_locked(
                         heap, mutator, type_index, 64, 32, false)
                     if small != nil {
@@ -2578,8 +2571,6 @@ func __finalize(consume self: Ref[Gcfin_User_Box['T]]) {
     gcfin_user_count += 1
 }
 
-// A generic object's finalizer is bound to each instance's type row; an
-// object that holds another object's handle needs no finalizer of its own.
 object Gcfin_Generic_Box {
     f: 'T
 }
@@ -2710,11 +2701,6 @@ func gc_destroy_blocked_finalizer() {
     } else { require false }
 }
 
-// An optional record whose presence bit shares a byte with the record's
-// bools. The collector must read that bit where it sits; reading the byte's
-// low bit instead sees the record as absent, so nothing inside it is marked
-// and a finalizer runs on an object that is still in use. `first` is false
-// so the low bit is clear.
 object Watched {
     live: bool
 }
@@ -2761,8 +2747,6 @@ func flagged_intact(holder: Flagged_Holder) -> bool {
 
 func gc_option_tag() {
     flagged_holder = new[Flagged_Holder]()
-    // Dead objects are finalized by the collections that would also miss the
-    // live one; making them is also what brings those collections.
     let deadline: u64 = sys.clock.now_ns() + 30_000_000_000
     while __atomic_load(ref watched_dead) < 1024 {
         require sys.clock.now_ns() < deadline

@@ -154,8 +154,6 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                                           symbol->storage_class_required))
         && ir_lower_bind_local_storage(context, symbol, local,
                                        allocation->dest)
-        // Storage for a `let` or `const` keeps saying so, since writes reach
-        // it through its address rather than the local.
         && (local->mutability == IR_MUT_MUTABLE
             || ir_annot_set(ir_module_ctx(context->module), &allocation->annots,
                             (ir_annot_t){.key = N00BB_IMMUTABLE_STORAGE_KEY,
@@ -164,8 +162,6 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
         && n00bb_mark_binding_reentry(context, symbol);
 }
 
-// One object a function makes whose type has a finalizer: the handle is kept
-// in `handle`, and `owned` says the object was made on this path.
 typedef struct {
     ir_instr_t *cast;
     ir_local_t *handle;
@@ -175,8 +171,6 @@ typedef struct {
 
 core_list_decl(n00bb_frame_object_t);
 
-// The object made by `in` (the conversion of a fresh `__fields` allocation
-// to its object type), when that type is closed and has a finalizer.
 static ir_instr_t *
 finalizable_object(core_translation_unit_t *unit, ir_instr_t *in,
                    th_env_method_t *method)
@@ -219,10 +213,6 @@ frame_object_local(ir_lower_context_t *context, const char *role,
     return ir_local_add(context->function, name, type);
 }
 
-// Keeps the handle of `object->cast` and marks the object made, right after
-// the conversion; storage placement clears the mark for an allocation it
-// moves to the heap (`n00bb.finalize_owned`), where the collector finalizes
-// the object instead.
 static bool
 track_frame_object(ir_lower_context_t *context, n00bb_frame_object_t *object,
                    ir_instr_t *allocation)
@@ -253,8 +243,6 @@ track_frame_object(ir_lower_context_t *context, n00bb_frame_object_t *object,
            });
 }
 
-// Finalizes, before `exit` (a `return` or `fail`), every object made on the
-// path to it, latest first.
 static bool
 finalize_before_exit(ir_lower_context_t *context, ir_instr_t *exit,
                      const core_list_t(n00bb_frame_object_t) *objects)
@@ -314,7 +302,6 @@ n00bb_finalize_frame_objects(ir_lower_context_t *context)
     for (size_t i = 0; ok && i < objects.len; i++)
         ok = track_frame_object(context, &objects.data[i],
                                 allocations.data[i]);
-    // Every path starts with nothing made.
     ir_block_t *entry = ok && objects.len ? function->blocks[0] : nullptr;
     ir_block_t *body = entry ? split_named(context, entry, 0) : nullptr;
     if (entry) {

@@ -1,0 +1,7 @@
+conventions for fn resharp_* {
+    error ret == -1 or ret == null via last_error
+}
+
+conventions for fn z* {
+    error ret < 0 via ret as ZStatus
+}

@@ -14,8 +14,6 @@ func __init(modify self: Slice['T], consume items: Array['T],
     self.end_ix = end_ix
 }
 
-// A bound of a slice of something `length` long, as written: left out, it
-// is `missing` (the start or the end); negative, it counts from the end.
 func slice_bound(bound: int?, missing: int, length: uint) -> int {
     if bound == nil {
         return missing
@@ -27,7 +25,6 @@ func slice_bound(bound: int?, missing: int, length: uint) -> int {
     return at
 }
 
-// The end of a slice as written: `to` (inclusive) takes the end item too.
 func written_end(bound: int?, inclusive: bool, length: uint) -> int {
     let at: int = slice_bound(bound, cast[int] length, length)
     if inclusive and bound != nil {
@@ -36,8 +33,6 @@ func written_end(bound: int?, inclusive: bool, length: uint) -> int {
     return at
 }
 
-// A bound past either end of something `length` long stops there, as in
-// Python, so a slice reaching past the end just takes what there is.
 func clamp_bound(at: int, length: uint) -> int {
     if at < 0 {
         return 0
@@ -48,8 +43,6 @@ func clamp_bound(at: int, length: uint) -> int {
     return at
 }
 
-// Where a slice starts. Its start may not come after its end, which can
-// only be a mistake; that panics.
 func slice_start(start_ix: int?, end_ix: int?, inclusive: bool,
                  length: uint, container: string) -> int {
     let start: int = slice_bound(start_ix, 0, length)
@@ -60,7 +53,6 @@ func slice_start(start_ix: int?, end_ix: int?, inclusive: bool,
     return clamp_bound(start, length)
 }
 
-// Where a slice ends (exclusive).
 func slice_end(end_ix: int?, inclusive: bool, length: uint) -> int {
     return clamp_bound(written_end(end_ix, inclusive, length), length)
 }

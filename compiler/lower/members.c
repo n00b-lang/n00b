@@ -168,8 +168,6 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
         ir_value_t *base = base_node
             ? ir_lower_node_value(context, base_node) : nullptr;
         if (!base) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
-        // A field kept in storage (through a reference or object) is loaded
-        // alone. A variant's arm is always taken out of the variant's value.
         bool arm = n00bb_variant_arm_symbol(member);
         ir_value_t *address = arm ? nullptr
             : n00bb_field_storage(context, base, member->name, result_type,

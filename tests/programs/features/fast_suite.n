@@ -563,9 +563,6 @@ func atomics_main() -> bool {
         and __atomic_load(ref atomic_pair).held.n == 2
 }
 
-# A module-level `when` branch holds module declarations, and the chosen
-# branch's declarations belong to the module. Every branch may declare the
-# same names.
 when target_os() == "nowhere" {
     open enum When_Pick: i32 {
         chosen = 1,

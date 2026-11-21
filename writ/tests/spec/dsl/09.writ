@@ -1,0 +1,4 @@
+struct Packet {
+    count: u32
+    items: [Item; count]
+}

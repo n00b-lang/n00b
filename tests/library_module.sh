@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Builds MODULE as a library and checks the ABI metadata was written.
 compiler=$1
 module_dir=$2
 module=$3

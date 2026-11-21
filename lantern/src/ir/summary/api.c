@@ -691,12 +691,6 @@ target_summary(ir_summaries_t *summaries, ir_func_t *target)
     return summary;
 }
 
-// A callee's summary as `caller` sees it when some of the globals it
-// touches lie behind a barrier for the caller: the paths and flows through
-// those globals are left out. Everything else is shared with the callee's
-// summary, which the view only reads. So a view is only good for the
-// revision of the summary it was made from: replacing the summary's contents
-// frees the lists the view shares.
 typedef struct {
     ir_summary_t *view;
     const ir_summary_t *source;
@@ -761,8 +755,6 @@ view_flows(ir_summaries_t *summaries, const ir_func_t *caller,
            flow_table_t *into, const flow_table_t *from)
 {
     flow_table_init(into, from->function);
-    // A barrier global's flows are left out; a private one's still reach
-    // what the caller sees, from the global as a whole.
     uint32_t *mapped = core_alloc_array(uint32_t, from->sources.len + 1);
     ir_spath_t *whole = core_alloc_array(ir_spath_t, from->sources.len + 1);
     for (size_t s = 0; s < from->sources.len; s++) {
@@ -809,8 +801,6 @@ call_summary(ir_summaries_t *summaries, const ir_func_t *caller,
     ir_summary_t *callee = target_summary(summaries, target);
     const ir_summary_hooks_t *hooks = summaries->hooks;
     if (!caller || !callee || !hooks || !hooks->global_hidden) return callee;
-    // A stored summary is seen through the same view as a computed one, or
-    // what a caller composes would depend on what was cached.
     if (callee->encoded) decode_stored_body(callee);
     void *key = (void *)((uintptr_t)callee
                          ^ (uintptr_t)caller->owner * 0x9e3779b97f4a7c15ull);
@@ -960,7 +950,6 @@ add_function_path(ir_summaries_t *summaries, ir_summary_t *summary,
         && path->depth && path->global && hooks && hooks->global_named
         && !hooks->global_named(hooks->context, f,
                                 ir_global_identity(path->global))) {
-        // Writing one part isn't writing all of it.
         path->depth  = 0;
         path->steps  = nullptr;
         path->flags  = (uint8_t)((path->flags & ~IR_SPATH_MUST)
@@ -1045,8 +1034,6 @@ access_touches(ir_summaries_t *summaries, const ir_splace_t *access,
         : ir_splace_eq(access, place);
 }
 
-// What the functions behind `flag` (the finalizers, or the entries of
-// threads started) can do to `place`.
 static uint8_t
 entries_access(ir_summaries_t *summaries, uint32_t flag,
                const ir_splace_t *place)
@@ -1166,9 +1153,6 @@ static bool
 summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
 {
     if (!summary) return true;
-    // While a call blocks or waits on other threads, they run, and what
-    // they write to shared memory is what the caller sees afterwards
-    // (waiting on a futex is how a lock hands over the data it guards).
     if (summary->flags & (IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_SYNCS))
         return true;
     for (size_t i = 0; i < summary->paths.len; i++) {

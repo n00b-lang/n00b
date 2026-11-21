@@ -80,8 +80,6 @@ private func write_unlock(buffer: Buffer) {
     __atomic_store(ref buffer.lock, 0)
 }
 
-// `with reading(buffer)` and `with writing(buffer)` hold the buffer's lock
-// for their block.
 private record Buffer_Read {
     buffer: Buffer
 }

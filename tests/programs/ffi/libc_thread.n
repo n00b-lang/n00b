@@ -1,7 +1,3 @@
-# A contract that links "c" binds C code that may use libc's per-thread
-# state (errno, stdio's locks). On Linux the threads the runtime starts have
-# none, so a call from one fails at the shim instead of corrupting memory;
-# elsewhere every thread is a libc thread and the call works.
 import sys.threads
 
 [-

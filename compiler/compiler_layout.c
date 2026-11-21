@@ -95,13 +95,9 @@ inline_layout_cycle(ir_module_t *module, th_type *type, core_string_t via,
     if (th_kind_of(type) == TH_NAMED) {
         th_type *definition = ir_type_definition(module, type);
         size_t argument_count = th_named_nargs(type);
-        // An option stores its item inline (see publish_option_layout),
-        // so `record R { next: R? }` contains itself just as `R` would.
         bool inline_wrapper = th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC
             || th_builtin_kind_of(type) == TH_BUILTIN_OPTION;
         if (!definition && !inline_wrapper) return false;
-        // Every cycle passes through a defined type, so report it there
-        // rather than at a wrapper such as `R?`.
         for (size_t i = 0; definition && i < active->len; i++) {
             if (active->data[i] != type) continue;
             core_string_t printed = n00bb_print_type(
@@ -546,7 +542,6 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
                 if (!request) continue;
-                // `align(...)` is implemented for `layout(c)` records.
                 if (request->policy == N00BB_RECORD_C) continue;
                 if (!n00bb_record_request_aligned(request)) {
                     if (request->policy == N00BB_RECORD_ORDERED
@@ -686,8 +681,6 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                     : nullptr;
                 bool ready = (!count || members != nullptr)
                     && (!variant || !count || arms != nullptr);
-                // An object's fields (`T.__fields`) are declared on `T`;
-                // a fixed-size array among them is stored inline there too.
                 parse_scope_t *member_scope = record_scope_for_type(
                     analysis, type, nullptr);
                 if (!member_scope)
@@ -724,9 +717,6 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         ready = false;
                         break;
                     }
-                    // An inline array (of `bool`, say) starts on a byte; its
-                    // elements may be packed bits within it, but the field
-                    // itself isn't packed among its neighbors.
                     bool packable = !inline_element
                         && child->n_occupied == 1
                         && child->occupied[0].offset == 0

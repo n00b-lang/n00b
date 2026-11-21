@@ -247,9 +247,6 @@ remove_tree(core_string_t directory)
     remove_directory(directory);
 }
 
-// A directory with no sources is cached like any other group, and a skipped
-// directory is never walked: the current directory is often a build
-// directory, with large trees of build output and the compiler's caches.
 static void
 test_skipped_and_sourceless(void)
 {

@@ -1,0 +1,3 @@
+var stdout: File
+  symbol "__stdoutp" when os == macos
+  symbol "stdout"    when libc == glibc

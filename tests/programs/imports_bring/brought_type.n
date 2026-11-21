@@ -1,5 +1,3 @@
-# A brought type names the provider's type wherever a type is written: in a
-# local, a parameter and a module variable alike.
 import stamps
 bring Stamp from stamps
 

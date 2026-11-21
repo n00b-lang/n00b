@@ -6,8 +6,6 @@ func __init(modify self: Built, x: int) {
     self.x = x + 1
 }
 
-// The module that defines `Built` may build it field by field, bypassing
-// its constructor.
 func raw_built(x: int) -> Built {
     return (x = x)
 }

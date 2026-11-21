@@ -94,13 +94,6 @@ __attribute__((naked)) void n00b_os_thread_capture_self(n00b_os_thread_context *
 
 #if defined(__linux__)
 
-// Linux has no call that suspends another thread: sys.os signals it with
-// rt_tgsigqueueinfo, carrying the context to fill, and this handler, which
-// runs on the stopped thread, saves its registers there and waits until
-// sys.os.thread_resume clears `parked`. The handler and the rt_sigreturn
-// trampoline are the only parts that can't be n00b code: they run on a
-// thread interrupted at an arbitrary instruction.
-
 #include <asm/signal.h>
 #include <asm/sigcontext.h>
 #include <asm/ucontext.h>
@@ -122,8 +115,6 @@ __attribute__((naked)) static void stw_sigreturn(void)
 
 enum { STW_CLOCK_MONOTONIC = 1 };
 
-// The start of the kernel's siginfo for a queued signal: the value sent with
-// it is the context to fill.
 typedef struct {
     int signo;
     int error;

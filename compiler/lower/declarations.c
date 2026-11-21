@@ -130,10 +130,6 @@ n00bb_lower_signature_array_shape(ir_lowerer_t *lowerer,
     return n00bb_bind_runtime_array_shape(context, shape);
 }
 
-// Writes `array` to `local` as the storage a `let` gets where it's declared:
-// a default, not its one assignment, so a later assignment may still
-// replace it. The write is marked for the check that a `let` is assigned
-// once.
 static bool
 write_declaration_default(ir_lower_context_t *context, ir_local_t *local,
                           ir_value_t *array, ir_span_t span)
@@ -186,10 +182,6 @@ n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
     return false;
 }
 
-// A module array declared without a value, whose size is only known when
-// the program runs (n00bb_global_needs_runtime_array), is allocated where
-// it's declared, in its module's initializer. For a `let`, the storage is a
-// default its one assignment may replace.
 bool
 n00bb_allocate_runtime_global(ir_lower_context_t *context,
                               parse_sym_entry_t *symbol, ir_span_t span)
@@ -199,8 +191,6 @@ n00bb_allocate_runtime_global(ir_lower_context_t *context,
     ir_global_t *global = state
         ? link_ir_global_for_symbol(state->link_analysis, symbol) : nullptr;
     if (!n00bb_global_needs_runtime_array(global)) return true;
-    // The declaration's shape keeps its size expressions; the variable's is
-    // a copy without them.
     ir_shape_t *declared = parse_sym_binding(symbol,
         CORE_STRING_STATIC("ir.array-shape"));
     ir_shape_t *shape = declared
@@ -214,8 +204,6 @@ n00bb_allocate_runtime_global(ir_lower_context_t *context,
     ir_instr_t *one = uint_type ? n00bb_emit_uint_constant(context, uint_type,
         1, span, CORE_STRING_STATIC("__n00bb_array_one")) : nullptr;
     bool ok = one && ir_shape_storage(shape, &storage);
-    // The sizes are computed here, into this initializer's own values; the
-    // variable's shape stays as declared.
     for (uint32_t i = 0; ok && i < rank; i++) {
         ok = ir_shape_extent(shape, i, &extents[i]);
         if (!ok || i >= storage.flat_prefix_rank
@@ -251,8 +239,6 @@ n00bb_allocate_runtime_global(ir_lower_context_t *context,
     return ok;
 }
 
-// True when `type` is a record any of whose fields, or the fields of the
-// records it holds, is an array.
 static bool
 record_holds_array(th_ctx *types, th_type *type, uint32_t depth)
 {
@@ -267,10 +253,6 @@ record_holds_array(th_ctx *types, th_type *type, uint32_t depth)
     return false;
 }
 
-// A record declared without a value starts with its inline arrays zeroed,
-// as a bounded array does on its own; its other fields still need values
-// before they're read. The fill is marked so the check for reads of unset
-// values counts only the inline arrays as set.
 static bool
 zero_declared_record(ir_lower_context_t *context, ir_local_t *local,
                      ir_span_t span)
@@ -339,11 +321,6 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
             if (!local)
                 return !symbol || symbol->mutability == PARSE_SYM_CONST
                     || n00bb_allocate_runtime_global(context, symbol, span);
-            // A `let` array is shared, so a bounded one gets its storage
-            // here, as a `var` one does; its elements may then be set.
-            // One without a size gets a zeroed default as long as its
-            // assignment, which its length is taken from (see
-            // n00bb_size_let_defaults).
             ir_shape_storage_t storage;
             bool sized = shape && ir_shape_storage(shape, &storage)
                 && storage.flat_prefix_rank;
@@ -369,8 +346,6 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                 && zero_declared_record(context, local, span);
         }
         if (!local && symbol && expression) {
-            // A module variable's initializer becomes its static storage;
-            // only a length known now can be checked against its size.
             ir_value_t *value = ir_lower_node_value(context, expression);
             if (value)
                 n00bb_report_static_shape_mismatch(context, value,
@@ -446,8 +421,6 @@ n00bb_lower_slice_bound(ir_lower_context_t *context, parse_tree_t *node,
     return ir_lower_node_value(context, node);
 }
 
-// A slice bound that lowered to an integer constant (a literal, possibly
-// negated).
 static bool
 constant_slice_bound(const ir_value_t *bound, int64_t *value)
 {
@@ -490,8 +463,6 @@ n00bb_lower_slice_arguments(ir_lower_context_t *context,
                                            span);
     arguments[1] = n00bb_lower_slice_bound(context, bounds[1], bound_type,
                                            span);
-    // Constant bounds counting from the same end of the sequence are
-    // ordered whatever its length: a start after the end can only fail.
     int64_t start = 0, end = 0;
     if (bounds[0] && bounds[1]
         && constant_slice_bound(arguments[0], &start)
@@ -515,10 +486,6 @@ n00bb_lower_slice_arguments(ir_lower_context_t *context,
     return arguments[0] && arguments[1] && arguments[2];
 }
 
-// Lowers `container[start:end]`, `container[start to end]` and their
-// open-ended forms as a read of the slice, `__slice(container, start?,
-// end?, inclusive)` with the bounds as written. An assignment to the slice
-// stores through `__write_slice` with the same bounds (see n00bb_store_to).
 ir_value_t *
 n00bb_lower_slice_read(ir_lower_context_t *context, parse_grammar_t *grammar,
                        parse_tree_t *index_node, ir_value_t *container,

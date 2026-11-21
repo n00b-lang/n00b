@@ -186,8 +186,6 @@ let narrow_part: i32 = 2
 require add_two(wide_next, narrow_part) == 43
 require add_two(1, 2) == 3
 
-// An alias's type variables are its parameters, in the order its target
-// first names them.
 alias Grid = List[List['T]]
 alias Index = Dict['K, List['V]]
 
@@ -200,7 +198,6 @@ var index: Index[string, int] = new[Index[string, int]]()
 index["k"] = [1, 2]
 require grid[0][1] == 2 and cells(grid) == 2 and index.len() == 1
 
-// `Set` is the builtin alias `Dict['T, nil]`.
 func distinct(items: Set['T]) -> uint {
     return items.len()
 }

@@ -1,6 +1,3 @@
-# Two 'ffi literals declare the C function `abs` with different effects. The
-# analysis knows a C function by its symbol, so they must agree: this is
-# rejected rather than taking whichever declaration came first.
 [-
 library c
 link "c"

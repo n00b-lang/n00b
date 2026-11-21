@@ -1,2 +1,2 @@
-tests/diagnostics/lower/global_unset.n:9:12: error N00B-S0052: this may read global `counted`, which has no initializer, before anything sets it
-tests/diagnostics/lower/global_unset.n:24:9: error N00B-S0052: this may read global `counted`, which has no initializer, before anything sets it
+tests/diagnostics/lower/global_unset.n:6:12: error N00B-S0052: this may read global `counted`, which has no initializer, before anything sets it
+tests/diagnostics/lower/global_unset.n:21:9: error N00B-S0052: this may read global `counted`, which has no initializer, before anything sets it

@@ -283,9 +283,6 @@ written_place(ir_func_t *function, ir_places_t *places,
     return false;
 }
 
-// The parameters each function writes through while it holds no lock of
-// its own, following its calls: a write it makes under a lock it takes is
-// guarded wherever it is called from.
 typedef struct {
     ir_summaries_t        *summaries;
     const ir_race_hooks_t *hooks;
@@ -301,7 +298,6 @@ param_bit(uint32_t param)
     return param < 64 ? (uint64_t)1 << param : ALL_PARAMS;
 }
 
-// The parameters of `function` that `place`, one of its places, is under.
 static uint64_t
 param_of_place(const ir_func_t *function, const ir_place_t *place)
 {
@@ -361,8 +357,6 @@ static uint64_t
 unheld_writes(unheld_writes_t *u, const ir_func_t *function,
               const ir_summary_t *summary)
 {
-    // With no body to look into, every write the summary has may be
-    // unguarded.
     if (!function || !function->n_blocks) return summary_writes(summary);
     bool known = false;
     uintptr_t mask = (uintptr_t)core_dict_get(&u->masks, function, &known);
@@ -447,7 +441,6 @@ callee_writes(void *context, const ir_func_t *target,
               const ir_summary_t *summary)
 {
     call_write_t *walk = context;
-    // Only what the callee writes without a lock of its own can race.
     uint64_t written = unheld_writes(walk->unheld, target, summary);
     uint32_t count = ir_call_argument_count(walk->call);
     for (uint32_t q = 0; !walk->found && written && q < count; q++) {

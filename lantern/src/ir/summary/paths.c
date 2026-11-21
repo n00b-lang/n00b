@@ -131,9 +131,6 @@ step_eq(core_string_t a, core_string_t b)
         && a.data[0] == b.data[0] && !memcmp(a.data, b.data, a.u8_bytes);
 }
 
-// How deep `path` reaches below the place it names. A pointer parameter's
-// place is the object it refers to, so the step through the pointer to that
-// object is not below it.
 static uint32_t
 object_depth(const ir_spath_t *path)
 {
@@ -403,7 +400,6 @@ compare_paths(const ir_spath_t *a, const ir_spath_t *b)
     return a->flags == b->flags ? 0 : a->flags < b->flags ? -1 : 1;
 }
 
-// Whether compare_paths(a, b) == 0, without ordering the steps' text.
 static bool
 same_spath(const ir_spath_t *a, const ir_spath_t *b)
 {

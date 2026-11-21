@@ -319,9 +319,6 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             type = th_auto_deref(ir_module_types(context->module), type);
         bool variant = false;
         (void)th_named_info(th_resolve(type), nullptr, &variant, nullptr);
-        // The package that defines a type may build it field by field,
-        // bypassing its constructor; fields private to another module are
-        // checked when the literal is rewritten.
         core_translation_unit_t *defining = nullptr;
         if (!variant && th_kind_of(th_resolve(built_type)) == TH_NAMED)
             (void)record_scope_for_type(tu_state(lower->unit)->link_analysis,
@@ -597,8 +594,6 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         core_buffer_free(decoded);
         return array;
     }
-    // An `Array[byte]` copies the literal's UTF-8 bytes out of the string
-    // constant in one block (`__byte_array` in builtin.string.core).
     if (n00bb_scalar_role_is(element_type, IR_ROLE_BYTE)) {
         th_type *string = th_name(ir_module_types(context->module),
                                   CORE_STRING_STATIC("string"));

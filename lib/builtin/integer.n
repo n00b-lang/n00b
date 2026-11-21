@@ -6,8 +6,6 @@ trait Integer {
     func from_bits(self: 'T, bits: u128) -> 'T
 }
 
-// The type table knows the signedness of every integer type, `i:N`
-// included, which a `typecase` over the named types cannot cover.
 private func is_signed(value: 'T) -> bool {
     var copy: 'T = value
     let place: bitptr.Bitptr = bitptr.bitptr(ref copy)

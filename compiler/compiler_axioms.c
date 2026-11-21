@@ -132,9 +132,6 @@ static const n00bb_axiom_t axioms[] = {
     NATIVE("__ffi_release", "n00b_ffi_release", 0, 0, 0),
     NATIVE("__ffi_unwind_jump", "n00b_ffi_unwind_jump", IR_SUMMARY_DIVERGES,
            0, 0),
-    // Fails on a thread the runtime started, where libc's thread state is
-    // missing (runtime/linux_start.c); raw bindings of libraries that link
-    // "c" call it first.
     NATIVE("__ffi_libc_thread_check", "n00b_ffi_libc_thread_check",
            IR_SUMMARY_MAY_TRAP, 0, 0),
     FUNCTION("sys.internal.gc.alloc", "allocate_runtime_known_on_mutator", 0,
@@ -326,8 +323,6 @@ n00bb_axiom_note_pure_native(core_string_t symbol)
     note_generated_native(symbol, NATIVE_PURE, (core_string_t){0});
 }
 
-// A foreign native's entry packs its kind in bits 0-1, its effects from bit
-// 2, and which parameters it only reads or only writes in the high halves.
 _Static_assert(sizeof(uintptr_t) == 8, "foreign natives pack 64 bits");
 enum { NATIVE_EFFECT_BITS = 30, NATIVE_READ_ONLY = 32, NATIVE_WRITE_ONLY = 48 };
 

@@ -1,4 +1,3 @@
-// On the package path, so another package than the test.
 record Built {
     x: int
 }

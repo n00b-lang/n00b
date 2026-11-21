@@ -8,7 +8,6 @@
 
 typedef struct n00bb_abi_decl_index_t n00bb_abi_decl_index_t;
 
-/* Indexes only declarations owned by this TU. Row zero is reserved. */
 n00bb_abi_decl_index_t *n00bb_abi_decl_index_new(
     const parse_symtab_t *symbols);
 bool n00bb_abi_decl_generated_symbol(const parse_sym_entry_t *symbol);

@@ -1242,10 +1242,6 @@ rewrite_open_reference(box_calls_t *calls, ir_func_t *caller,
                     1);
 }
 
-// An `out` or `modify` parameter of open type receives a boxed reference to
-// the caller's place. A place that is a raw slot (a local or stack
-// allocation of open type, holding its value boxed) is passed as a boxed
-// reference to the slot's value.
 static bool
 rewrite_reference_arguments(box_calls_t *calls, ir_func_t *caller,
                             ir_instr_t *instruction)
@@ -1379,8 +1375,6 @@ address_storage_within(ir_func_t *caller, ir_value_t *address, unsigned depth,
                        ir_instr_t **visiting)
 {
     if (!address || depth > 16) return ADDRESS_UNKNOWN;
-    // A parameter's Ref is a boxed reference: one passed in, or the Ref to
-    // the caller's place an `out` or `modify` parameter is.
     if (address->kind == IR_VAL_PARAM)
         return address->index < th_func_nparams(caller->type)
             ? ADDRESS_BOXED : ADDRESS_UNKNOWN;
@@ -1793,9 +1787,6 @@ static bool
 rewrite_emitted(box_calls_t *calls)
 {
     n00bb_link_analysis_t *analysis = calls->analysis;
-    // The reached functions' bodies, cached ones among them: a cached body
-    // reached only through other cached bodies is lowered too (an inline
-    // function is lowered into each module that calls it).
     size_t emitted = analysis->emitted_functions.len;
     size_t count = emitted + analysis->cached_functions.len;
     core_dict_t rewritten_bodies;

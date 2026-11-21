@@ -213,8 +213,6 @@ note_entries(ir_summaries_t *summaries, uint32_t flag,
     record_input(summaries, input);
 }
 
-// A place the entries were asked about, as an input: the flag and the
-// place's kind and parameter in `site`, its global or heap type beside.
 static void
 note_entry_access(ir_summaries_t *summaries, const ir_module_t *module,
                   uint32_t flag, const ir_splace_t *place, uint8_t flags)

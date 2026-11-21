@@ -1,5 +1,3 @@
-// An array without an initializer starts zeroed, so its elements must have
-// a zero value.
 import shapes
 
 enum Level { low = 1, high = 2 }
@@ -29,7 +27,6 @@ func local_arrays() -> uint {
     return built.len() + holders.len() + made.len() + optional.len()
 }
 
-// A `let` array without a size takes its length from its assignment.
 func unassigned() -> uint {
     let never: Array[int]
     return never.len()

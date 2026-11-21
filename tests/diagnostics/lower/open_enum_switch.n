@@ -8,7 +8,6 @@ enum Closed_Signal {
     term = 2,
 }
 
-# Naming every item of a closed enum covers the subject.
 func closed_code(signal: Closed_Signal) -> int {
     switch signal {
         case hup:
@@ -18,7 +17,6 @@ func closed_code(signal: Closed_Signal) -> int {
     }
 }
 
-# An open enum can hold other values, so this can reach its end.
 func open_code(signal: Signal) -> int {
     switch signal {
         case hup:

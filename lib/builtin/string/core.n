@@ -522,8 +522,6 @@ func __string_storage(s: string) -> Array[u8]? {
     return storage.__value
 }
 
-// A string literal used as an `Array[byte]`: a fresh array holding a copy
-// of its UTF-8 bytes.
 func __byte_array(self: string) -> Array[byte] {
     var held: string = self
     let len: uint = __string_byte_len(held)
@@ -1171,8 +1169,6 @@ func validate_multibyte(s: string, p: uint, end: uint) -> i32 {
     return 0
 }
 
-# One code point decoded from UTF-8: `adv` bytes long, or 0 at an invalid
-# sequence.
 record Utf8_Step {
     cp:  char
     adv: i32
@@ -1206,8 +1202,6 @@ func utf8_decode_step(s: string, pos: u32) -> Utf8_Step {
     return step
 }
 
-# `s` as UTF-16 code units, followed by a 0 unit when `terminated`, as
-# for a wide C string.
 func utf16_units(s: string, terminated: bool = false) -> Array[u16]
     fail: String_Error {
     let len: uint = byte_len(s)

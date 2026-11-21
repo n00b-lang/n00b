@@ -1,42 +1,5 @@
 @lexer("javascript.lex")
 
-# JavaScript ES2024 Syntactic Grammar
-# Based on ECMA-262 (15th Edition, 2024) Annex A
-#
-# Lexer-provided tokens:
-#   %IDENTIFIER        - IdentifierName (not a keyword)
-#   %INTEGER           - NumericLiteral (integer forms: decimal, hex, octal, binary)
-#   %FLOAT             - NumericLiteral (floating-point forms)
-#   %BIGINT            - BigIntLiteral (e.g. 123n, 0xFFn)
-#   %STRING            - StringLiteral (single or double quoted)
-#   %TEMPLATE_HEAD     - TemplateHead (e.g. `...${)
-#   %TEMPLATE_MIDDLE   - TemplateMiddle (e.g. }...${)
-#   %TEMPLATE_TAIL     - TemplateTail (e.g. }...`)
-#   %NO_SUBST_TEMPLATE - NoSubstitutionTemplate (e.g. `...`)
-#   %REGEX_LIT         - RegularExpressionLiteral
-#   %PRIVATE_ID        - PrivateIdentifier (e.g. #name)
-#   %HASHBANG          - HashbangComment (#!/...)
-#
-# Notes on ASI (Automatic Semicolon Insertion):
-#   This grammar uses explicit %";" terminals. A conforming parser must
-#   implement ASI per ECMA-262 11.9 (inserting semicolons at line
-#   terminators before offending tokens, before "}", and at EOF).
-#
-# Notes on [no LineTerminator here] restrictions:
-#   Several productions have line-terminator restrictions (e.g. postfix
-#   ++/--, return, throw, yield, arrow =>). These are enforced by the
-#   parser, not expressible in context-free BNF.
-#
-# Notes on cover grammars:
-#   ECMA-262 uses CoverParenthesizedExpressionAndArrowParameterList,
-#   CoverCallExpressionAndAsyncArrowHead, and
-#   CoverInitializedName as cover grammars that are refined after
-#   parsing. This grammar represents the refined forms directly.
-
-# ============================================================================
-# 1. Scripts and Modules (A.5)
-# ============================================================================
-
 <script> ::= %HASHBANG? <statement_list>?
 
 <module> ::= %HASHBANG? <module_body>?
@@ -48,10 +11,6 @@
 <module_item> ::= <import_declaration>
     | <export_declaration>
     | <statement_list_item>
-
-# ============================================================================
-# 2. Statements and Declarations (A.3)
-# ============================================================================
 
 <statement_list> @hardline ::= <statement_list_item>+
 
@@ -85,17 +44,9 @@
 <breakable_statement> ::= <iteration_statement>
     | <switch_statement>
 
-# ============================================================================
-# 2.1 Block Statement
-# ============================================================================
-
 <block_statement> ::= <block>
 
 <block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <statement_list>? %"}"
-
-# ============================================================================
-# 2.2 Variable Statement
-# ============================================================================
 
 <variable_statement> @nospace($2) ::= %"var" <variable_declaration_list> %";"
 
@@ -103,10 +54,6 @@
 
 <variable_declaration> ::= <binding_identifier> <initializer>?
     | <binding_pattern> <initializer>
-
-# ============================================================================
-# 2.3 Lexical Declarations (let, const)
-# ============================================================================
 
 <lexical_declaration> ::= <let_or_const> <binding_list> %";"
 
@@ -118,29 +65,12 @@
 <lexical_binding> ::= <binding_identifier> <initializer>?
     | <binding_pattern> <initializer>
 
-# ============================================================================
-# 2.4 Empty Statement
-# ============================================================================
-
 <empty_statement> ::= %";"
 
-# ============================================================================
-# 2.5 Expression Statement
-# ============================================================================
-
-# [lookahead not in { "{", "function", "async function", "class", "let [" }]
 <expression_statement> @nospace($1) ::= <expression> %";"
-
-# ============================================================================
-# 2.6 If Statement
-# ============================================================================
 
 <if_statement> ::= %"if" %"(" <expression> %")" <statement> %"else" <statement>
     | %"if" %"(" <expression> %")" <statement>
-
-# ============================================================================
-# 2.7 Iteration Statements
-# ============================================================================
 
 <iteration_statement> ::= <do_while_statement>
     | <while_statement>
@@ -156,7 +86,6 @@
     | %"for" %"(" %"var" <variable_declaration_list> %";" <expression>? %";" <expression>? %")" <statement>
     | %"for" %"(" <lexical_declaration_no_semi> %";" <expression>? %";" <expression>? %")" <statement>
 
-# Helper: lexical declaration without trailing semicolon (used inside for-heads)
 <lexical_declaration_no_semi> ::= <let_or_const> <binding_list>
 
 <for_in_statement> ::= %"for" %"(" <left_hand_side_expression> %"in" <expression> %")" <statement>
@@ -175,10 +104,6 @@
 <for_binding> ::= <binding_identifier>
     | <binding_pattern>
 
-# ============================================================================
-# 2.8 Switch Statement
-# ============================================================================
-
 <switch_statement> ::= %"switch" %"(" <expression> %")" <case_block>
 
 <case_block> ::= %"{" <case_clauses>? %"}"
@@ -190,47 +115,23 @@
 
 <default_clause> ::= %"default" %":" <statement_list>?
 
-# ============================================================================
-# 2.9 Continue, Break, Return
-# ============================================================================
-
-# [no LineTerminator here] before label
 <continue_statement> ::= %"continue" %";"
     | %"continue" <label_identifier> %";"
 
-# [no LineTerminator here] before label
 <break_statement> ::= %"break" %";"
     | %"break" <label_identifier> %";"
 
-# [no LineTerminator here] before expression
 <return_statement> @nospace($1) ::= %"return" %";"
 <return_statement> @nospace($2) ::= %"return" <expression> %";"
 
-# ============================================================================
-# 2.10 With Statement
-# ============================================================================
-
 <with_statement> ::= %"with" %"(" <expression> %")" <statement>
-
-# ============================================================================
-# 2.11 Labelled Statement
-# ============================================================================
 
 <labelled_statement> ::= <label_identifier> %":" <labelled_item>
 
 <labelled_item> ::= <statement>
     | <function_declaration>
 
-# ============================================================================
-# 2.12 Throw Statement
-# ============================================================================
-
-# [no LineTerminator here] before expression
 <throw_statement> ::= %"throw" <expression> %";"
-
-# ============================================================================
-# 2.13 Try Statement
-# ============================================================================
 
 <try_statement> ::= %"try" <block> <catch>
     | %"try" <block> <finally>
@@ -244,15 +145,7 @@
 <catch_parameter> ::= <binding_identifier>
     | <binding_pattern>
 
-# ============================================================================
-# 2.14 Debugger Statement
-# ============================================================================
-
 <debugger_statement> ::= %"debugger" %";"
-
-# ============================================================================
-# 3. Function Declarations (A.4)
-# ============================================================================
 
 <function_declaration> @nospace($2) @nospace($3) @nospace($4) @hardline($6) @indent($6) @hardline($7) ::= %"function" <binding_identifier> %"(" <formal_parameters>? %")" %"{" <function_body> %"}"
 <function_declaration> @nospace($1) @nospace($2) @nospace($3) @hardline($5) @indent($5) @hardline($6) ::= %"function" %"(" <formal_parameters>? %")" %"{" <function_body> %"}"
@@ -272,32 +165,21 @@
 
 <function_body> ::= <statement_list>?
 
-# ============================================================================
-# 3.1 Arrow Functions
-# ============================================================================
-
 <arrow_function> ::= <arrow_parameters> %"=>" <concise_body>
 
-# [no LineTerminator here] before =>
 <async_arrow_function> ::= %"async" <arrow_parameters> %"=>" <async_concise_body>
     | %"async" <binding_identifier> %"=>" <async_concise_body>
 
 <arrow_parameters> ::= <binding_identifier>
     | %"(" <formal_parameters>? %")"
 
-# [lookahead != "{"]
 <concise_body> ::= <assignment_expression_no_brace>
     | %"{" <function_body> %"}"
 
-# The spec says [lookahead != "{"], parser must disambiguate
 <assignment_expression_no_brace> ::= <assignment_expression>
 
 <async_concise_body> ::= <assignment_expression_no_brace>
     | %"{" <async_function_body> %"}"
-
-# ============================================================================
-# 3.2 Generator Functions
-# ============================================================================
 
 <generator_declaration> ::= %"function" %"*" <binding_identifier> %"(" <formal_parameters>? %")" %"{" <generator_body> %"}"
     | %"function" %"*" %"(" <formal_parameters>? %")" %"{" <generator_body> %"}"
@@ -306,16 +188,10 @@
 
 <generator_body> ::= <function_body>
 
-# [no LineTerminator here] before * in yield *
 <yield_expression> ::= %"yield"
     | %"yield" <assignment_expression>
     | %"yield" %"*" <assignment_expression>
 
-# ============================================================================
-# 3.3 Async Functions
-# ============================================================================
-
-# [no LineTerminator here] between "async" and "function"
 <async_function_declaration> ::= %"async" %"function" <binding_identifier> %"(" <formal_parameters>? %")" %"{" <async_function_body> %"}"
     | %"async" %"function" %"(" <formal_parameters>? %")" %"{" <async_function_body> %"}"
 
@@ -323,24 +199,14 @@
 
 <async_function_body> ::= <function_body>
 
-# [no LineTerminator here] before operand
 <await_expression> ::= %"await" <unary_expression>
 
-# ============================================================================
-# 3.4 Async Generator Functions
-# ============================================================================
-
-# [no LineTerminator here] between "async" and "function"
 <async_generator_declaration> ::= %"async" %"function" %"*" <binding_identifier> %"(" <formal_parameters>? %")" %"{" <async_generator_body> %"}"
     | %"async" %"function" %"*" %"(" <formal_parameters>? %")" %"{" <async_generator_body> %"}"
 
 <async_generator_expression> ::= %"async" %"function" %"*" <binding_identifier>? %"(" <formal_parameters>? %")" %"{" <async_generator_body> %"}"
 
 <async_generator_body> ::= <function_body>
-
-# ============================================================================
-# 4. Class Declarations and Expressions (A.6)
-# ============================================================================
 
 <class_declaration> ::= %"class" <binding_identifier> <class_tail>
     | %"class" <class_tail>
@@ -362,10 +228,6 @@
     | <class_static_block>
     | %";"
 
-# ============================================================================
-# 4.1 Method Definitions
-# ============================================================================
-
 <method_definition> ::= <class_element_name> %"(" <formal_parameters>? %")" %"{" <function_body> %"}"
     | <generator_method>
     | <async_method>
@@ -375,39 +237,18 @@
 
 <generator_method> ::= %"*" <class_element_name> %"(" <formal_parameters>? %")" %"{" <generator_body> %"}"
 
-# [no LineTerminator here] between "async" and method name / *
 <async_method> ::= %"async" <class_element_name> %"(" <formal_parameters>? %")" %"{" <async_function_body> %"}"
 
 <async_generator_method> ::= %"async" %"*" <class_element_name> %"(" <formal_parameters>? %")" %"{" <async_generator_body> %"}"
 
-# ============================================================================
-# 4.2 Field Definitions
-# ============================================================================
-
 <field_definition> ::= <class_element_name> <initializer>?
-
-# ============================================================================
-# 4.3 Class Element Names
-# ============================================================================
 
 <class_element_name> ::= <property_name>
     | %PRIVATE_ID
 
-# ============================================================================
-# 4.4 Static Initialization Blocks
-# ============================================================================
-
 <class_static_block> ::= %"static" %"{" <class_static_block_body> %"}"
 
 <class_static_block_body> ::= <statement_list>?
-
-# ============================================================================
-# 5. Expressions (A.2)
-# ============================================================================
-
-# ============================================================================
-# 5.1 Identifiers
-# ============================================================================
 
 <identifier_reference> ::= %IDENTIFIER
     | %"yield"
@@ -424,7 +265,6 @@
 <identifier_name> ::= %IDENTIFIER
     | <reserved_word>
 
-# Reserved words that can appear as property names
 <reserved_word> ::= %"break" | %"case" | %"catch" | %"class" | %"const"
     | %"continue" | %"debugger" | %"default" | %"delete" | %"do"
     | %"else" | %"enum" | %"export" | %"extends" | %"false"
@@ -435,10 +275,6 @@
     | %"while" | %"with" | %"yield" | %"async" | %"await"
     | %"static" | %"get" | %"set" | %"of" | %"from"
     | %"as" | %"target" | %"meta"
-
-# ============================================================================
-# 5.2 Primary Expressions
-# ============================================================================
 
 <primary_expression> ::= %"this"
     | <identifier_reference>
@@ -456,10 +292,6 @@
 
 <parenthesized_expression> ::= %"(" <expression> %")"
 
-# ============================================================================
-# 5.3 Literals
-# ============================================================================
-
 <literal> ::= %"null"
     | %"true"
     | %"false"
@@ -467,10 +299,6 @@
     | %FLOAT
     | %BIGINT
     | %STRING
-
-# ============================================================================
-# 5.4 Array Literal
-# ============================================================================
 
 <array_literal> ::= %"[" <elision>? %"]"
     | %"[" <element_list> %"]"
@@ -487,10 +315,6 @@
 
 <spread_element> ::= %"..." <assignment_expression>
 
-# ============================================================================
-# 5.5 Object Literal
-# ============================================================================
-
 <object_literal> ::= %"{" %"}"
     | %"{" <property_definition_list> %"}"
     | %"{" <property_definition_list> %"," %"}"
@@ -503,7 +327,6 @@
     | <method_definition>
     | %"..." <assignment_expression>
 
-# CoverInitializedName - used in destructuring default values
 <cover_initialized_name> ::= <identifier_reference> <initializer>
 
 <property_name> ::= <literal_property_name>
@@ -516,10 +339,6 @@
 
 <computed_property_name> ::= %"[" <assignment_expression> %"]"
 
-# ============================================================================
-# 5.6 Template Literals
-# ============================================================================
-
 <template_literal> ::= %NO_SUBST_TEMPLATE
     | <template_head_expr_spans>
 
@@ -530,10 +349,6 @@
 
 <template_middle_list> ::= %TEMPLATE_MIDDLE <expression>?
     | <template_middle_list> %TEMPLATE_MIDDLE <expression>?
-
-# ============================================================================
-# 5.7 Member Expressions and Call Expressions
-# ============================================================================
 
 <member_expression> @nospace ::= <primary_expression>
     | <member_expression> %"[" <expression> %"]"
@@ -547,7 +362,6 @@
 <super_property> ::= %"super" %"[" <expression> %"]"
     | %"super" %"." <identifier_name>
 
-# import.meta and new.target
 <meta_property> ::= %"new" %"." %"target"
     | %"import" %"." %"meta"
 
@@ -575,10 +389,6 @@
     | %"..." <assignment_expression> (%"," <assignment_expression>)*
     | <argument_list> %"," %"..." <assignment_expression>
 
-# ============================================================================
-# 5.8 Optional Chaining (?.)
-# ============================================================================
-
 <optional_expression> ::= <member_expression> <optional_chain>
     | <call_expression> <optional_chain>
     | <optional_expression> <optional_chain>
@@ -594,29 +404,16 @@
     | <optional_chain> %"." %PRIVATE_ID
     | <optional_chain> <template_literal>
 
-# ============================================================================
-# 5.9 Left-Hand-Side Expressions
-# ============================================================================
-
 <left_hand_side_expression> ::= <new_expression>
     | <call_expression>
     | <optional_expression>
     | <assignment_pattern>
 
-# ============================================================================
-# 5.10 Update Expressions
-# ============================================================================
-
-# [no LineTerminator here] before ++ or --
 <update_expression> ::= <left_hand_side_expression>
     | <left_hand_side_expression> %"++"
     | <left_hand_side_expression> %"--"
     | %"++" <unary_expression>
     | %"--" <unary_expression>
-
-# ============================================================================
-# 5.11 Unary Expressions
-# ============================================================================
 
 <unary_expression> ::= <update_expression>
     | %"delete" <unary_expression>
@@ -628,16 +425,8 @@
     | %"!" <unary_expression>
     | <await_expression>
 
-# ============================================================================
-# 5.12 Exponentiation Expression
-# ============================================================================
-
 <exponentiation_expression> ::= <unary_expression>
     | <update_expression> %"**" <exponentiation_expression>
-
-# ============================================================================
-# 5.13 Multiplicative, Additive, Shift Expressions
-# ============================================================================
 
 <multiplicative_expression> ::= <exponentiation_expression>
     | <multiplicative_expression> %"*" <exponentiation_expression>
@@ -653,10 +442,6 @@
     | <shift_expression> %">>" <additive_expression>
     | <shift_expression> %">>>" <additive_expression>
 
-# ============================================================================
-# 5.14 Relational Expressions
-# ============================================================================
-
 <relational_expression> ::= <shift_expression>
     | <relational_expression> %"<" <shift_expression>
     | <relational_expression> %">" <shift_expression>
@@ -666,19 +451,11 @@
     | <relational_expression> %"in" <shift_expression>
     | %PRIVATE_ID %"in" <shift_expression>
 
-# ============================================================================
-# 5.15 Equality Expressions
-# ============================================================================
-
 <equality_expression> ::= <relational_expression>
     | <equality_expression> %"==" <relational_expression>
     | <equality_expression> %"!=" <relational_expression>
     | <equality_expression> %"===" <relational_expression>
     | <equality_expression> %"!==" <relational_expression>
-
-# ============================================================================
-# 5.16 Binary Bitwise Expressions
-# ============================================================================
 
 <bitwise_AND_expression> ::= <equality_expression>
     | <bitwise_AND_expression> %"&" <equality_expression>
@@ -689,19 +466,11 @@
 <bitwise_OR_expression> ::= <bitwise_XOR_expression>
     | <bitwise_OR_expression> %"|" <bitwise_XOR_expression>
 
-# ============================================================================
-# 5.17 Binary Logical Expressions
-# ============================================================================
-
 <logical_AND_expression> ::= <bitwise_OR_expression>
     | <logical_AND_expression> %"&&" <bitwise_OR_expression>
 
 <logical_OR_expression> ::= <logical_AND_expression>
     | <logical_OR_expression> %"||" <logical_AND_expression>
-
-# ============================================================================
-# 5.18 Nullish Coalescing Expression
-# ============================================================================
 
 <coalesce_expression> ::= <bitwise_OR_expression> %"??" <bitwise_OR_expression>
     | <coalesce_expression> %"??" <bitwise_OR_expression>
@@ -709,16 +478,8 @@
 <short_circuit_expression> ::= <logical_OR_expression>
     | <coalesce_expression>
 
-# ============================================================================
-# 5.19 Conditional (Ternary) Expression
-# ============================================================================
-
 <conditional_expression> ::= <short_circuit_expression>
     | <short_circuit_expression> %"?" <assignment_expression> %":" <assignment_expression>
-
-# ============================================================================
-# 5.20 Assignment Expressions
-# ============================================================================
 
 <assignment_expression> ::= <conditional_expression>
     | <yield_expression>
@@ -745,23 +506,11 @@
     | %"||="
     | %"??="
 
-# ============================================================================
-# 5.21 Comma Expression
-# ============================================================================
-
 <expression> ::= <assignment_expression>
     | <expression> %"," <assignment_expression>
 
-# ============================================================================
-# 6. Binding Patterns (Destructuring) (A.3)
-# ============================================================================
-
 <binding_pattern> ::= <object_binding_pattern>
     | <array_binding_pattern>
-
-# ============================================================================
-# 6.1 Object Binding Pattern
-# ============================================================================
 
 <object_binding_pattern> ::= %"{" %"}"
     | %"{" <binding_rest_property> %"}"
@@ -780,10 +529,6 @@
 
 <binding_rest_property> ::= %"..." <binding_identifier>
 
-# ============================================================================
-# 6.2 Array Binding Pattern
-# ============================================================================
-
 <array_binding_pattern> ::= %"[" <elision>? <binding_rest_element>? %"]"
     | %"[" <binding_element_list> %"]"
     | %"[" <binding_element_list> %"," <elision>? <binding_rest_element>? %"]"
@@ -795,19 +540,7 @@
 <binding_rest_element> ::= %"..." <binding_identifier>
     | %"..." <binding_pattern>
 
-# ============================================================================
-# 6.3 Initializer
-# ============================================================================
-
 <initializer> ::= %"=" <assignment_expression>
-
-# ============================================================================
-# 7. Assignment Patterns (Destructuring LHS) (A.3)
-# ============================================================================
-
-# These mirror binding patterns but allow any LeftHandSideExpression
-# as the target. Used when destructuring appears on the LHS of an
-# assignment expression.
 
 <assignment_pattern> ::= <object_assignment_pattern>
     | <array_assignment_pattern>
@@ -836,10 +569,6 @@
 <assignment_elision_element> ::= <elision>? <assignment_element>
 
 <assignment_rest_element> ::= %"..." <left_hand_side_expression>
-
-# ============================================================================
-# 8. Modules - Import Declarations (A.5)
-# ============================================================================
 
 <import_declaration> @nospace($3) ::= %"import" <import_clause> <from_clause> %";"
     | %"import" <module_specifier> %";"
@@ -871,10 +600,6 @@
 
 <module_export_name> ::= <identifier_name>
     | %STRING
-
-# ============================================================================
-# 9. Modules - Export Declarations (A.5)
-# ============================================================================
 
 <export_declaration> ::= %"export" %"*" <from_clause> %";"
     | %"export" %"*" %"as" <module_export_name> <from_clause> %";"

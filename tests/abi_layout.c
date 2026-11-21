@@ -474,8 +474,6 @@ int main(void)
             && ir_layout_compute(module, c_record, nullptr)
             && c_descriptor->size.value == 8
             && c_descriptor->align.value == 4;
-        // `align(16)` raises the alignment and pads the size to match;
-        // `align(2)` is less than the fields need, so it's refused.
         th_type *aligned_record = TH_NAME(types, "AlignedCRecord");
         th_type *narrow_record = TH_NAME(types, "NarrowCRecord");
         uint32_t natural = 0;
@@ -540,7 +538,6 @@ int main(void)
             module, packed_array, target.triple);
         const ir_final_layout_t *c_bool_array_layout = ir_layout_final(
             module, c_bool_array, target.triple);
-        // Packed bits inline: one bit each, in whole bytes from a byte.
         ok = ok && packed_array_layout
             && packed_array_layout->intrinsic_bits == 16
             && packed_array_layout->members[0].inline_element_stride_bits == 1

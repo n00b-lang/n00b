@@ -1,0 +1,7 @@
+fn g_strsplit(s: *cstr, delim: *cstr, max: c_int)
+    -> own *[own *cstr; until null] release g_strfreev
+
+fn g_hash_table_get_keys_as_array(t: HashTable, len: out *c_uint)
+    -> own *[*cstr with t; *len] release g_free
+
+fn g_get_system_data_dirs() -> *[*cstr static; until null] static

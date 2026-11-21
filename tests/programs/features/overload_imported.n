@@ -6,8 +6,6 @@ func put(modify buffer: Array[u8]) -> nil fail: int {
     buffer[0] = 9
 }
 
-# The same pair with no written return type: the generic one's result is
-# known only from its body.
 func store(modify value: 'T) fail: int where 'T : Integer {
     value = value.from_bits(cast[u128](5))
 }
@@ -28,8 +26,6 @@ func reading(self: Gauge, scale: int) -> int {
     return 1
 }
 
-# A private function is no candidate outside its module, even where it
-# would fit more closely.
 private func reading(self: Gauge, scale: i32) -> int {
     return 99
 }

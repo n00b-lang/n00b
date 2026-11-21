@@ -1,13 +1,7 @@
-# Stopping a thread for the collector: thread_suspend stops the thread that
-# `control` names and saves its registers in `snapshot`; thread_resume lets
-# it run again. `control` is what that thread's thread_control_self
-# returned. Each returns 0, or -1 on failure.
-
 import internal.threads
 bring address_ref from internal.os.support
 
 when target_os() == "linux" {
-    # A queued signal, which carries the context its handler fills.
     [-
     library kernel
     platforms x86_64-linux-gnu, aarch64-linux-gnu
@@ -33,9 +27,6 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # The runtime's stop-the-world signal handler and its rt_sigreturn
-    # trampoline, which can't be n00b code: the handler runs on a thread
-    # stopped at an arbitrary instruction.
     [-
     library n00b
 
@@ -52,14 +43,10 @@ when target_os() == "linux" {
 
     bring now_ns from internal.os.clock
 
-    # The real-time signal that stops a thread, and SI_QUEUE, the code of a
-    # signal queued with a value.
     private const stw_signal: i32 = 40
     private const signal_queued: i32 = -1
-    # SA_SIGINFO | SA_RESTART | SA_RESTORER.
     private const stw_action_flags: u64 = 0x14000004
 
-    # The start of Linux's struct kernel_sigaction.
     private record Linux_Sigaction layout(c) {
         handler:  u64
         flags:    u64
@@ -67,8 +54,6 @@ when target_os() == "linux" {
         mask:     u64
     }
 
-    # Linux's siginfo for a queued signal, whose value is the context to
-    # fill.
     private record Linux_Siginfo layout(c) {
         signal:  i32
         error:   i32
@@ -80,8 +65,6 @@ when target_os() == "linux" {
         rest:    Array[u64][12]
     }
 
-    # 0 while the stop signal's handler isn't installed, 1 while it's being
-    # installed, 2 once it is, and 3 if it couldn't be.
     private var stw_handler_state: Atomic[u32] = 0
 
     private func install_stw_handler() -> bool {
@@ -106,7 +89,6 @@ when target_os() == "linux" {
         return __atomic_load(ref stw_handler_state) == 2
     }
 } else when target_os() == "macos" {
-    # Through the thread's Mach port.
     [-
     library c
     platforms aarch64-apple-darwin, x86_64-apple-darwin
@@ -131,14 +113,11 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # ARM_THREAD_STATE64 and x86_THREAD_STATE64, and their sizes in 32-bit
-    # units.
     private const arm_thread_state: i32 = 6
     private const arm_thread_state_count: u32 = 68
     private const x86_thread_state: i32 = 4
     private const x86_thread_state_count: u32 = 42
 
-    # macOS's arm_thread_state64_t.
     private record Arm_Thread_State layout(c) {
         x:     Array[u64][29]
         fp:    u64
@@ -149,8 +128,6 @@ when target_os() == "linux" {
         flags: u32
     }
 
-    # macOS's x86_thread_state64_t: rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp,
-    # r8 to r15, rip, rflags, cs, fs and gs.
     private record X86_Thread_State layout(c) {
         registers: Array[u64][21]
     }
@@ -185,15 +162,11 @@ when target_os() == "linux" {
     }
     -]'ffi
 
-    # THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, CONTEXT_CONTROL |
-    # CONTEXT_INTEGER for x86_64, and SuspendThread's failure.
     private const thread_stop_access: u32 = 0xa
     private const context_control_integer: u32 = 0x100003
-    # The size of Windows_Context, which is x86_64's CONTEXT.
     private const windows_context_bytes: uint = 1232
     private const suspend_failed: u32 = 0xffffffff
 
-    # Windows' x86_64 CONTEXT, which GetThreadContext needs 16-byte aligned.
     private record Windows_Context layout(c) align(16) {
         homes:     Array[u64][6]
         flags:     u32
@@ -247,8 +220,6 @@ func thread_suspend(control: uint,
         } fail(failure) {
             return -1
         }
-        # The handler, on the stopped thread, sets `parked` once it has
-        # saved the registers.
         let started: u64 = now_ns()
         while __atomic_load(ref snapshot.__value.parked) == 0 {
             require timeout_ns == 0 or now_ns() - started <= timeout_ns
@@ -293,7 +264,6 @@ func thread_suspend(control: uint,
             snapshot.__value.sp = address_ref(cast[uint](state.registers[7]))
             snapshot.__value.fp = address_ref(cast[uint](state.registers[6]))
             snapshot.__value.pc = address_ref(cast[uint](state.registers[16]))
-            # Every general register but rsp.
             var i: uint = 0
             var saved: uint = 0
             while i < 16 {
@@ -320,8 +290,6 @@ func thread_suspend(control: uint,
             _ = close_handle_raw(handle)
             return -1
         }
-        # GetThreadContext reads the flags, which say what to fill, so the
-        # rest is zeroed first.
         var state: Windows_Context
         __gc_memset(ref state, 0, windows_context_bytes)
         state.flags = context_control_integer
@@ -362,7 +330,6 @@ func thread_resume(control: uint,
             return -1
         }
         snapshot.__value.nregs = 0
-        # The handler waiting on the stopped thread sees this and returns.
         __atomic_store(ref snapshot.__value.parked, 0)
         return 0
     } else when target_os() == "macos" {

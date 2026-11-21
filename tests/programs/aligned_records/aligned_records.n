@@ -1,8 +1,5 @@
 import aligned_types
 
-# Records with `align(N)`: on the stack, inside other records and in heap
-# arrays, each at an address that is a multiple of N.
-
 func low_bits(address: Ref[byte], alignment: uint) -> uint {
     return __abi_ref_address(address) & (alignment - 1)
 }

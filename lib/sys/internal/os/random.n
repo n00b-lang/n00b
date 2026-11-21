@@ -1,5 +1,3 @@
-# Random bytes from the operating system.
-
 import internal.errno
 
 when target_os() == "linux" {
@@ -53,12 +51,9 @@ when target_os() == "linux" {
     -]'ffi
 
     bring chunk from internal.os.support
-    # BCRYPT_USE_SYSTEM_PREFERRED_RNG.
     private const system_rng: u32 = 2
 }
 
-# Fills `buffer[start:end]` with random bytes from the operating
-# system.
 func random_bytes(buffer: Array[u8], start: uint, end: uint)
     fail: internal.errno.Errno {
     require start <= end and end <= __array_length(buffer)

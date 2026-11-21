@@ -21,7 +21,6 @@ n00b_os_physical_memory(void)
     uint64_t bytes = atomic_load_explicit(&cached, memory_order_relaxed);
 #if defined(__linux__) && defined(N00B_LIBC_FREE)
     if (!bytes) {
-        // The kernel's struct sysinfo; total RAM is in units of mem_unit.
         struct sysinfo info = {0};
         long result = n00b_linux_syscall6(__NR_sysinfo, (long)&info, 0, 0, 0,
                                           0, 0);

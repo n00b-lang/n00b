@@ -1,7 +1,3 @@
-# An inline array of packed bits in a record (`Array[bool][3]`) starts on
-# a byte and takes whole bytes, between packed neighbors. Sized `modify`
-# and `out` parameters of packed bits are given the caller's bits: those of
-# such a field, a module variable, a local or a grid.
 record Packed {
     a: bool
     flags: Array[bool][3]

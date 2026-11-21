@@ -174,8 +174,6 @@ entry_cell(pt_entry_t *entry, ir_spath_t path)
     return cell;
 }
 
-// The places a call sets: each whole object its sole callee must write
-// through an `out` or `modify` parameter, named as the caller's place.
 static void
 entry_call_gens(pt_t *pt, const ir_instr_t *in)
 {
@@ -319,8 +317,6 @@ argument_is(flow_query_t *q, const ir_instr_t *call, const ir_spath_t *path,
     for (size_t i = 0; i < items.len; i++)
         if (items.data[i].flow != PT_SAME || items.data[i].depth)
             items.len = 0;
-    // Asked about one leaf of the place, the argument must lead to it (a
-    // pointer parameter's referent is a leaf below the parameter itself).
     ir_spath_t mapped;
     bool matches = definite_path(&items, &mapped)
         && covers_place(&mapped, want, q->leaf);

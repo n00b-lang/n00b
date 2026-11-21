@@ -1,37 +1,5 @@
 @lexer("kotlin.lex")
 
-# ============================================================================
-# Kotlin Grammar (Syntactic)
-#
-# Translated from the official Kotlin Language Specification (v1.9)
-# https://kotlinlang.org/spec/syntax-and-grammar.html
-#
-# Lexer token types:
-#   %IDENTIFIER    - identifiers (also includes soft keywords contextually)
-#   %INTEGER       - integer literals (decimal, hex, binary, long, unsigned)
-#   %FLOAT         - floating-point literals
-#   %STRING        - single-line string literal content
-#   %MULTILINE_STRING - triple-quoted string literal content
-#   %CHAR          - character literal
-#   %NL            - newline (Kotlin is newline-sensitive)
-#   %SHEBANG       - shebang line (#!...)
-#
-# Conventions:
-#   <rule>         - non-terminal
-#   %"keyword"     - keyword or operator terminal
-#   ( ... )        - grouping
-#   ?              - optional (zero or one)
-#   *              - zero or more
-#   +              - one or more
-#   |              - alternation
-#   ""             - empty string
-# ============================================================================
-
-
-# ============================================================================
-# Top-level: File and Script Structure
-# ============================================================================
-
 <kotlin-file> @hardline @nospace($1) @nospace($6) ::= <shebang-line>? %NL* <file-annotation>* <package-header>? <import-list>? <top-level-object>* %EOF
 
 <script> ::= <shebang-line>? %NL* <file-annotation>* <package-header>? <import-list>? (<statement> <semi>)* %EOF
@@ -51,10 +19,6 @@
 <top-level-object> @nospace($1) ::= <declaration> <semis>?
 
 
-# ============================================================================
-# Declarations
-# ============================================================================
-
 <declaration> ::= <class-declaration>
                 | <object-declaration>
                 | <function-declaration>
@@ -63,10 +27,6 @@
 
 <type-alias> ::= <modifiers>? %"typealias" %NL* <simple-identifier> (%NL* <type-parameters>)? %NL* %"=" %NL* <type>
 
-
-# ============================================================================
-# Class Declarations
-# ============================================================================
 
 <class-declaration> ::= <modifiers>? (<class-keyword> | (%"fun" %NL*)? %"interface") %NL* <simple-identifier> (%NL* <type-parameters>)? (%NL* <primary-constructor>)? (%NL* %":" %NL* <delegation-specifiers>)? (%NL* <type-constraints>)? ((%NL* <class-body>) | (%NL* <enum-class-body>))?
 
@@ -80,10 +40,6 @@
 
 <class-parameter> ::= <modifiers>? (%"val" | %"var")? %NL* <simple-identifier> %":" %NL* <type> (%NL* %"=" %NL* <expression>)?
 
-
-# ============================================================================
-# Delegation Specifiers
-# ============================================================================
 
 <delegation-specifiers> ::= <annotated-delegation-specifier> (%NL* %"," %NL* <annotated-delegation-specifier>)*
 
@@ -100,10 +56,6 @@
 <explicit-delegation> ::= (<user-type> | <function-type>) %NL* %"by" %NL* <expression>
 
 
-# ============================================================================
-# Type Parameters and Constraints
-# ============================================================================
-
 <type-parameters> ::= %"<" %NL* <type-parameter> (%NL* %"," %NL* <type-parameter>)* (%NL* %",")? %NL* %">"
 
 <type-parameter> ::= <type-parameter-modifiers>? %NL* <simple-identifier> (%NL* %":" %NL* <type>)?
@@ -112,10 +64,6 @@
 
 <type-constraint> ::= <annotation>* <simple-identifier> %NL* %":" %NL* <type>
 
-
-# ============================================================================
-# Class Members
-# ============================================================================
 
 <class-member-declarations> ::= (<class-member-declaration> <semis>?)*
 
@@ -129,10 +77,6 @@
 <companion-object> ::= <modifiers>? %"companion" %NL* (%"data" %NL*)? %"object" (%NL* <simple-identifier>)? (%NL* %":" %NL* <delegation-specifiers>)? (%NL* <class-body>)?
 
 
-# ============================================================================
-# Function Declarations
-# ============================================================================
-
 <function-declaration> @nospace($2) @nospace($3) @nospace($4) @nospace($6) @nospace($7) @nospace($8) ::= <modifiers>? %"fun" (%NL* <type-parameters>)? (%NL* <receiver-type> %NL* %".")? %NL* <simple-identifier> %NL* <function-value-parameters> (%NL* %":" %NL* <type>)? (%NL* <type-constraints>)? (%NL* <function-body>)?
 
 <function-value-parameters> @nospace ::= %"(" %NL* (<function-value-parameter> (%NL* %"," %NL* <function-value-parameter>)* (%NL* %",")?)? %NL* %")"
@@ -144,10 +88,6 @@
 
 <parameter> @nospace($1) @nospace($2) @nospace($3) ::= <simple-identifier> %NL* %":" %NL* <type>
 
-
-# ============================================================================
-# Property Declarations
-# ============================================================================
 
 <property-declaration> ::= <modifiers>? (%"val" | %"var") (%NL* <type-parameters>)? (%NL* <receiver-type> %NL* %".")? %NL* (<multi-variable-declaration> | <variable-declaration>) (%NL* <type-constraints>)? (%NL* ((%"=" %NL* <expression>) | <property-delegate>))? (%NL* %";")? %NL* ((<getter>? (%NL* <semi>? <setter>)?) | (<setter>? (%NL* <semi>? <getter>)?))
 
@@ -166,25 +106,13 @@
 <multi-variable-declaration> ::= %"(" %NL* <variable-declaration> (%NL* %"," %NL* <variable-declaration>)* (%NL* %",")? %NL* %")"
 
 
-# ============================================================================
-# Object Declarations
-# ============================================================================
-
 <object-declaration> ::= <modifiers>? %"object" %NL* <simple-identifier> (%NL* %":" %NL* <delegation-specifiers>)? (%NL* <class-body>)?
 
-
-# ============================================================================
-# Secondary Constructors
-# ============================================================================
 
 <secondary-constructor> ::= <modifiers>? %"constructor" %NL* <function-value-parameters> (%NL* %":" %NL* <constructor-delegation-call>)? %NL* <block>?
 
 <constructor-delegation-call> ::= (%"this" | %"super") %NL* <value-arguments>
 
-
-# ============================================================================
-# Enum Classes
-# ============================================================================
 
 <enum-class-body> ::= %"{" %NL* <enum-entries>? (%NL* %";" %NL* <class-member-declarations>)? %NL* %"}"
 
@@ -192,10 +120,6 @@
 
 <enum-entry> ::= (<modifiers> %NL*)? <simple-identifier> (%NL* <value-arguments>)? (%NL* <class-body>)?
 
-
-# ============================================================================
-# Type System
-# ============================================================================
 
 <type> ::= <type-modifiers>? (<function-type> | <parenthesized-type> | <nullable-type> | <type-reference> | <definitely-non-nullable-type>)
 
@@ -229,10 +153,6 @@
 <definitely-non-nullable-type> ::= <type-modifiers>? (<user-type> | <parenthesized-user-type>) %NL* %"&" %NL* <type-modifiers>? (<user-type> | <parenthesized-user-type>)
 
 
-# ============================================================================
-# Statements and Blocks
-# ============================================================================
-
 <statements> @hardline @nospace($1) @nospace($2) ::= <statement> (<semis> <statement>)* <semis>?
 
 <statement> ::= (<label> | <annotation>)* (<declaration> | <assignment> | <loop-statement> | <expression>)
@@ -260,12 +180,6 @@
 
 <semis> ::= (%";" | %NL)+
 
-
-# ============================================================================
-# Expressions
-# ============================================================================
-
-# Kotlin expressions use precedence climbing. Listed lowest to highest.
 
 <expression> ::= <disjunction>
 
@@ -308,10 +222,6 @@
                           | <navigation-suffix>
 
 
-# ============================================================================
-# Assignable Expressions
-# ============================================================================
-
 <directly-assignable-expression> ::= <postfix-unary-expression> <assignable-suffix>
                                     | <simple-identifier>
                                     | <parenthesized-directly-assignable-expression>
@@ -328,10 +238,6 @@
                        | <navigation-suffix>
 
 
-# ============================================================================
-# Suffixes: Indexing, Navigation, Call
-# ============================================================================
-
 <indexing-suffix> ::= %"[" %NL* <expression> (%NL* %"," %NL* <expression>)* (%NL* %",")? %NL* %"]"
 
 <navigation-suffix> ::= <member-access-operator> %NL* (<simple-identifier> | <parenthesized-expression> | %"class")
@@ -346,10 +252,6 @@
 
 <value-argument> ::= <annotation>? %NL* (<simple-identifier> %NL* %"=" %NL*)? %"*"? %NL* <expression>
 
-
-# ============================================================================
-# Primary Expressions
-# ============================================================================
 
 <primary-expression> ::= <parenthesized-expression>
                         | <simple-identifier>
@@ -371,10 +273,6 @@
 <collection-literal> ::= %"[" %NL* (<expression> (%NL* %"," %NL* <expression>)* (%NL* %",")?)? %NL* %"]"
 
 
-# ============================================================================
-# Literal Constants
-# ============================================================================
-
 <literal-constant> ::= %"true"
                       | %"false"
                       | %INTEGER
@@ -382,10 +280,6 @@
                       | %CHAR
                       | %"null"
 
-
-# ============================================================================
-# String Literals
-# ============================================================================
 
 <string-literal> ::= <line-string-literal>
                     | <multi-line-string-literal>
@@ -395,16 +289,8 @@
 <multi-line-string-literal> ::= %MULTILINE_STRING
 
 
-# ============================================================================
-# Callable References
-# ============================================================================
-
 <callable-reference> ::= (<user-type> | <function-type>)? %"::" %NL* (<simple-identifier> | %"class")
 
-
-# ============================================================================
-# Function Literals (Lambdas and Anonymous Functions)
-# ============================================================================
 
 <function-literal> ::= <lambda-literal>
                       | <anonymous-function>
@@ -421,16 +307,8 @@
 <parameters-with-optional-type> ::= %"(" %NL* (<function-value-parameter-with-optional-type> (%NL* %"," %NL* <function-value-parameter-with-optional-type>)* (%NL* %",")?)? %NL* %")"
 
 
-# ============================================================================
-# Object Literals
-# ============================================================================
-
 <object-literal> ::= %"object" (%NL* %":" %NL* <delegation-specifiers>)? %NL* <class-body>
 
-
-# ============================================================================
-# this / super Expressions
-# ============================================================================
 
 <this-expression> ::= %"this"
                      | %"this" %"@" <simple-identifier>
@@ -438,17 +316,9 @@
 <super-expression> ::= %"super" (%"<" %NL* <type> %NL* %">")? (%"@" <simple-identifier>)?
 
 
-# ============================================================================
-# if Expression
-# ============================================================================
-
 <if-expression> ::= %"if" %NL* %"(" <expression> %")" %NL* <control-structure-body> ((%NL* %";"?)? %NL* %"else" %NL* <control-structure-body>)?
                    | %"if" %NL* %"(" <expression> %")" %NL* %";"? %NL* %"else" %NL* <control-structure-body>
 
-
-# ============================================================================
-# when Expression
-# ============================================================================
 
 <when-expression> ::= %"when" (%NL* %"(" <expression> %")" %NL*)? %"{" %NL* (<when-entry> %NL*)* %"}"
 
@@ -464,10 +334,6 @@
 <type-test> ::= <is-operator> %NL* <type>
 
 
-# ============================================================================
-# try / catch / finally Expression
-# ============================================================================
-
 <try-expression> ::= %"try" %NL* <block> (<catch-block>+ <finally-block>? | <finally-block>)
 
 <catch-block> ::= %"catch" %NL* %"(" <annotation>* <simple-identifier> %":" <type> (%NL* %",")? %")" %NL* <block>
@@ -475,19 +341,11 @@
 <finally-block> ::= %"finally" %NL* <block>
 
 
-# ============================================================================
-# Jump Expressions
-# ============================================================================
-
 <jump-expression> ::= %"throw" %NL* <expression>
                      | (%"return" | %"return" %"@" <simple-identifier>) <expression>?
                      | %"continue" | %"continue" %"@" <simple-identifier>
                      | %"break" | %"break" %"@" <simple-identifier>
 
-
-# ============================================================================
-# Operators
-# ============================================================================
 
 <equality-operator> ::= %"!=" | %"!=="
                        | %"==" | %"==="
@@ -517,10 +375,6 @@
 <assignment-and-operator> ::= %"+=" | %"-="
                              | %"*=" | %"/=" | %"%="
 
-
-# ============================================================================
-# Modifiers
-# ============================================================================
 
 <modifiers> ::= <modifier>+
 
@@ -559,10 +413,6 @@
 <variance-modifier> ::= %"in" | %"out"
 
 
-# ============================================================================
-# Type Modifiers
-# ============================================================================
-
 <type-modifiers> ::= <type-modifier>+
 
 <type-modifier> ::= <annotation>
@@ -579,10 +429,6 @@
 <parameter-modifiers> ::= <parameter-modifier>+
 
 
-# ============================================================================
-# Annotations
-# ============================================================================
-
 <annotation> ::= <single-annotation>
                | <multi-annotation>
 
@@ -595,15 +441,6 @@
 <unescaped-annotation> ::= <constructor-invocation>
                           | <user-type>
 
-
-# ============================================================================
-# Identifiers
-# ============================================================================
-#
-# In Kotlin, many keywords are "soft" -- they act as keywords only in
-# specific syntactic positions, and can be used as identifiers elsewhere.
-# The lexer provides %IDENTIFIER for true identifiers. The parser must
-# also accept soft keywords in identifier position.
 
 <simple-identifier> ::= %IDENTIFIER
                        | %"abstract"

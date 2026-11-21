@@ -1080,8 +1080,6 @@ trace_placement_valid_from(const n00b_abi_snapshot_v1 *snapshot,
         || !type->size_bits || !type->alignment_bytes
         || byte_offset > UINT64_MAX / 8
         || byte_offset % type->alignment_bytes
-        // A pointer slot is word aligned; a type index (`typespec`) only
-        // needs its own alignment, so two can share a word.
         || (byte_offset % 8
             && !(type->flags & N00B_ABI_TYPE_FLAG_TYPE_INDEX))) return false;
     uint64_t start = byte_offset * 8;

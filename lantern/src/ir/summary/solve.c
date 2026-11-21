@@ -289,8 +289,6 @@ stamp_component(ir_summaries_t *summaries, ir_func_t *const *members,
             ir_summary_t *callee = dep_summary(summaries,
                                                (ir_func_t *)dep->function);
             dep->content = summary_content(callee);
-            // Like summary_content, a callee outside the component is final:
-            // hash its points-to part once rather than once per caller.
             if (!callee->points_hashed) {
                 callee->points_to     = points_to_content(callee);
                 callee->points_hashed = true;

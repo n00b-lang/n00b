@@ -591,8 +591,6 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             row->typevar_ordinal = (uint32_t)ordinal;
         }
     }
-    // A generic alias's type variables are its parameters, in the order its
-    // target names them; the target type owns them.
     for (size_t i = 1; i < n00bb_abi_decl_symbol_count(declarations); i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
             (uint32_t)i);
@@ -625,7 +623,6 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
         if (!symbol) return false;
         n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
             N00BB_SIGNATURE_TYPEVARS_KEY);
-        // An alias's type variables are owned by its target, above.
         if (!variables || !variables->len
             || (symbol->kind == PARSE_SYM_TYPEDEF
                 && core_string_eq(symbol->adt_kind,
@@ -708,8 +705,6 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
             row->typevar_ordinal = (uint32_t)next_ordinal++;
         }
     }
-    /* A body-local binding can retain an open type copied while resolving a
-     * generic call. Give that copy a stable local owner as well. */
     for (size_t symbol_index = 1;
          symbol_index < n00bb_abi_decl_symbol_count(declarations);
          symbol_index++) {

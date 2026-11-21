@@ -417,7 +417,6 @@ try {
         }
     }
     require keys == 2
-    // `new` runs the static `open`; the store it made takes over the handle.
     let made = new[Store]("made")
     put(made, [99], [100])!
     let read = get(made, [99])!

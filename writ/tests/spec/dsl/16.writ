@@ -1,0 +1,17 @@
+fn setvbuf(
+    stream: File,
+    buf:    keep ?[c_char; size] until fclose(stream),
+    mode:   c_int,
+    size:   usize,
+) -> c_int error ret != 0
+
+fn my_lib_adopt_buffer(
+    buf: consume *[u8; len] alloc malloc,
+    len: usize,
+)
+
+fn realloc(ptr: consume ?void alloc malloc, size: usize) -> own ?void release free
+  error ret == null and size != 0
+  on error ptr: not consumed
+
+fn fclose(f: consume File) -> c_int error ret != 0

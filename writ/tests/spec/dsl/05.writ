@@ -1,0 +1,6 @@
+handle Fd     = c_int   none -1  release close
+handle Socket = uptr    none ~0  release closesocket
+
+fn open(path: *cstr, flags: c_int as OpenFlags, ...) -> own ?Fd error ret == none via errno
+fn read(fd: Fd, buf: out *[u8; cap n, len ret], n: usize) -> isize error ret < 0 via errno
+fn dup(fd: Fd) -> own ?Fd error ret == none via errno

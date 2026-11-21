@@ -1,6 +1,3 @@
-# A record's fixed-size array field passed by reference, and a function
-# with a sized `modify` parameter used as a value. These are found once
-# types are solved.
 record Slots {
     tag: u8
     values: Array[u32][3]

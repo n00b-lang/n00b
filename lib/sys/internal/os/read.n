@@ -1,5 +1,3 @@
-# Reading from a file descriptor.
-
 import internal.errno
 bring errno_of from internal.os.support
 
@@ -60,8 +58,6 @@ when target_os() == "linux" {
     bring chunk from internal.os.support
 }
 
-# Reads into `buffer[start:end]`; returns the number of bytes read, which
-# is 0 at end of file. An interrupted read is retried.
 func read(fd: i32, buffer: Array[u8], start: uint, end: uint) -> uint
     fail: internal.errno.Errno {
     require start <= end and end <= __array_length(buffer)

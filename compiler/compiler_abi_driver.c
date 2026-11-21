@@ -377,7 +377,6 @@ n00bb_bind_boxed_hooks(const core_list_t(n00bb_boxed_finalizer_t) *hooks,
     return true;
 }
 
-// The index of `type`'s first component row, when it is of `kind`.
 static uint32_t
 n00bb_first_component_index(const n00bb_abi_object_view_t *view,
                             const n00b_abi_type_v1 *type, uint32_t kind)
@@ -390,8 +389,6 @@ n00bb_first_component_index(const n00bb_abi_object_view_t *view,
     return component && component->kind == kind ? *index : 0;
 }
 
-// The row of an object's fields record: the object is a reference to it,
-// and the collector finds that row in a dead object's header.
 static uint32_t
 n00bb_object_fields_index(const n00bb_abi_object_view_t *view,
                           const n00b_abi_type_v1 *type)
@@ -427,8 +424,6 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, i);
         if (!type) { valid = false; break; }
-        // An object's fields record shares its finalizer, bound with the
-        // object below.
         if (!type->finalizer_function_index
             || type->kind == N00B_ABI_TYPE_RECORD) continue;
         const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
@@ -497,7 +492,6 @@ n00bb_native_unmanaged_parameter(const ir_value_t *parameter, void *context)
 static bool
 n00bb_closed_callers(const ir_func_t *function, void *context)
 {
-    /* Native roots and user objects can call functions outside the IR graph. */
     const n00bb_storage_origin_context_t *origin = context;
     if (!function || !function->owner || !origin
         || origin->has_user_native_objects) return false;
@@ -662,8 +656,6 @@ typedef struct {
     core_buffer_t *bitcode;
     const uint8_t *cached;
     size_t cached_bytes;
-    // For a module emitted from its cached IR: the functions that may be
-    // emitted, the program's and the cached bodies it reaches.
     core_list_t(n00bb_ir_func_ptr_t) reachable;
     n00bb_llvm_backend_t *backend;
     core_buffer_t object;
@@ -1442,11 +1434,9 @@ typedef struct {
     bool debug_enabled;
     bool native_cpu;
     bool precise_stacks;
-    // The shims and libraries the runtime program needs, once known.
     n00bb_native_inputs_t runtime_native;
 } program_link_t;
 
-// Links the C shims' bitcode into one object, for the program's link.
 static bool
 shim_object(const n00bb_native_inputs_t *native, n00bb_link_analysis_t *analysis,
             bool debug_enabled, bool native_cpu, char **out,
@@ -1501,8 +1491,6 @@ link_program(const program_link_t *program, char *extra_object,
     for (size_t i = 0; ok && i < native->search_path_count; i++)
         native_arguments[native_used++] = n00bb_flag_argument("-L",
             native->search_paths[i]);
-    // "c" is the target's C library: the linker adds it whenever the
-    // program links libc (see n00bb_links_libc), so it is no -l flag.
     for (size_t i = 0; ok && i < native->library_count; i++)
         if (!core_string_eq(native->libraries[i], CORE_STRING_STATIC("c")))
             native_arguments[native_used++] = n00bb_flag_argument("-l",
@@ -1796,8 +1784,6 @@ cached_mutator_decisions(core_link_unit_t *link,
     }
 }
 
-// A cached module a module literal generated. Its runtime object keeps only
-// what the program that built it called, so each program emits its own.
 static bool
 cached_generated_unit(core_translation_unit_t *unit)
 {
@@ -1816,8 +1802,6 @@ cached_runtime_object(n00bb_link_analysis_t *analysis,
         && out->runtime_object;
 }
 
-// A literal's generated module is whole in the compile-time program, so
-// the runtime program always gets its own copy.
 static bool
 any_generated_unit(core_translation_unit_t *const *order, size_t count)
 {
@@ -1914,8 +1898,6 @@ units_to_reemit(const n00bb_link_analysis_t *analysis,
         if (function->n_blocks && !core_dict_contains(&runtime, function))
             core_dict_put(&stale, function->owner, function->owner);
     }
-    // The root's tables name every function the program emits; with a
-    // literal's module cut down at run time, they're emitted again too.
     bool generated = any_generated_unit(order, count);
     for (size_t i = 0; i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order[i]);
@@ -1961,9 +1943,6 @@ emit_runtime_objects(core_link_unit_t *link,
         emission->analysis->target.object_format);
     size_t modules = program->object_slots - 4;
     bool ok = runtime.native_frames != nullptr;
-    // The compile-time program links every shim its code may call; the
-    // runtime program only those its runtime code calls, and only their
-    // libraries.
     const n00bb_native_inputs_t *native = program->native;
     if (ok && native && native->select_runtime) {
         core_list_t(core_string_t) symbols = core_list_new(core_string_t);
@@ -2019,8 +1998,6 @@ emit_runtime_objects(core_link_unit_t *link,
                     core_list_push(item.reachable,
                                    analysis->cached_functions.data[f]);
         }
-        // A generated module's runtime object is this program's alone, so
-        // it isn't kept in the cache.
         module_emission_t unkept = runtime;
         unkept.kept = nullptr;
         module_emission_t *use = n00bb_generated_source(
@@ -2081,7 +2058,6 @@ emit_runtime_objects(core_link_unit_t *link,
     return ok;
 }
 
-// `main` takes no parameters, returns nil and cannot fail (N00B-B0105).
 bool
 n00bb_check_start_signature(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,

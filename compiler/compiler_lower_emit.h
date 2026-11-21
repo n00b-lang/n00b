@@ -5,8 +5,6 @@
 #include "lower/walk.h"
 
 #define N00BB_OPEN_CAST_KEY CORE_STRING_STATIC("n00bb.open-cast")
-// On a dispatch: its receiver was not written as an argument (`r.m(...)`,
-// or a constructor's fresh object).
 #define N00BB_DISPATCH_IMPLICIT_SELF_KEY \
     CORE_STRING_STATIC("n00bb.dispatch.implicit-self")
 #define N00BB_RECORD_LITERAL_KEY CORE_STRING_STATIC("n00bb.record-literal")
@@ -15,11 +13,7 @@
 #define N00BB_DECLARATION_KEY CORE_STRING_STATIC("n00bb.declaration")
 #define N00BB_REFERENCE_ESCAPES_KEY CORE_STRING_STATIC("n00bb.reference-escapes")
 #define N00BB_TRAIT_CAST_KEY CORE_STRING_STATIC("n00bb.trait-cast")
-// A call the compiler wrote as possibly failing (a `with` hook's), whose
-// outcome reads are settled if its callee turns out not to fail.
 #define N00BB_MAY_FAIL_KEY CORE_STRING_STATIC("n00bb.call-may-fail")
-// The `__exit` call of a `with` used as a value, whose manager must not be
-// able to drop a failure.
 #define N00BB_WITH_VALUE_EXIT_KEY CORE_STRING_STATIC("n00bb.with-value-exit")
 #define N00BB_CALLBACK_SETUP_KEY CORE_STRING_STATIC("n00bb.callback-setup")
 #define N00BB_TUPLE_INDEX_KEY CORE_STRING_STATIC("n00bb.tuple-index")
@@ -67,20 +61,10 @@ ir_value_t *n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
                                  th_type *result_type, ir_value_t *left,
                                  ir_value_t *right, ir_span_t span);
 bool n00bb_place_named_arguments(ir_instr_t *in, ir_func_t *function);
-// A call typed as possibly failing whose callee turns out not to fail (its
-// failure type, `failure`, is nil) returns its value plainly; the reads of
-// its outcome in `function` are settled to that.
 bool n00bb_settle_infallible_outcome(ir_func_t *function, ir_instr_t *call,
                                      th_type *failure);
-// Binds `call`, in `caller`, to `target` once typing or specialization
-// chose it: named arguments go to their parameters, an outcome is settled
-// when the target can't fail, and, unless its arguments were already typed
-// against the target (not a trait's or a generic's signature), a plain
-// value given for an option parameter becomes that option.
 bool n00bb_bind_call_target(ir_func_t *caller, ir_instr_t *call,
                             ir_func_t *target, bool typed_against_target);
-// The caller's own variables in a call's signature `site` take the types
-// the target's signature `bound` has in their place.
 void n00bb_bind_caller_variables(th_ctx *types, th_type *site,
                                  th_type *bound);
 ir_value_t *n00bb_lower_shift_count(ir_lower_context_t *context,
@@ -132,9 +116,6 @@ ir_value_t *n00bb_emit_fresh_object(ir_lower_context_t *context,
 ir_value_t *n00bb_object_from_fields(ir_lower_context_t *context,
                                      ir_value_t *fields,
                                      th_type *object_type, ir_span_t span);
-// Finalizes, on every `return` and `fail` of `context`'s function, each
-// object it makes whose type has a finalizer, unless storage placement moves
-// the object's storage to the heap, where the collector finalizes it.
 bool n00bb_finalize_frame_objects(ir_lower_context_t *context);
 ir_lower_result_t n00bb_emit_intrinsic(ir_lower_context_t *context,
                                        parse_sym_entry_t *symbol,

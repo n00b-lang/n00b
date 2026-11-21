@@ -1,7 +1,3 @@
-# The FFI manual's errno and variadic examples (ffi-doc.md §5.1, §10):
-# errno through a declared error channel, and a return value that a
-# `ret == -1` check leaves as the result.
-
 [-
 library c
 link "c"

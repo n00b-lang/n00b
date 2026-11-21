@@ -1,5 +1,3 @@
-# The monotonic clock.
-
 when target_os() == "linux" {
     [-
     library kernel
@@ -50,7 +48,6 @@ when target_os() == "linux" {
     -]'ffi
 }
 
-# Nanoseconds on a clock that never goes back, from an arbitrary start.
 func now_ns() -> u64 {
     when target_os() == "linux" {
         var stamp: Timespec = (seconds = 0, nanoseconds = 0)

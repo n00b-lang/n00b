@@ -92,7 +92,6 @@ func age_name(a: internal.types.Age) -> string {
     return generated.age.age_names(cast[u32] a)
 }
 
-// The most script extensions script_extensions gives one code point.
 const max_script_extensions = 32
 
 func script_extensions(cp: char,

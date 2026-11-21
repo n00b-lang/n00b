@@ -575,8 +575,6 @@ static bool initialization_event(const ir_instr_t *instruction,
 {
     if (!binding || !ir_instr_is_binding_initialization(instruction))
         return false;
-    // Storage given where a binding is declared without a value is a
-    // default that its one assignment may replace.
     ir_annot_t *fallback = ir_annot_get(
         (ir_annots_t *)&instruction->annots,
         CORE_STRING_STATIC("ir.declaration_default"));

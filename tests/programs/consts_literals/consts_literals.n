@@ -205,9 +205,6 @@ require primes[3] == 7 and primes.len() == 5
 require names["b"].get_or_else(0) == 2
 require static_words[1] == "litmod"
 
-// A trailing point makes a float, as long as no name follows it: `5.abs()`
-// is a method call on the integer 5. (Kept last: the `'located` test above
-// checks its own line.)
 func doubled_whole(self: int) -> int {
     return self * 2
 }
@@ -218,8 +215,6 @@ let trailing_items = [1., 2., 3.]
 require trailing == 5.0 and trailing_sum == 1002.0 and trailing_items[2] == 3.0
 require 5.doubled_whole() == 10
 
-// `alias` needs no kind when its target names only a type or only a
-// literal modifier.
 alias plain = raw_text
 alias Lane_Count = u8
 alias Lane_List = List[Lane_Count]
@@ -227,10 +222,6 @@ let lanes_seen: Lane_List = [1, 2]
 let plain_text: string = "x\ty"'plain
 require byte_len(plain_text) == 4 and lanes_seen[1] == 2
 
-// `expr: T` annotates any expression's type. With no `let` or `var`,
-// `name: T = value` is an implicit declaration of that type. Where `:`
-// separates (dict and set literals, slices, ranges), an annotation needs
-// parentheses.
 let annotated_byte = 5: u8
 let annotated_list = [1, 2]: List[u16]
 let narrow_value: i32 = 4
@@ -251,8 +242,6 @@ require annotated_byte == 5 and annotated_list.len() == 2 and widened == 4
 require implicit_wide == 4 and implicit_byte == 200 and annotated_local() == 4
 require keyed.len() == 1 and sliced_annotated[0] == 20
 
-// An annotation after an operator's last operand needs parentheses; one
-// that is the whole left operand, or follows a sign, does not.
 let summed_whole = (narrow_value + 1): i32
 let summed_part = narrow_value + (1: i32)
 let left_annotated = narrow_value: i32 + 1

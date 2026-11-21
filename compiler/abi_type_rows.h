@@ -29,9 +29,6 @@ typedef struct {
 typedef parse_sym_entry_t *(*n00bb_abi_type_owner_lookup_fn)(
     void *context, th_type *type);
 
-/* Populates identity, category and finalized extent facts. Relationship
- * tables (fields, constraints, signatures and layout runs) are deliberately
- * left for the complete type emitter; these rows are not standalone output. */
 bool n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
     bool include_external_definitions,
@@ -42,7 +39,6 @@ bool n00bb_abi_type_identity_rows_build(
 void n00bb_abi_type_identity_rows_release(
     n00bb_abi_type_identity_rows_t *rows);
 
-/* Assigns variable identities from cached declaration signatures. */
 bool n00bb_abi_type_variables_bind(
     n00bb_abi_type_index_t *index, th_ctx *types,
     const n00bb_abi_decl_index_t *declarations,
@@ -54,11 +50,9 @@ bool n00bb_abi_type_variables_bind_import(
     uint32_t requirement_index, n00bb_abi_type_identity_rows_t *rows,
     core_string_t *reason);
 
-/* Run after both local and imported identities have been assigned. */
 bool n00bb_abi_type_variables_validate(
     const n00bb_abi_type_identity_rows_t *rows, core_string_t *reason);
 
-/* Adds TYPE component ranges to the shared U32 stream at stream_base. */
 bool n00bb_abi_type_components_build(
     n00bb_abi_type_index_t *index, ir_module_t *module,
     uint32_t stream_base, n00bb_abi_type_identity_rows_t *types,

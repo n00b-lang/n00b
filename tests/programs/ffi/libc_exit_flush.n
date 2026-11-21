@@ -1,5 +1,3 @@
-# C code's buffered stdio output reaches its file when the program exits:
-# with libc linked, the program exits through libc's exit, which flushes.
 [-
 library c
 link "c"

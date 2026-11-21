@@ -1,0 +1,15 @@
+import <sqlite3.h> raw
+
+handle Db   = *sqlite3       release sqlite3_close_v2
+handle Stmt = *sqlite3_stmt  release sqlite3_finalize
+
+refine sqlite3_prepare_v2 {
+    zSql:   *[c_char; nByte >= 0 ? nByte : until 0]
+    ppStmt: out *?Stmt
+    pzTail: out ??c_char with zSql
+    error ret != SQLITE_OK via sqlite3_extended_errcode(db)
+}
+
+refine sqlite3_column_blob {
+    -> ?[u8; sqlite3_column_bytes(stmt, i)] until step(stmt), reset(stmt), finalize(stmt)
+}

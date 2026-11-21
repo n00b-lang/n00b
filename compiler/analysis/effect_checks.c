@@ -363,7 +363,6 @@ record_type_name(const parse_sym_entry_t *record)
 
 static int64_t parameter_index(parse_sym_entry_t *symbol, core_string_t name);
 
-// What a mark annotation is written on, as a mark rule's target.
 static bool
 annotation_target(n00bb_link_analysis_t *analysis,
                   const n00bb_mark_annotation_t *mark, core_buffer_t *entry)
@@ -1136,9 +1135,6 @@ new_check_term(n00bb_lower_context_t *lower, n00bb_check_term_kind_t kind)
     return term;
 }
 
-// One effect query of a check, validated and resolved. A query about a
-// callback parameter becomes a bound on the function, so it must be one of
-// the check's conjuncts.
 static n00bb_check_term_t *
 check_query_term(ir_lower_context_t *context, parse_tree_t *query,
                  bool conjunct)
@@ -1183,10 +1179,6 @@ check_query_term(ir_lower_context_t *context, parse_tree_t *query,
     return added ? term : nullptr;
 }
 
-// Translates a check's condition (made only of effect queries, `and`, `or`,
-// `not`, parentheses and boolean constants; see check_shape). Every query
-// is validated, so all of them are reported, before the first failure is
-// returned as null.
 static n00bb_check_term_t *
 check_term(ir_lower_context_t *context, parse_tree_t *node, bool conjunct,
            bool *valid)
@@ -1680,7 +1672,6 @@ collect_operator_bounds(n00bb_link_analysis_t *analysis)
                        CORE_STRING_STATIC("allocates"));
 }
 
-// A trait's declaration: the node that opened its member scope.
 static parse_tree_t *
 trait_declaration(parse_sym_entry_t *symbol)
 {
@@ -2198,7 +2189,6 @@ explain_query(check_eval_t *eval, const n00bb_check_term_t *term, bool value)
         break;
     }
     report_false_query(eval, term, n00bb_text(text, args));
-    // An effect query's effect was resolved to its declaration by lowering.
     bool about_effect = n00bb_query_about_effect(term->query)
         && term->effect.u8_bytes;
     if (term->query == N00BB_QUERY_HAS_EFFECT && !value

@@ -421,7 +421,6 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
         return true;
     }
 
-    // An elif clause is lowered as an arm of the `if` it belongs to.
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("elif-clause"))
         || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("value-elif-clause")))
         return true;
@@ -911,7 +910,6 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         return false;
     }
     frame->iteration_cursor = cursor_local;
-    // From here every way out of the loop calls `__cleanup`.
     if (!n00bb_exit_scope_open(context, &frame->scope, frame->order, false,
                                span))
         return false;
@@ -925,8 +923,6 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
 
     context->block = frame->header;
     context->reachable = true;
-    // `__next` advances the cursor in place: it is read from its local, and
-    // the call is given that local's address.
     ir_value_t *current = n00bb_emit_local_read(context, cursor_local, span);
     th_type *option_type = th_option(ir_module_types(context->module),
                                      frame->iteration_plan->item_type);
@@ -1055,14 +1051,10 @@ n00bb_route_failure_before(ir_lower_context_t *context, ir_value_t *error,
     n00bb_try_frame_t *frame = nullptr;
     n00bb_exit_scope_t *first = nullptr, *scope = nullptr;
     n00bb_failure_handler(lower, before_order, &frame, &first);
-    // A loop passes a failure on: it goes into the loop only when a
-    // handler outside the loop takes it.
     scope = first;
     while (scope && !scope->handles)
         n00bb_failure_handler(lower, scope->order, &frame, &scope);
     if (!frame && !scope) return 0;
-    // The `try` notes the first failure it gets that `nil` doesn't fit,
-    // here where its type is still the raised one.
     th_type *failure = frame && error && error->type
         ? th_resolve(error->type) : nullptr;
     if (failure && !frame->other_failure && !th_is_nil(failure)
@@ -1231,9 +1223,6 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (frame->body != visit->node) return true;
         frame->in_body = false;
         if (!frame->active) return true;
-        // `x!` sent this handler `nil`, and something else sent it a
-        // failure `nil` doesn't fit; a handler that names the error can't
-        // hold both.
         if (frame->routes_nil && frame->other_failure
             && frame->error_symbol) {
             lower_report(context, N00B_DIAG_TRY_FAILURE_TYPES_DIFFER,
@@ -1452,9 +1441,6 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                                                        frame->node);
             bool shortcut_true = frame->short_circuit
                 && (parse_tree_junction(frame->node) == PARSE_JUNCTION_OR);
-            // The result if this operand short-circuits: `false` for `and`,
-            // `true` for `or`; the next operand overwrites it otherwise. The
-            // operand is only tested, so a flagset counts as any flag set.
             if (frame->short_circuit
                 && !n00bb_set_flag(context, frame->result_local,
                                    shortcut_true,
@@ -1531,9 +1517,6 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         logical_construct(visit->grammar, frame->node));
                     return false;
                 }
-                // The last operand of `and` or `or` is a condition too (a
-                // flagset is true when any flag is set), so it is tested
-                // like the others rather than copied into the `bool` result.
                 if (frame->short_circuit) {
                     ir_span_t span = lower_span_for_tree(context, visit->node);
                     ir_block_t *yes = n00bb_branch_block(context, lower,
@@ -1696,7 +1679,6 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 ir_span_t span = lower_span_for_tree(context, frame->node);
                 bool reached = false;
                 ir_value_t *failure = nullptr;
-                // The back edge has already left: nothing falls through.
                 context->reachable = false;
                 if (!n00bb_exit_scope_close(context, &frame->scope, span,
                                             &reached, &failure)
@@ -1867,8 +1849,6 @@ n00bb_case_test_type(th_ctx *types, parse_sym_entry_t *function,
     return test;
 }
 
-// The item of an option subject when `test` is one of its arms: the item
-// type or `nil`.
 static th_type *
 typecase_option_item(th_ctx *types, ir_value_t *subject, th_type *test)
 {
@@ -1883,7 +1863,6 @@ typecase_option_item(th_ctx *types, ir_value_t *subject, th_type *test)
         ? item : nullptr;
 }
 
-// The variable or parameter under `node` whose value is `value`.
 static parse_sym_entry_t *
 tested_variable(ir_lower_context_t *context, parse_tree_t *node,
                 ir_value_t *value)
@@ -1905,7 +1884,6 @@ tested_variable(ir_lower_context_t *context, parse_tree_t *node,
     return nullptr;
 }
 
-// In the body of `if has_type(x, T)`, `x` reads as a `T`.
 static bool
 narrow_has_type(ir_lower_context_t *context, parse_grammar_t *grammar,
                 n00bb_branch_arm_t *arm, ir_value_t *condition)
@@ -1932,7 +1910,6 @@ narrow_has_type(ir_lower_context_t *context, parse_grammar_t *grammar,
     return arm->narrowed;
 }
 
-// Whether a `case` for `test` takes a value of type `member`.
 static bool
 typecase_arm_covers(th_ctx *types, th_type *test, th_type *member)
 {
@@ -1945,9 +1922,6 @@ typecase_arm_covers(th_ctx *types, th_type *test, th_type *member)
         && th_env_implements(types, th_resolve(member), trait);
 }
 
-// Reports a `typecase` with no `else` that doesn't cover every type its
-// subject can hold. A subject whose type is still open is decided when it
-// is specialized.
 static void
 check_typecase_coverage(ir_lower_context_t *context,
                         n00bb_typecase_frame_t *frame, ir_value_t *subject,
@@ -2009,8 +1983,6 @@ n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
             ? n00bb_branch_block(context, context->user, "typecase_test")
             : frame->else_body ? frame->else_block : frame->unmatched_block;
         if (!next) return false;
-        // An option's arms are its item and `nil`: whether it holds a
-        // value is decided at run time, by a presence test.
         th_type *item = typecase_option_item(types, subject, arm->test);
         ir_value_t *condition = nullptr;
         if (item) {
@@ -2091,7 +2063,6 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_typecase_arm_t *arm = &frame->arms.data[arm_index];
             context->block = arm->block;
             context->reachable = true;
-            // An option narrows to its item, or to `nil`.
             th_type *item = typecase_option_item(
                 ir_module_types(context->module), frame->subject_value,
                 arm->test);
@@ -2176,7 +2147,6 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
                                 CORE_STRING_STATIC("typecase-value-expr"));
         parse_cf_label_t *label = parse_cf_label_lookup(
             tu_state(lower->unit)->annotations, visit->node);
-        // Name resolution records the variable a typecase narrows.
         parse_tree_t *subject_node = label ? label->cond : nullptr;
         parse_sym_entry_t *symbol = parse_tree_narrowed_subject(visit->node);
         if (!label || !subject_node || !symbol
@@ -2519,8 +2489,6 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     return true;
 }
 
-// Whether an active value-producing expression (an `if`, `switch`,
-// `typecase` or `try` used as a value) takes its value from `body`.
 static bool
 n00bb_expression_owns_body(n00bb_lower_context_t *lower,
                            parse_grammar_t *grammar, parse_tree_t *body)
@@ -2562,8 +2530,6 @@ n00bb_expression_owns_body(n00bb_lower_context_t *lower,
     return false;
 }
 
-// The statements whose bodies a `->` can end, by mistake: what to call
-// each, and the keyword of its value form if it has one.
 static const struct {
     const char *rule;
     n00bb_text_t phrase;
@@ -2579,7 +2545,6 @@ static const struct {
     {"when-stmt", N00B_TEXT_IN_WHEN_STATEMENT, nullptr},
 };
 
-// `->` at `node` ends `owner`, a body of a statement, which has no value.
 static bool
 report_value_not_taken(ir_lower_context_t *context, parse_grammar_t *grammar,
                        parse_tree_t *node, parse_tree_t *owner)
@@ -2659,8 +2624,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     if (core_string_eq(name, CORE_STRING_STATIC("value-stmt"))) {
         if (entering || !context->reachable) return true;
         n00bb_lower_context_t *lower = context->user;
-        // Name resolution recorded the construct this statement gives the
-        // value of: a block value, a value body, or a body.
         parse_tree_t *owner = parse_tree_value_owner(visit->node);
         for (size_t i = lower->value_blocks.len; owner && i > 0; i--) {
             n00bb_value_block_frame_t *frame =
@@ -2672,7 +2635,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ir_value_t *value = expression
                 ? ir_lower_node_value(context, expression)
                 : nullptr;
-            // The value is stored once the constructs it leaves are left.
             bool left = value && n00bb_emit_scoped_success(context,
                 visit->node, frame->order, &value);
             ir_instr_t *store = left
@@ -2695,7 +2657,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             context->reachable = true;
             return true;
         }
-        // A value body's value is taken by the expression that owns it.
         if (owner && n00bb_expression_owns_body(lower, visit->grammar, owner))
             return true;
         if (!owner || owner != lower->function_body)
@@ -2832,7 +2793,6 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     if (!n00bb_emit_scoped_success(context, visit->node, target_order,
                                    nullptr))
         return false;
-    // A `break` leaves its loop as running out does.
     if (target && is_break && target->scope.open)
         return n00bb_exit_scope_jump(context, &target->scope,
             N00BB_EXIT_FALLTHROUGH, nullptr,
@@ -2880,8 +2840,6 @@ n00bb_switch_case_name(parse_grammar_t *grammar, n00bb_lower_context_t *lower,
     if (!lower || !expression) return false;
     parse_sym_entry_t *symbol = attached_symbol(grammar, lower->unit,
                                                 expression);
-    // A function is never a value a case can match, so a function of the
-    // same name doesn't hide an arm or enum member.
     if (symbol && symbol->kind != PARSE_SYM_ENUM_CONST
         && symbol->kind != PARSE_SYM_FUNCTION
         && !n00bb_variant_arm_symbol(symbol)) return false;

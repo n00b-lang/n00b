@@ -285,8 +285,6 @@ step_bound(const pt_set_t *set, size_t low, size_t high, uint32_t at,
     return low;
 }
 
-// Whether step `at` of `item`'s place is past `step` (or at it, unless
-// `upper`): the predicate step_bound searches for.
 static bool
 step_past(const pt_item_t *item, uint32_t at, core_string_t step, bool upper)
 {
@@ -294,7 +292,6 @@ step_past(const pt_item_t *item, uint32_t at, core_string_t step, bool upper)
     return order > 0 || (!upper && !order);
 }
 
-// step_bound for a bound expected near `low`: gallop up from it.
 static size_t
 step_bound_near_low(const pt_set_t *set, size_t low, size_t high,
                     uint32_t at, core_string_t step, bool upper)
@@ -309,7 +306,6 @@ step_bound_near_low(const pt_set_t *set, size_t low, size_t high,
                       at, step, upper);
 }
 
-// step_bound for a bound expected near `high`: gallop down from it.
 static size_t
 step_bound_near_high(const pt_set_t *set, size_t low, size_t high,
                      uint32_t at, core_string_t step, bool upper)
@@ -324,8 +320,6 @@ step_bound_near_high(const pt_set_t *set, size_t low, size_t high,
                       at, step, upper);
 }
 
-// The end of the run of items on `loc`'s object that starts at `start`:
-// object runs are mostly short, so gallop rather than search the whole set.
 static size_t
 object_end(const pt_set_t *set, const pt_loc_t *loc, size_t start)
 {
@@ -344,8 +338,6 @@ object_end(const pt_set_t *set, const pt_loc_t *loc, size_t start)
     return low;
 }
 
-// Finds whether `set` covers `item`; if not, [low, high) bounds the items
-// `item` may cover, and [first, last) the items on `item`'s object.
 static bool
 set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
               size_t *high, size_t *first, size_t *last)
@@ -380,8 +372,6 @@ set_lookup_at(const pt_set_t *set, const pt_item_t *item, size_t *low,
                  && step_eq(set->data[i].loc.path.steps[k], value_step); i++)
                 if (item_covers(&set->data[i], item)) return true;
         }
-        // The items sharing this step are most of the range, so its ends
-        // are near the range's.
         from = step_bound_near_low(set, exact, to, k, path->steps[k], false);
         to   = step_bound_near_high(set, from, to, k, path->steps[k], true);    }
     bool wide = loc_deep(&item->loc) && !(path->flags & SPATH_INLINE);

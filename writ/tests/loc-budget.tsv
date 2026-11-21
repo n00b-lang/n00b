@@ -1,0 +1,9 @@
+core	1500	top
+core/syntax	2500	all
+core/model	5000	all
+core/plan	1500	all
+core/lower	800	all
+clang	3000	all
+toolchain	3000	all
+gen	7100	all
+cli	600	all

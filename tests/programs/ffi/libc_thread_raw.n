@@ -1,5 +1,3 @@
-# libc_thread.n's check for a raw binding, which calls C without a shim:
-# its n00b wrapper checks the thread instead.
 import sys.threads
 
 [-

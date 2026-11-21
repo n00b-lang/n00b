@@ -182,8 +182,6 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     encoded_item_t *sources = core_alloc_array(encoded_item_t, count + 1);
     uint32_t       *rank    = core_alloc_array(uint32_t, count + 1);
     size_t          used    = 0;
-    // The sources some destination draws on: every kind of flow into every
-    // destination, in one set.
     flow_bits_t referenced = core_list_new(uint64_t);
     for (size_t d = 0; d < flows->dests.len; d++) {
         const flow_dest_t *dest  = &flows->dests.data[d];
@@ -438,8 +436,6 @@ get_bits(summary_reader_t *r, flow_table_t *flows, flow_dest_t **dest,
          const ir_spath_t *to, const path_list_t *sources, uint32_t *mapped,
          ir_sflow_kind_t kind)
 {
-    // As flow_put for each flow, in the same order, but each source and the
-    // destination are looked up once.
     uint32_t words = get_u32(r);
     for (uint32_t w = 0; !r->failed && w < words; w++) {
         uint64_t low  = get_u32(r);

@@ -116,8 +116,6 @@ trait_method_requirement_symbol(parse_grammar_t *grammar,
             ? parse_symtab_lookup_scoped(state->annotations->symtab,
                 trait_symbol->member_scope, CORE_STRING_STATIC(""),
                 method_name) : nullptr;
-        // A scoped lookup also searches the enclosing scopes; only a method
-        // the trait itself declares is its requirement.
         if (!method || method->kind != PARSE_SYM_FUNCTION
             || method->scope != trait_symbol->member_scope) continue;
         if (found && found != method) return nullptr;

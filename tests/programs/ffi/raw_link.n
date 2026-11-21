@@ -1,5 +1,3 @@
-# A literal whose only binding is raw calls the C function directly, with
-# no shim, and still links the library it names.
 when target_os() == "linux" {
     [-
     library rawz

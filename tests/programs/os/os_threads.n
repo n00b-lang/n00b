@@ -2,10 +2,6 @@ import sys.memory
 import sys.os
 import sys.threads
 
-# sys.os thread control, which stops the world for the collector: a running
-# thread is suspended, its registers read, and resumed. Also the stack
-# queries the collector scans with, on the main thread and another.
-
 const timeout_ns: u64 = 2_000_000_000
 
 var worker_control: Atomic[uint] = 0
@@ -13,14 +9,11 @@ var worker_ticks: Atomic[u64] = 0
 var worker_done: Atomic[bool] = false
 var worker_stack_ok: Atomic[bool] = false
 
-# The calling thread's stack top is above where it's running, and the
-# registers it saves name a stack, a frame and a return address.
 func stack_ok() -> bool {
     let high: Ref[byte]? = sys.os.thread_stack_high_self()
     if high == nil or __abi_ref_address(high) <= sys.threads.stack_address() {
         return false
     }
-    # A page holds a Thread_Context.
     let bytes: uint = 4096
     let mapped: Ref[byte]? = sys.memory.map_zeroed(bytes, 0)
     if mapped == nil {
@@ -61,7 +54,6 @@ func check_suspend() {
     wait_for_ticks(1000)
     let control: uint = __atomic_load(ref worker_control)
 
-    # Only a successful suspend fills the snapshot, so it starts empty.
     var snapshot: sys.threads.Thread_Context
     snapshot.sp = nil
     snapshot.fp = nil
@@ -73,7 +65,6 @@ func check_suspend() {
     require sys.os.thread_suspend(control, ref snapshot, timeout_ns) == 0
     require snapshot.sp != nil and snapshot.pc != nil and snapshot.nregs != 0
 
-    # Suspended, the worker counts nothing.
     let stopped: u64 = __atomic_load(ref worker_ticks)
     let paused: u64 = sys.os.now_ns()
     while sys.os.now_ns() - paused < 1_000_000 {
@@ -87,8 +78,6 @@ func check_suspend() {
     require __atomic_load(ref worker_stack_ok)
 }
 
-# Yielding, the spin-wait hint and a full fence do nothing a test can see,
-# but each must run.
 func check_hints() {
     sys.os.thread_yield()
     sys.threads.thread_yield()
@@ -103,9 +92,6 @@ func check_hints() {
     }
 }
 
-# A thread can ask for its stack's top as soon as it starts: on Linux the
-# runtime must list a new thread before it runs. Each started thread runs
-# n00b code at once, which attaches it to the collector with that query.
 const fresh_threads: u64 = 64
 var fresh_done: Atomic[u64] = 0
 var fresh_known: Atomic[u64] = 0
@@ -131,8 +117,6 @@ func check_fresh_threads() {
     require __atomic_load(ref fresh_known) == fresh_threads
 }
 
-# Stopping the world can't allocate: an allocation there would start a
-# collection inside the one that's stopping it.
 forbids_effect(sys.os.thread_suspend, allocates)
 forbids_effect(sys.os.thread_resume, allocates)
 

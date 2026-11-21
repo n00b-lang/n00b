@@ -1,7 +1,3 @@
-# The bare basics of sys.os: writing bytes, the clock, address waits and
-# the calling thread. builtin imports it, so everything it brings in is
-# compiled with builtin: keep it to what builtin already needs.
-
 import internal.errno
 import internal.os.write
 import internal.os.clock

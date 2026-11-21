@@ -15,9 +15,6 @@
 
 enum { SUMMARY_METADATA_VERSION = 2 };
 
-// A module's summaries name their texts by number in a table the module
-// writes once, ahead of them: the same global and field names recur in
-// nearly every summary.
 typedef struct {
     core_list_t(core_string_t) texts;
     ir_summary_texts_t         table;
@@ -65,7 +62,6 @@ intern_text(void *context, core_string_t text)
     if (found) return (uint32_t)id;
     core_list_push(interner->texts, text);
     id = interner->texts.len;
-    // The key can't point into the list, which moves as it grows.
     core_string_t *key = core_alloc(core_string_t);
     *key = text;
     core_dict_put(&interner->ids, key, (void *)id);
