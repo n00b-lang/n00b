@@ -244,8 +244,8 @@ handler_listed(n00bb_link_analysis_t *analysis, const ir_func_t *handler,
     return false;
 }
 
-static core_list_t(n00bb_ir_func_ptr_t)
-program_functions(const n00bb_link_analysis_t *analysis)
+core_list_t(n00bb_ir_func_ptr_t)
+n00bb_program_functions(const n00bb_link_analysis_t *analysis)
 {
     core_list_t(n00bb_ir_func_ptr_t) functions =
         core_list_new(n00bb_ir_func_ptr_t);
@@ -266,7 +266,7 @@ collect_callback_handlers(n00bb_link_analysis_t *analysis)
     core_dict_t known, referenced;
     core_dict_init(&known, nullptr, nullptr);
     core_dict_init(&referenced, nullptr, nullptr);
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    core_list_t(n00bb_ir_func_ptr_t) program = n00bb_program_functions(analysis);
     for (size_t f = 0; f < program.len; f++) {
         ir_func_t *function = program.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)
@@ -742,7 +742,7 @@ static core_list_t(n00bb_ir_func_ptr_t)
 entry_functions(n00bb_link_analysis_t *analysis, size_t slot)
 {
     bool complete = true;
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    core_list_t(n00bb_ir_func_ptr_t) program = n00bb_program_functions(analysis);
     core_list_t(n00bb_ir_func_ptr_t) entries = slot == 1
         ? thread_entries(&program, analysis->summaries, &complete, nullptr)
         : core_list_new(n00bb_ir_func_ptr_t);
@@ -810,7 +810,7 @@ collect_escaped_globals(n00bb_link_analysis_t *analysis)
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     core_dict_init(&analysis->escaped_globals, nullptr, nullptr);
     analysis->escaped_owner = analysis->escapes;
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    core_list_t(n00bb_ir_func_ptr_t) program = n00bb_program_functions(analysis);
     for (size_t f = 0; f < program.len; f++) {
         ir_func_t *function = program.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)

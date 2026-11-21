@@ -3675,39 +3675,29 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations || !state->annotations->symtab)
             return false;
-        core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
-            state, CORE_STRING_STATIC(""));
-        for (size_t s = 0; s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope) {
-                if (linkable_module_symbol(symbol)
-                    && (symbol_binding_node(symbol) || state->interface_module)
-                    && !register_link_declaration(link, unit, grammar,
-                                                  declarations_by_symbol,
-                                                  symbol)
-                    && !n00bb_unit_failed(unit)) {
-                    core_list_free(scopes);
-                    return false;
+        core_string_t namespaces[] = {
+            CORE_STRING_STATIC(""), CORE_STRING_STATIC("type"),
+        };
+        for (size_t n = 0; n < 2; n++) {
+            core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+                state, namespaces[n]);
+            for (size_t s = 0; s < scopes.len; s++) {
+                for (parse_sym_entry_t *symbol =
+                         scopes.data[s]->first_in_scope;
+                     symbol; symbol = symbol->next_in_scope) {
+                    if (linkable_module_symbol(symbol)
+                        && (symbol_binding_node(symbol)
+                            || state->interface_module)
+                        && !register_link_declaration(link, unit, grammar,
+                               declarations_by_symbol, symbol)
+                        && !n00bb_unit_failed(unit)) {
+                        core_list_free(scopes);
+                        return false;
+                    }
                 }
             }
+            core_list_free(scopes);
         }
-        core_list_free(scopes);
-        scopes = link_declaration_scopes(state, CORE_STRING_STATIC("type"));
-        for (size_t s = 0; s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope) {
-                if (linkable_module_symbol(symbol)
-                    && (symbol_binding_node(symbol) || state->interface_module)
-                    && !register_link_declaration(link, unit, grammar,
-                                                  declarations_by_symbol,
-                                                  symbol)
-                    && !n00bb_unit_failed(unit)) {
-                    core_list_free(scopes);
-                    return false;
-                }
-            }
-        }
-        core_list_free(scopes);
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -4242,8 +4232,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symbols = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symbols = tu_symtab(unit);
         if (!symbols || !module_scope(state)) continue;
         th_ctx *probe = th_ctx_new();
         core_string_t package = n00bb_package_id(unit);
@@ -4514,8 +4503,7 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symbols = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symbols = tu_symtab(unit);
         if (!symbols || !module_scope(state)) continue;
         core_list_t(parse_sym_entry_ptr_t) targets =
             core_list_new(parse_sym_entry_ptr_t);

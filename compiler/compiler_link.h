@@ -448,6 +448,8 @@ typedef struct n00bb_link_analysis_t {
 } n00bb_link_analysis_t;
 
 void n00bb_trait_targets_free(n00bb_link_analysis_t *analysis);
+core_list_t(n00bb_ir_func_ptr_t) n00bb_program_functions(
+    const n00bb_link_analysis_t *analysis);
 
 static inline bool
 n00bb_open_dispatch(const n00bb_link_analysis_t *analysis)

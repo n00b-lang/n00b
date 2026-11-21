@@ -422,24 +422,33 @@ n00bb_pattern_path(parse_grammar_t *grammar, parse_tree_t *pattern,
     return pattern && pattern_path_within(grammar, pattern, target, path);
 }
 
-void
-collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
-                      core_list_t(n00bb_tree_ptr_t) *arguments)
+static void
+collect_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
+                       core_string_t list, core_string_t argument,
+                       core_list_t(n00bb_tree_ptr_t) *arguments)
 {
-    if (!NT_IS(grammar, node, "keyword-args")) return;
+    if (!nt_is(grammar, node, list)) return;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
-        if (NT_IS(grammar, child, "call-kw-arg")) {
+        if (nt_is(grammar, child, argument)) {
             core_list_push(*arguments, child);
             continue;
         }
         if (!parse_tree_is_group(child)) continue;
         for (size_t j = 0; j < core_tree_num_children(child); j++) {
             parse_tree_t *item = core_tree_child(child, j);
-            if (NT_IS(grammar, item, "call-kw-arg"))
+            if (nt_is(grammar, item, argument))
                 core_list_push(*arguments, item);
         }
     }
+}
+
+void
+collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
+                      core_list_t(n00bb_tree_ptr_t) *arguments)
+{
+    collect_argument_nodes(grammar, node, CORE_STRING_STATIC("keyword-args"),
+                           CORE_STRING_STATIC("call-kw-arg"), arguments);
 }
 
 
@@ -543,6 +552,23 @@ static_sequence_element_type(th_type *type)
     return argument && argument->kind == TH_ARG_TYPE ? argument->type : nullptr;
 }
 
+const th_member *
+static_variant_arm(n00bb_tu_state_t *state, th_type *type,
+                   const n00bb_static_value_t *value)
+{
+    bool variant = false;
+    th_type *shape = static_record_shape(state, type);
+    if (!th_named_info(type, nullptr, &variant, nullptr)
+        || !variant || !shape || th_kind_of(shape) != TH_RECORD
+        || !value->as.variant.payload) return nullptr;
+    for (size_t i = 0; i < th_record_len(shape); i++) {
+        const th_member *arm = th_record_member(shape, i);
+        if (arm && core_string_eq(value->as.variant.arm, arm->name))
+            return arm;
+    }
+    return nullptr;
+}
+
 bool
 static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
                           n00bb_tu_state_t *state, size_t depth)
@@ -604,21 +630,12 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
         return true;
     }
     if (value->kind == N00BB_STATIC_VALUE_VARIANT) {
-        bool variant = false;
-        th_type *shape = static_record_shape(state, type);
-        if (!th_named_info(type, nullptr, &variant, nullptr)
-            || !variant || !shape || th_kind_of(shape) != TH_RECORD
-            || !value->as.variant.payload) return false;
-        for (size_t i = 0; i < th_record_len(shape); i++) {
-            const th_member *arm = th_record_member(shape, i);
-            if (arm && core_string_eq(value->as.variant.arm, arm->name))
-                return value->as.variant.payload->kind
-                    == N00BB_STATIC_VALUE_NIL
-                    ? th_is_nil(arm->type)
-                    : static_value_matches_type(value->as.variant.payload,
-                        arm->type, state, depth + 1);
-        }
-        return false;
+        const th_member *arm = static_variant_arm(state, type, value);
+        return arm && (value->as.variant.payload->kind
+                == N00BB_STATIC_VALUE_NIL
+            ? th_is_nil(arm->type)
+            : static_value_matches_type(value->as.variant.payload,
+                arm->type, state, depth + 1));
     }
     if (value->kind == N00BB_STATIC_VALUE_NIL) {
         return th_is_nil(type) || th_option_item(type);
@@ -818,39 +835,48 @@ n00bb_explicit_literal_site(parse_grammar_t *grammar,
     return site;
 }
 
-th_type *
-record_template_type(th_ctx *types, core_string_t name,
-                     parse_sym_entry_t *symbol)
+static th_type *
+template_type(th_ctx *types, core_string_t name, parse_sym_entry_t *symbol,
+              bool variant)
 {
     n00bb_signature_typevars_t *variables = symbol
         ? parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY) : nullptr;
-    if (!variables || !variables->len) return th_name(types, name);
+    if (!variables || !variables->len)
+        return variant ? th_variant(types, name, nullptr, 0)
+                       : th_name(types, name);
     th_arg *args = core_alloc_array(th_arg, variables->len);
     if (!args) return nullptr;
     for (size_t i = 0; i < variables->len; i++)
         args[i] = (th_arg){.kind = TH_ARG_TYPE,
                            .type = variables->data[i].type};
-    th_type *named = th_apply(types, name, args, variables->len);
+    th_type *named = variant
+        ? th_variant(types, name, args, variables->len)
+        : th_apply(types, name, args, variables->len);
     core_free(args);
     return named;
+}
+
+th_type *
+record_template_type(th_ctx *types, core_string_t name,
+                     parse_sym_entry_t *symbol)
+{
+    return template_type(types, name, symbol, false);
 }
 
 th_type *
 variant_template_type(th_ctx *types, core_string_t name,
                       parse_sym_entry_t *symbol)
 {
-    n00bb_signature_typevars_t *variables = symbol
-        ? parse_sym_binding(symbol, N00BB_SIGNATURE_TYPEVARS_KEY) : nullptr;
-    if (!variables || !variables->len)
-        return th_variant(types, name, nullptr, 0);
-    th_arg *args = core_alloc_array(th_arg, variables->len);
-    if (!args) return nullptr;
-    for (size_t i = 0; i < variables->len; i++)
-        args[i] = (th_arg){.kind = TH_ARG_TYPE,
-                           .type = variables->data[i].type};
-    th_type *named = th_variant(types, name, args, variables->len);
-    core_free(args);
-    return named;
+    return template_type(types, name, symbol, true);
+}
+
+static parse_tree_t *
+group_item(parse_tree_t *node, size_t i, size_t j)
+{
+    parse_tree_t *child = core_tree_child(node, i);
+    if (!parse_tree_is_group(child)) return j ? nullptr : child;
+    return j < core_tree_num_children(child) ? core_tree_child(child, j)
+                                             : nullptr;
 }
 
 bool
@@ -865,12 +891,8 @@ cache_record_layout_request(parse_grammar_t *grammar,
     n00bb_record_layout_request_t request = {0};
     bool found = false;
     for (size_t i = 0; i < core_tree_num_children(declaration); i++) {
-        parse_tree_t *child = core_tree_child(declaration, i);
-        size_t count = parse_tree_is_group(child)
-            ? core_tree_num_children(child) : 1;
-        for (size_t j = 0; j < count; j++) {
-            parse_tree_t *modifier = parse_tree_is_group(child)
-                ? core_tree_child(child, j) : child;
+        parse_tree_t *modifier;
+        for (size_t j = 0; (modifier = group_item(declaration, i, j)); j++) {
             if (!NT_IS(grammar, modifier, "type-layout-modifier")) continue;
             found = true;
             parse_tree_t *layout = CHILD_NT(grammar, modifier,
@@ -3381,6 +3403,28 @@ n00bb_trait_method_instances(th_ctx *types, parse_sym_entry_t *trait_symbol,
     return ok;
 }
 
+static th_type *
+function_reshaped(th_ctx *types, th_type *function, const th_param *receiver,
+                  size_t first, uint32_t views, th_type *error_type)
+{
+    core_list_t(th_param) params = core_list_new(th_param);
+    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
+    if (receiver) core_list_push(params, *receiver);
+    for (size_t i = first; i < th_func_nparams(function); i++) {
+        th_param param = *th_func_param(function, i);
+        if (i < 32 && views >> i & 1) param.mode = TH_VIEW;
+        core_list_push(params, param);
+    }
+    for (size_t i = 0; i < th_func_nkw(function); i++)
+        core_list_push(keywords, *th_func_kw(function, i));
+    th_type *result = th_func_with_error(types, th_func_ret(function),
+        error_type, params.data, params.len, th_func_rest(function),
+        keywords.data, keywords.len);
+    core_list_free(params);
+    core_list_free(keywords);
+    return result;
+}
+
 static bool
 apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_tree_t *constraint_node, th_ctx *types,
@@ -3406,17 +3450,8 @@ apply_trait_arguments(parse_grammar_t *grammar, core_translation_unit_t *unit,
                        ARG_NUMBER((int64_t)arguments.len)));
     for (size_t m = 0; ok && m < methods.len; m++) {
         th_type *instance = methods.data[m].target;
-        core_list_t(th_param) rest = core_list_new(th_param);
-        core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
-        for (size_t p = 1; p < th_func_nparams(instance); p++)
-            core_list_push(rest, *th_func_param(instance, p));
-        for (size_t k = 0; k < th_func_nkw(instance); k++)
-            core_list_push(keywords, *th_func_kw(instance, k));
-        th_type *call = th_func_with_error(types, th_func_ret(instance),
-            th_func_error(instance), rest.data, rest.len,
-            th_func_rest(instance), keywords.data, keywords.len);
-        core_list_free(rest);
-        core_list_free(keywords);
+        th_type *call = function_reshaped(types, instance, nullptr, 1, 0,
+                                          th_func_error(instance));
         ok = call != nullptr;
         if (ok) {
             methods.data[m].target = call;
@@ -3869,20 +3904,8 @@ function_with_view_operands(th_ctx *types, th_type *function,
 {
     function = function ? th_resolve(function) : nullptr;
     if (!function || th_kind_of(function) != TH_FUNCTION) return function;
-    core_list_t(th_param) params = core_list_new(th_param);
-    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
-    for (size_t i = 0; i < th_func_nparams(function); i++) {
-        th_param param = *th_func_param(function, i);
-        if (i < 32 && operands >> i & 1) param.mode = TH_VIEW;
-        core_list_push(params, param);
-    }
-    for (size_t i = 0; i < th_func_nkw(function); i++)
-        core_list_push(keywords, *th_func_kw(function, i));
-    th_type *result = th_func_with_error(types, th_func_ret(function),
-        th_func_error(function), params.data, params.len,
-        th_func_rest(function), keywords.data, keywords.len);
-    core_list_free(params);
-    core_list_free(keywords);
+    th_type *result = function_reshaped(types, function, nullptr, 0, operands,
+                                        th_func_error(function));
     return result ? result : function;
 }
 
@@ -3926,18 +3949,7 @@ function_with_error_channel(th_ctx *types, th_type *function,
 {
     if (!types || !function || th_kind_of(function) != TH_FUNCTION
         ) return nullptr;
-    core_list_t(th_param) params = core_list_new(th_param);
-    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
-    for (size_t i = 0; i < th_func_nparams(function); i++)
-        core_list_push(params, *th_func_param(function, i));
-    for (size_t i = 0; i < th_func_nkw(function); i++)
-        core_list_push(keywords, *th_func_kw(function, i));
-    th_type *result = th_func_with_error(types, th_func_ret(function),
-        error_type, params.data, params.len, th_func_rest(function),
-        keywords.data, keywords.len);
-    core_list_free(params);
-    core_list_free(keywords);
-    return result;
+    return function_reshaped(types, function, nullptr, 0, 0, error_type);
 }
 
 static core_string_t
@@ -4317,6 +4329,24 @@ callback_signature_tail_matches(th_ctx *types, th_type *handler,
     return true;
 }
 
+static th_type *
+function_result_types(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *result, th_type **failure)
+{
+    parse_tree_t *return_node = CHILD_NT(grammar, result, "return-type");
+    parse_tree_t *error_node = CHILD_NT(grammar, result, "error-type");
+    parse_tree_t *return_types = CHILD_NT(grammar, return_node,
+                                          "union-tspec");
+    parse_tree_t *error_type = CHILD_NT(grammar, error_node, "one-tspec");
+    th_type *success = return_node
+        ? return_types ? parse_tree_type(return_types) : nullptr
+        : th_name(state->types, CORE_STRING_STATIC("nil"));
+    *failure = error_node
+        ? error_type ? parse_tree_type(error_type) : nullptr
+        : th_name(state->types, CORE_STRING_STATIC("nil"));
+    return success;
+}
+
 void
 record_callback_role_signature(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
@@ -4335,18 +4365,9 @@ record_callback_role_signature(parse_grammar_t *grammar,
     bool valid = symbol && signature && state && state->types
         && resolve_function_parameter_facts(grammar, state, facts,
             &parameters, &rest, &has_rest);
-    parse_tree_t *result = CHILD_NT(grammar, signature, "function-result");
-    parse_tree_t *return_node = CHILD_NT(grammar, result, "return-type");
-    parse_tree_t *error_node = CHILD_NT(grammar, result, "error-type");
-    parse_tree_t *return_type = CHILD_NT(grammar, return_node,
-                                         "union-tspec");
-    parse_tree_t *error_type = CHILD_NT(grammar, error_node, "one-tspec");
-    th_type *success = return_node
-        ? return_type ? parse_tree_type(return_type) : nullptr
-        : th_name(state->types, CORE_STRING_STATIC("nil"));
-    th_type *failure = error_node
-        ? error_type ? parse_tree_type(error_type) : nullptr
-        : th_name(state->types, CORE_STRING_STATIC("nil"));
+    th_type *failure = nullptr;
+    th_type *success = function_result_types(grammar, state,
+        CHILD_NT(grammar, signature, "function-result"), &failure);
     th_type *contract = valid && success && failure
         ? th_func_with_error(state->types, success, failure,
             parameters.data, parameters.len, has_rest ? &rest : nullptr,
@@ -5038,6 +5059,24 @@ cache_flagset_semantics(parse_grammar_t *grammar,
 }
 
 bool
+n00bb_digits_value(core_string_t text, size_t i, unsigned base,
+                   ir_uint_t limit, ir_uint_t *value)
+{
+    bool digit_seen = false;
+    for (; i < text.u8_bytes; i++) {
+        unsigned char c = (unsigned char)text.data[i];
+        if (c == '_') continue;
+        unsigned digit = c >= '0' && c <= '9' ? c - '0'
+            : c >= 'a' && c <= 'f' ? c - 'a' + 10
+            : c >= 'A' && c <= 'F' ? c - 'A' + 10 : base;
+        if (digit >= base || *value > (limit - digit) / base) return false;
+        *value = *value * base + digit;
+        digit_seen = true;
+    }
+    return digit_seen;
+}
+
+bool
 n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal)
 {
     unsigned base = 10;
@@ -5060,19 +5099,8 @@ n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal)
         }
     }
     ir_uint_t value = 0;
-    bool digit_seen = false;
-    for (; i < text.u8_bytes; i++) {
-        unsigned char c = (unsigned char)text.data[i];
-        if (c == '_') continue;
-        unsigned digit = c >= '0' && c <= '9' ? c - '0'
-            : c >= 'a' && c <= 'f' ? c - 'a' + 10
-            : c >= 'A' && c <= 'F' ? c - 'A' + 10 : base;
-        if (digit >= base || value > (~(ir_uint_t)0 - digit) / base)
-            return false;
-        value = value * base + digit;
-        digit_seen = true;
-    }
-    if (!digit_seen) return false;
+    if (!n00bb_digits_value(text, i, base, ~(ir_uint_t)0, &value))
+        return false;
     *literal = (ir_lit_t){.mag = value, .neg = negative && value, .hex = hex};
     return true;
 }
@@ -5343,10 +5371,9 @@ n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to)
         && core_string_eq(to_name, CORE_STRING_STATIC("string"));
 }
 
-bool
-n00bb_reference_views(th_type *from, th_type *to)
+static const th_arg *
+view_element(th_type *to)
 {
-    from = from ? th_resolve(from) : nullptr;
     to = to ? th_resolve(to) : nullptr;
     core_string_t name = {};
     size_t count = 0;
@@ -5355,8 +5382,15 @@ n00bb_reference_views(th_type *from, th_type *to)
         && core_string_eq(name,
                CORE_STRING_STATIC("builtin.containers.view.View"))
         ? th_named_arg(to, 0) : nullptr;
-    return item && item->kind == TH_ARG_TYPE && from
-        && th_kind_of(from) == TH_INDIRECTION
+    return item && item->kind == TH_ARG_TYPE ? item : nullptr;
+}
+
+bool
+n00bb_reference_views(th_type *from, th_type *to)
+{
+    from = from ? th_resolve(from) : nullptr;
+    const th_arg *item = view_element(to);
+    return item && from && th_kind_of(from) == TH_INDIRECTION
         && th_same_type(th_ind_referent(from), item->type);
 }
 
@@ -5364,15 +5398,8 @@ bool
 n00bb_value_views(th_type *from, th_type *to)
 {
     from = from ? th_resolve(from) : nullptr;
-    to = to ? th_resolve(to) : nullptr;
-    core_string_t name = {};
-    size_t count = 0;
-    const th_arg *item = to && th_kind_of(to) == TH_NAMED
-        && th_named_info(to, &name, nullptr, &count) && count == 1
-        && core_string_eq(name,
-               CORE_STRING_STATIC("builtin.containers.view.View"))
-        ? th_named_arg(to, 0) : nullptr;
-    return item && item->kind == TH_ARG_TYPE && from
+    const th_arg *item = view_element(to);
+    return item && from
         && th_kind_of(from) != TH_VAR && th_kind_of(from) != TH_INDIRECTION
         && th_same_type(from, item->type);
 }
@@ -6101,9 +6128,7 @@ select_storage_classes(core_list_t(core_translation_unit_ptr_t) *units)
     if (!units) return false;
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symtab = tu_symtab(unit);
         if (!symtab) return false;
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
@@ -6405,21 +6430,9 @@ n00bb_callback_method_signature(th_ctx *types, th_type *receiver,
     if (function && th_kind_of(function) == TH_BINDER)
         function = th_instantiate(types, function);
     if (!function || th_kind_of(function) != TH_FUNCTION) return nullptr;
-
-    core_list_t(th_param) parameters = core_list_new(th_param);
-    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
-    core_list_push(parameters, ((th_param){.mode = TH_IN,
-                                           .type = receiver}));
-    for (size_t i = 0; i < th_func_nparams(function); i++)
-        core_list_push(parameters, *th_func_param(function, i));
-    for (size_t i = 0; i < th_func_nkw(function); i++)
-        core_list_push(keywords, *th_func_kw(function, i));
-    th_type *signature = th_func_with_error(types, th_func_ret(function),
-        th_func_error(function), parameters.data, parameters.len,
-        th_func_rest(function), keywords.data, keywords.len);
-    core_list_free(parameters);
-    core_list_free(keywords);
-    return signature;
+    return function_reshaped(types, function,
+                             &(th_param){.mode = TH_IN, .type = receiver},
+                             0, 0, th_func_error(function));
 }
 
 static bool
@@ -7903,21 +7916,9 @@ void
 collect_positional_nodes(parse_grammar_t *grammar, parse_tree_t *node,
                          core_list_t(n00bb_tree_ptr_t) *arguments)
 {
-    if (!NT_IS(grammar, node, "positional-args")) return;
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-    {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (NT_IS(grammar, child, "expression")) {
-            core_list_push(*arguments, child);
-            continue;
-        }
-        if (!parse_tree_is_group(child)) continue;
-        for (size_t j = 0; j < core_tree_num_children(child); j++) {
-            parse_tree_t *item = core_tree_child(child, j);
-            if (NT_IS(grammar, item, "expression"))
-                core_list_push(*arguments, item);
-        }
-    }
+    collect_argument_nodes(grammar, node,
+                           CORE_STRING_STATIC("positional-args"),
+                           CORE_STRING_STATIC("expression"), arguments);
 }
 
 static void
@@ -9539,19 +9540,9 @@ compose_type_syntax_node(parse_grammar_t *grammar,
             if (!keyword) valid = false;
             else core_list_push(keywords, *keyword);
         }
-        parse_tree_t *result = CHILD_NT(grammar, node,
-            "tspec-function-result");
-        parse_tree_t *return_node = CHILD_NT(grammar, result, "return-type");
-        parse_tree_t *error_node = CHILD_NT(grammar, result, "error-type");
-        parse_tree_t *return_types = CHILD_NT(grammar, return_node,
-                                               "union-tspec");
-        parse_tree_t *error_type = CHILD_NT(grammar, error_node, "one-tspec");
-        th_type *success = return_node
-            ? return_types ? parse_tree_type(return_types) : nullptr
-            : th_name(state->types, CORE_STRING_STATIC("nil"));
-        th_type *failure = error_node
-            ? error_type ? parse_tree_type(error_type) : nullptr
-            : th_name(state->types, CORE_STRING_STATIC("nil"));
+        th_type *failure = nullptr;
+        th_type *success = function_result_types(grammar, state,
+            CHILD_NT(grammar, node, "tspec-function-result"), &failure);
         th_type *function = valid && success && failure
             ? th_func_with_error(state->types, success, failure,
                 params.data, params.len, has_rest ? &rest : nullptr,
@@ -9592,12 +9583,8 @@ compose_type_syntax_node(parse_grammar_t *grammar,
     if (NT_IS(grammar, node, "union-tspec")) {
         core_list_t(th_type_ptr_t) arms = core_list_new(th_type_ptr_t);
         for (size_t i = 0; i < core_tree_num_children(node); i++) {
-            parse_tree_t *child = core_tree_child(node, i);
-            size_t count = parse_tree_is_group(child)
-                ? core_tree_num_children(child) : 1;
-            for (size_t j = 0; j < count; j++) {
-                parse_tree_t *arm = parse_tree_is_group(child)
-                    ? core_tree_child(child, j) : child;
+            parse_tree_t *arm;
+            for (size_t j = 0; (arm = group_item(node, i, j)); j++) {
                 if (!NT_IS(grammar, arm, "one-tspec")) continue;
                 th_type *type = parse_tree_type(arm);
                 if (!type) {

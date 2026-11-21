@@ -529,19 +529,7 @@ parse_integer(core_string_t text, __int128 *out)
     unsigned __int128 value = 0;
     unsigned __int128 limit = ((unsigned __int128)1 << 127)
         - (negative ? 0 : 1);
-    bool digit_seen = false;
-    for (; i < text.u8_bytes; i++) {
-        unsigned char c = (unsigned char)text.data[i];
-        if (c == '_') continue;
-        unsigned digit = c >= '0' && c <= '9' ? c - '0'
-            : c >= 'a' && c <= 'f' ? c - 'a' + 10
-            : c >= 'A' && c <= 'F' ? c - 'A' + 10 : base;
-        if (digit >= base) return false;
-        digit_seen = true;
-        if (value > (limit - digit) / base) return false;
-        value = value * base + digit;
-    }
-    if (!digit_seen) return false;
+    if (!n00bb_digits_value(text, i, base, limit, &value)) return false;
     *out = negative ? -(__int128)(value - (value == ((unsigned __int128)1 << 127)))
                     : (__int128)value;
     if (negative && value == ((unsigned __int128)1 << 127))

@@ -661,17 +661,6 @@ dump_symbols(core_translation_unit_t *unit)
                        symbol->pass_by.data);
             if (symbol->is_optional) printf(", optional");
             if (symbol->is_variadic) printf(", variadic");
-            if (symbol->error_type && state->types) {
-                core_string_t printed = n00bb_print_type_qualified(state->types,
-                                                         symbol->error_type);
-                printf(", error=%.*s", TEXT_ARGS(printed));
-            }
-            if (symbol->direction.data)
-                printf(", direction=%.*s", (int)symbol->direction.u8_bytes,
-                       symbol->direction.data);
-            if (symbol->pass_by.data)
-                printf(", pass_by=%.*s", (int)symbol->pass_by.u8_bytes,
-                       symbol->pass_by.data);
             if (symbol->is_thread_local) printf(", thread-local");
             core_string_t storage_duration = parse_sym_storage_duration_name(
                 symbol->storage_duration);
@@ -4805,11 +4794,7 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         .context = &binder_state,
     };
     core_list_t(n00bb_ir_func_ptr_t) callers =
-        core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(callers, analysis->emitted_functions.data[i]);
-    for (size_t i = 0; i < analysis->cached_functions.len; i++)
-        core_list_push(callers, analysis->cached_functions.data[i]);
+        n00bb_program_functions(analysis);
     core_dict_t visited;
     core_dict_init(&visited, nullptr, nullptr);
     bool ok = true;
@@ -4990,12 +4975,11 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     core_list_free(seeds);
     if (ok && !check_only) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
-    core_translation_unit_t *site = nullptr;
-    for (size_t i = 0; !ok && failure.located && !site
-         && i < analysis->units.len; i++)
-        if (core_string_eq(analysis->units.data[i]->module.identifier,
-                           failure.module))
-            site = analysis->units.data[i];
+    core_translation_unit_t *site = !ok && failure.located
+        ? n00bb_unit_named(analysis, failure.module) : nullptr;
+    core_translation_unit_t *user = !ok && failure.located
+        && failure.site_located
+        ? n00bb_unit_named(analysis, failure.site_module) : nullptr;
     core_diag_location_t failure_location = {
         .line = failure.span.start_line,
         .column = failure.span.start_col,
@@ -5012,12 +4996,6 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
                        ARG_TEXT(failure.after), ARG_TEXT(failure.before),
                        ARG_TEXT(failure.other)));
-        core_translation_unit_t *user = nullptr;
-        for (size_t i = 0; failure.site_located && !user
-             && i < analysis->units.len; i++)
-            if (core_string_eq(analysis->units.data[i]->module.identifier,
-                               failure.site_module))
-                user = analysis->units.data[i];
         if (user)
             n00bb_report_secondary(failure_diagnostics, user,
                 n00bb_span_location(failure.site),
@@ -5035,12 +5013,6 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
             N00B_TEXT_GENERIC_MISSING_IMPLEMENTATION,
             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
                        ARG_TEXT(failure.after), ARG_TEXT(failure.before)));
-        core_translation_unit_t *user = nullptr;
-        for (size_t i = 0; failure.site_located && !user
-             && i < analysis->units.len; i++)
-            if (core_string_eq(analysis->units.data[i]->module.identifier,
-                               failure.site_module))
-                user = analysis->units.data[i];
         if (user)
             n00bb_report_secondary(failure_diagnostics, user,
                 n00bb_span_location(failure.site),

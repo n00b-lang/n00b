@@ -545,8 +545,7 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symtab = tu_symtab(unit);
         if (!symtab) return false;
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
