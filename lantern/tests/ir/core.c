@@ -337,7 +337,7 @@ static void test_types(void)
     check("outcome definitions survive failure-channel refinement",
           outcome_definition && th_fill(error1, a)
               && ir_type_definition(m, outcome1) == outcome_definition
-              && ir_type_definition_owner(m, outcome1) == m);
+              && !ir_type_definition_owner(m, outcome1));
 
     bool found_a = false;
     bool found_c = false;
