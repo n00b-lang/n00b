@@ -59,8 +59,6 @@ struct scan_lex_t {
     size_t opwidth[256];
     core_list_t(lex_term_node_t) term_nodes;
     core_list_t(lex_term_edge_t) term_edges;
-    core_list_t(lex_term_node_t) opener_nodes;
-    core_list_t(lex_term_edge_t) opener_edges;
     core_list_t(lex_term_node_t) string_nodes;
     core_list_t(lex_term_edge_t) string_edges;
     core_list_t(lex_term_node_t) number_nodes;

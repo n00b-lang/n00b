@@ -81,11 +81,9 @@ ensure_filled(parse_token_stream_t *ts, int32_t target)
             ts->scanner->at_eof = true;
             scan_scanner_check_rest(ts->scanner);
             if (ts->scanner->status == SCAN_STATUS_ACTIVE) {
-                ts->scanner->status = ts->scanner->source_final
-                                          ? (ts->scanner->had_recovery
-                                                 ? SCAN_STATUS_RECOVERED
-                                                 : SCAN_STATUS_COMPLETE)
-                                          : SCAN_STATUS_INCOMPLETE;
+                ts->scanner->status = ts->scanner->had_recovery
+                                          ? SCAN_STATUS_RECOVERED
+                                          : SCAN_STATUS_COMPLETE;
             }
             if (ts->scanner->status != SCAN_STATUS_INCOMPLETE) {
                 append_pending_eof_trivia(ts);

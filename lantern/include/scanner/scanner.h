@@ -96,7 +96,6 @@ struct parse_scanner_t {
     parse_trivia_t    *pending_trailing_tail;
 
     bool              at_eof;
-    bool              source_final;
     bool              token_suffix_lookahead;
     scan_status_t     status;
     scan_problem_t    status_problem;

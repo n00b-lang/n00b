@@ -36,40 +36,6 @@ check_span(parse_scanner_t *s, size_t start, size_t end, int32_t tid)
 }
 
 static bool
-partial_utf8_at_end(const parse_scanner_t *s)
-{
-    if (!s || s->source_final || s->cursor >= s->input.u8_bytes) {
-        return false;
-    }
-
-    const uint8_t *p = (const uint8_t *)s->input.data + s->cursor;
-    size_t remaining = s->input.u8_bytes - s->cursor;
-    size_t width = p[0] >= 0xC2 && p[0] <= 0xDF ? 2
-                 : p[0] >= 0xE0 && p[0] <= 0xEF ? 3
-                 : p[0] >= 0xF0 && p[0] <= 0xF4 ? 4 : 1;
-
-    if (width == 1 || remaining >= width) {
-        return false;
-    }
-
-    for (size_t i = 1; i < remaining; i++) {
-        if (p[i] < 0x80 || p[i] > 0xBF) {
-            return false;
-        }
-    }
-
-    if (remaining > 1
-        && ((p[0] == 0xE0 && p[1] < 0xA0)
-            || (p[0] == 0xED && p[1] > 0x9F)
-            || (p[0] == 0xF0 && p[1] < 0x90)
-            || (p[0] == 0xF4 && p[1] > 0x8F))) {
-        return false;
-    }
-
-    return true;
-}
-
-static bool
 cc_match(parse_char_class_t cc, core_codepoint_t cp)
 {
     switch (cc) {
@@ -176,7 +142,6 @@ scan_scanner_new(core_buffer_t                *buf,
     s->grammar   = grammar;
     s->at_eof    = false;
     s->status    = SCAN_STATUS_ACTIVE;
-    s->source_final = true;
 
     s->mark      = 0;
     s->mark_line = 1;
@@ -479,7 +444,7 @@ scan_peek_byte(parse_scanner_t *s, int32_t offset)
 bool
 scan_at_eof(parse_scanner_t *s)
 {
-    return s->cursor >= s->input.u8_bytes || partial_utf8_at_end(s);
+    return s->cursor >= s->input.u8_bytes;
 }
 
 size_t
