@@ -234,6 +234,13 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     core_free(rank);
 }
 
+static int
+heap_order(const void *left, const void *right)
+{
+    const ir_sheap_t *a = left, *b = right;
+    return (a->origin > b->origin) - (a->origin < b->origin);
+}
+
 static bool
 encode_summary(const ir_summary_t *summary, core_buffer_t *out,
                const ir_summary_texts_t *texts, bool positions)
@@ -277,9 +284,14 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         put_u32(out, witness->line);
         put_u32(out, witness->column);
     }
-    put_u32(out, (uint32_t)summary->heaps.len);
-    for (size_t i = 0; i < summary->heaps.len; i++) {
-        const ir_sheap_t *heap = &summary->heaps.data[i];
+    size_t heap_count = summary->heaps.len;
+    ir_sheap_t *heaps = core_alloc_array(ir_sheap_t, heap_count + 1);
+    if (heap_count)
+        memcpy(heaps, summary->heaps.data, heap_count * sizeof(*heaps));
+    qsort(heaps, heap_count, sizeof(*heaps), heap_order);
+    put_u32(out, (uint32_t)heap_count);
+    for (size_t i = 0; i < heap_count; i++) {
+        const ir_sheap_t *heap = &heaps[i];
         put_u32(out, heap->origin);
         put_text(out, texts, types && heap->type
             ? ir_types_text(types, heap->type) : (core_string_t){0});
@@ -289,6 +301,7 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         put_u32(out, positions ? heap->line : 0);
         put_u32(out, positions ? heap->column : 0);
     }
+    core_free(heaps);
     return true;
 }
 
