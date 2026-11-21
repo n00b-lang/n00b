@@ -1790,7 +1790,7 @@ cached_mutator_decisions(core_link_unit_t *link,
         n00bb_llvm_mutator_decisions_add(&facts->decisions, state->ir_module,
             core_string_borrow((const char *)cached.mutators,
                                cached.mutators_bytes));
-        ir_module_t *body = cached.runtime_object ? nullptr : cached.ir;
+        ir_module_t *body = cached.ir;
         for (size_t g = 0; body && g < ir_global_count(body); g++)
             if (!ir_global_at(body, g)->is_extern)
                 core_dict_put(&facts->definitions,
