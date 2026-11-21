@@ -1,0 +1,6 @@
+import inline_types
+
+record Pair {
+    block: inline_types.Block
+    plain: inline_types.Plain
+}

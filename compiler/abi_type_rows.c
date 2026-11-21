@@ -170,7 +170,7 @@ type_category(ir_module_t *module, th_type *type,
 bool
 n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
-    bool include_external_definitions, const parse_symtab_t *symbols,
+    const parse_symtab_t *symbols,
     n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names, n00bb_abi_type_identity_rows_t *out)
 {
@@ -181,6 +181,7 @@ n00bb_abi_type_identity_rows_build(
     if (!count || count > (UINT32_MAX >> 1)) return false;
     n00b_abi_type_v1 *rows = core_alloc_array(n00b_abi_type_v1, count);
     parse_sym_entry_t **owners = core_alloc_array(parse_sym_entry_t *, count);
+    bool *elsewhere = core_alloc_array(bool, count + 1);
     core_list_t(n00b_abi_type_argument_v1) arguments = {0};
     core_list_push(arguments, ((n00b_abi_type_argument_v1){0}));
     for (parse_scope_t *scope = symbols ? symbols->all_scopes : nullptr;
@@ -324,19 +325,13 @@ n00bb_abi_type_identity_rows_build(
             || (type_parameters && type_parameters->len)
             || (definition && !th_is_closed(types, definition)))
             row->flags |= N00B_ABI_TYPE_FLAG_NON_CONCRETE;
-        ir_module_t *definition_owner = ir_type_definition_owner(runtime,
-            type);
-        size_t named_arguments = 0;
-        bool specialization = th_named_info(th_resolve(type), nullptr,
-            nullptr, &named_arguments) && named_arguments != 0;
         bool object = row->kind == N00B_ABI_TYPE_OBJECT;
-        bool external = !include_external_definitions && !owner
-            && definition_owner && definition_owner != runtime
-            && row->kind != N00B_ABI_TYPE_ATOMIC && !object;
-        const ir_final_layout_t *final = ir_layout_final(runtime,
-            object && definition ? definition : type,
-            ir_module_target(runtime));
-        if (external && !specialization) final = nullptr;
+        elsewhere[i] = !owner && declaration_owner && !object
+            && row->kind != N00B_ABI_TYPE_ATOMIC;
+        const ir_final_layout_t *final = elsewhere[i] ? nullptr
+            : ir_layout_final(runtime, object && definition ? definition
+                                                            : type,
+                              ir_module_target(runtime));
         if (final) {
             row->size_bits = final->intrinsic_bits;
             row->alignment_bytes = final->alignment_bytes;
@@ -389,12 +384,14 @@ n00bb_abi_type_identity_rows_build(
             ? (uint32_t)failing_index : 0;
         out->failed_reason = failed_reason;
         core_free(owners);
+        core_free(elsewhere);
         core_free(rows);
         core_list_free(arguments);
         return false;
     }
     *out = (n00bb_abi_type_identity_rows_t){
-        .rows = rows, .owners = owners, .count = count,
+        .rows = rows, .owners = owners, .declared_elsewhere = elsewhere,
+        .count = count,
         .owner_lookup = lookup, .owner_lookup_context = lookup_context,
         .arguments = arguments.data, .argument_count = arguments.len,
     };
@@ -768,6 +765,7 @@ n00bb_abi_type_identity_rows_release(
     if (!rows) return;
     core_free(rows->rows);
     core_free(rows->owners);
+    core_free(rows->declared_elsewhere);
     core_free(rows->arguments);
     *rows = (n00bb_abi_type_identity_rows_t){0};
 }

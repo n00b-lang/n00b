@@ -877,10 +877,6 @@ record_shape_build(ir_module_t *requester, th_type *type,
 {
     *shape = (record_shape_t){0};
     ir_module_t *module = requester;
-    ir_module_t *owner = type
-        ? ir_type_definition_owner(requester, type) : nullptr;
-    if (owner && ir_layout_final(owner, type, ir_module_target(owner)))
-        module = owner;
     th_type *definition = type ? ir_type_definition(module, type) : nullptr;
     if (type && !definition && th_kind_of(th_resolve(type)) == TH_RECORD)
         definition = th_resolve(type);

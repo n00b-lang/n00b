@@ -335,10 +335,7 @@ th_type *th_builtin_item(th_ctx *ctx, const th_type *type,
 
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
 size_t   th_generic_arity(th_ctx *ctx, core_string_t name);
-bool     th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
-                              void *owner);
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
-void    *th_type_definition_owner(th_ctx *ctx, const th_type *type);
 th_type *th_auto_deref(th_ctx *ctx, th_type *type);
 th_type *th_fields_record(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,

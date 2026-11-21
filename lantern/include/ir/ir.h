@@ -535,7 +535,6 @@ size_t   ir_type_count(const ir_module_t *m);
 th_type *ir_type_at(ir_module_t *m, size_t i);
 bool     ir_type_define(ir_module_t *m, th_type *named, th_type *def);
 th_type *ir_type_definition(ir_module_t *m, th_type *named);
-ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named);
 
 int32_t     ir_file_add(ir_module_t *m, core_string_t path);
 core_string_t ir_file_path(const ir_module_t *m, int32_t id);

@@ -647,6 +647,11 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
             for (size_t p = 0; valid && p < pending.len; p++) {
                 uint32_t i = pending.data[p];
                 th_type *registered = ir_type_at(module, i);
+                th_type *shape = registered ? th_resolve(registered) : nullptr;
+                if (shape && th_kind_of(shape) == TH_SEQUENCE)
+                    ir_type_intern(module, th_seq_elem(shape));
+                if (shape && th_kind_of(shape) == TH_INDIRECTION)
+                    ir_type_intern(module, th_ind_referent(shape));
                 if (!registered
                     || th_kind_of(th_resolve(registered)) != TH_NAMED)
                     continue;
@@ -670,12 +675,16 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 core_translation_unit_t *owner = nullptr;
                 if (requested_record_symbol_for_type(analysis, type,
                         N00BB_RECORD_C, &owner)) {
-                    ir_module_t *source = u >= analysis->units.len && owner
+                    ir_module_t *source = owner
                         ? tu_state(owner)->ir_module : nullptr;
                     const ir_final_layout_t *layout = source
                         ? ir_layout_final(source, type,
                                           analysis->target.triple)
                         : nullptr;
+                    for (size_t j = 0; layout && j < th_record_len(definition);
+                         j++)
+                        ir_type_intern(module,
+                                       th_record_member(definition, j)->type);
                     if (layout) {
                         valid = ir_layout_publish_final(module, type,
                             analysis->target.triple, layout);
@@ -728,6 +737,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         ? ir_layout_final(module, physical,
                                           analysis->target.triple) : nullptr;
                     if (!member || !member->name.data || !child) {
+                        if (physical) ir_type_intern(module, physical);
                         ready = false;
                         break;
                     }
@@ -774,25 +784,6 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     return valid;
 }
 
-static bool
-borrow_owner_layouts(ir_module_t *module, th_type *type,
-                     core_string_t target, size_t depth)
-{
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || depth > 16 || th_kind_of(type) != TH_NAMED) return true;
-    for (size_t i = 0; i < th_named_nargs(type); i++) {
-        const th_arg *argument = th_named_arg(type, i);
-        if (argument && argument->kind == TH_ARG_TYPE
-            && !borrow_owner_layouts(module, argument->type, target,
-                                     depth + 1)) return false;
-    }
-    if (ir_layout_final(module, type, target)) return true;
-    ir_module_t *owner = ir_type_definition_owner(module, type);
-    const ir_final_layout_t *layout = owner && owner != module
-        ? ir_layout_final(owner, type, target) : nullptr;
-    return !layout || ir_layout_publish_final(module, type, target, layout);
-}
-
 bool
 publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
 {
@@ -809,9 +800,7 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 if (!channels[c] || !th_is_closed(ir_module_types(module),
                                                  channels[c])) continue;
                 bool handled = false;
-                if (!borrow_owner_layouts(module, channels[c],
-                        analysis->target.triple, 0)
-                    || !n00bb_abi_publish_direct_layout(module,
+                if (!n00bb_abi_publish_direct_layout(module,
                         channels[c], &analysis->target, &handled))
                     return false;
             }
@@ -820,10 +809,8 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 bool handled = false;
                 if (parameter && parameter->type
                     && th_is_closed(ir_module_types(module), parameter->type)
-                    && (!borrow_owner_layouts(module, parameter->type,
-                            analysis->target.triple, 0)
-                        || !n00bb_abi_publish_direct_layout(module,
-                            parameter->type, &analysis->target, &handled)))
+                    && !n00bb_abi_publish_direct_layout(module,
+                        parameter->type, &analysis->target, &handled))
                     return false;
             }
             for (size_t b = 0; b < function->n_blocks; b++) {
