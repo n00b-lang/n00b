@@ -124,17 +124,35 @@ n00bb_abi_rebuild_specialization_links(
     }
     if (valid && edge_count) qsort(edges, edge_count, sizeof(*edges),
                                    compare_specialization_edges);
+    n00bb_abi_specialization_t *pairs = core_alloc_array(
+        n00bb_abi_specialization_t, edge_count + 1);
     size_t unique = 0;
-    for (size_t i = 0; valid && i < edge_count;) {
+    for (size_t i = 0; valid && pairs && i < edge_count;) {
         size_t end = i + 1;
         while (end < edge_count && edges[end].child == edges[i].child
             && edges[end].parent == edges[i].parent) {
             if (edges[end].input == edges[end - 1].input) valid = false;
             end++;
         }
-        edges[unique++] = edges[i];
+        pairs[unique++] = (n00bb_abi_specialization_t){
+            edges[i].child, edges[i].parent,
+        };
         i = end;
     }
+    valid = valid && pairs
+        && n00bb_abi_link_specializations(types, links, pairs, unique);
+    core_free(pairs);
+    core_free(edges);
+    return valid;
+}
+
+bool
+n00bb_abi_link_specializations(n00bb_abi_merged_table_t *types,
+                               n00bb_abi_merged_table_t *links,
+                               const n00bb_abi_specialization_t *edges,
+                               size_t unique)
+{
+    bool valid = unique < UINT32_MAX && (!unique || links);
     uint32_t *rebuilt = valid
         ? core_alloc_array(uint32_t, unique + 1) : nullptr;
     n00b_abi_range_v1 *spans = valid
@@ -143,14 +161,18 @@ n00bb_abi_rebuild_specialization_links(
         ? core_alloc_array(uint32_t, types->record_count) : nullptr;
     uint32_t *queue = valid
         ? core_alloc_array(uint32_t, types->record_count) : nullptr;
-    valid = valid && rebuilt && spans && incoming && queue
-        && (!unique || links);
+    valid = valid && rebuilt && spans && incoming && queue;
     if (valid) {
         memset(spans, 0, (size_t)types->record_count * sizeof(*spans));
         memset(incoming, 0, (size_t)types->record_count * sizeof(*incoming));
         rebuilt[0] = 0;
-        for (size_t i = 0; i < unique; i++) {
-            specialization_edge_t edge = edges[i];
+        for (size_t i = 0; valid && i < unique; i++) {
+            n00bb_abi_specialization_t edge = edges[i];
+            if (edge.child == edge.parent || edge.child >= types->record_count
+                || edge.parent >= types->record_count) {
+                valid = false;
+                break;
+            }
             n00b_abi_range_v1 *span = &spans[edge.child];
             if (!span->count) span->first = (uint32_t)i + 1;
             span->count++;
@@ -158,9 +180,9 @@ n00bb_abi_rebuild_specialization_links(
             incoming[edge.parent]++;
         }
         size_t head = 0, tail = 0;
-        for (uint32_t i = 0; i < types->record_count; i++)
+        for (uint32_t i = 0; valid && i < types->record_count; i++)
             if (!incoming[i]) queue[tail++] = i;
-        while (head < tail) {
+        while (valid && head < tail) {
             uint32_t child = queue[head++];
             n00b_abi_range_v1 span = spans[child];
             for (uint32_t j = 0; j < span.count; j++) {
@@ -168,7 +190,7 @@ n00bb_abi_rebuild_specialization_links(
                 if (!--incoming[parent]) queue[tail++] = parent;
             }
         }
-        valid = tail == types->record_count;
+        valid = valid && tail == types->record_count;
     }
     if (valid) {
         for (uint32_t i = 0; i < types->record_count; i++) {
@@ -189,7 +211,6 @@ n00bb_abi_rebuild_specialization_links(
     core_free(spans);
     core_free(incoming);
     core_free(queue);
-    core_free(edges);
     return valid;
 }
 

@@ -1,35 +1,6 @@
 #include "private/th/internal.h"
 #include "lib/alloc.h"
 
-static void
-put_u32(core_buffer_t *out, uint32_t value)
-{
-    uint8_t bytes[4];
-    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 4);
-}
-
-static void
-put_u64(core_buffer_t *out, uint64_t value)
-{
-    uint8_t bytes[8];
-    for (int i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 8);
-}
-
-static void
-put_bytes(core_buffer_t *out, const void *data, size_t length)
-{
-    put_u64(out, data ? length : UINT64_MAX);
-    if (data && length) core_buffer_append(out, data, length);
-}
-
-static void
-put_text(core_buffer_t *out, core_string_t text)
-{
-    put_bytes(out, text.data, text.u8_bytes);
-}
-
 bool
 th_env_encode(const th_env *env, core_buffer_t *out)
 {
@@ -37,66 +8,66 @@ th_env_encode(const th_env *env, core_buffer_t *out)
     th_type_writer_t *types = th_type_writer_new(env->types);
     if (!types) return false;
     core_buffer_t body = {0};
-    put_u64(&body, env->type_origins.len);
+    core_put_u64(&body, env->type_origins.len);
     for (size_t i = 0; i < env->type_origins.len; i++) {
         const th_env_type_origin_t *entry = &env->type_origins.data[i];
-        put_text(&body, entry->name);
-        put_text(&body, entry->module);
-        put_text(&body, entry->package);
-        put_u32(&body, (uint32_t)entry->visibility);
-        put_u32(&body, (uint32_t)entry->shape_kind);
-        put_u32(&body, th_type_writer_add(types, entry->shape));
+        core_put_text(&body, entry->name);
+        core_put_text(&body, entry->module);
+        core_put_text(&body, entry->package);
+        core_put_u32(&body, (uint32_t)entry->visibility);
+        core_put_u32(&body, (uint32_t)entry->shape_kind);
+        core_put_u32(&body, th_type_writer_add(types, entry->shape));
     }
-    put_u64(&body, env->traits.len);
+    core_put_u64(&body, env->traits.len);
     for (size_t i = 0; i < env->traits.len; i++) {
         const th_env_trait_t *entry = &env->traits.data[i];
-        put_text(&body, entry->name);
-        put_text(&body, entry->module);
-        put_text(&body, entry->package);
-        put_u32(&body, (uint32_t)entry->visibility);
-        put_u32(&body, th_type_writer_add(types, entry->contracts));
+        core_put_text(&body, entry->name);
+        core_put_text(&body, entry->module);
+        core_put_text(&body, entry->package);
+        core_put_u32(&body, (uint32_t)entry->visibility);
+        core_put_u32(&body, th_type_writer_add(types, entry->contracts));
     }
-    put_u64(&body, env->functions.len);
+    core_put_u64(&body, env->functions.len);
     for (size_t i = 0; i < env->functions.len; i++) {
         const th_env_function_t *entry = &env->functions.data[i];
-        put_text(&body, entry->qualified_name);
-        put_text(&body, entry->root_name);
-        put_text(&body, entry->module);
-        put_text(&body, entry->package);
-        put_u32(&body, (uint32_t)entry->visibility);
-        put_u64(&body, entry->requirement_count);
-        put_u32(&body, th_type_writer_add(types,
+        core_put_text(&body, entry->qualified_name);
+        core_put_text(&body, entry->root_name);
+        core_put_text(&body, entry->module);
+        core_put_text(&body, entry->package);
+        core_put_u32(&body, (uint32_t)entry->visibility);
+        core_put_u64(&body, entry->requirement_count);
+        core_put_u32(&body, th_type_writer_add(types,
                                           th_env_function_copy_source(entry)));
-        put_u64(&body, entry->required_params);
+        core_put_u64(&body, entry->required_params);
         for (size_t r = 0; r < entry->requirement_count; r++) {
-            put_u32(&body, (uint32_t)entry->requirement_kinds[r]);
-            put_text(&body, entry->requirement_traits[r]);
+            core_put_u32(&body, (uint32_t)entry->requirement_kinds[r]);
+            core_put_text(&body, entry->requirement_traits[r]);
         }
     }
-    put_u64(&body, env->values.len);
+    core_put_u64(&body, env->values.len);
     for (size_t i = 0; i < env->values.len; i++) {
         const th_env_value_t *entry = &env->values.data[i];
-        put_text(&body, entry->qualified_name);
-        put_text(&body, entry->root_name);
-        put_text(&body, entry->module);
-        put_text(&body, entry->package);
-        put_u32(&body, (uint32_t)entry->visibility);
-        put_u32(&body, th_type_writer_add(types, entry->type));
+        core_put_text(&body, entry->qualified_name);
+        core_put_text(&body, entry->root_name);
+        core_put_text(&body, entry->module);
+        core_put_text(&body, entry->package);
+        core_put_u32(&body, (uint32_t)entry->visibility);
+        core_put_u32(&body, th_type_writer_add(types, entry->type));
     }
-    put_u64(&body, env->intrinsic_types.len);
+    core_put_u64(&body, env->intrinsic_types.len);
     for (size_t i = 0; i < env->intrinsic_types.len; i++) {
         const th_env_intrinsic_type_t *entry = &env->intrinsic_types.data[i];
-        put_text(&body, entry->trait_name);
-        put_u32(&body, th_type_writer_add(types, entry->receiver_pattern));
+        core_put_text(&body, entry->trait_name);
+        core_put_u32(&body, th_type_writer_add(types, entry->receiver_pattern));
     }
-    put_u64(&body, env->metadata.len);
+    core_put_u64(&body, env->metadata.len);
     for (size_t i = 0; i < env->metadata.len; i++) {
         const th_env_metadata_record_t *entry = &env->metadata.data[i];
-        put_u32(&body, (uint32_t)entry->owner_kind);
-        put_text(&body, entry->owner_name);
-        put_text(&body, entry->key);
-        put_u32(&body, entry->version);
-        put_bytes(&body, entry->data, entry->size);
+        core_put_u32(&body, (uint32_t)entry->owner_kind);
+        core_put_text(&body, entry->owner_name);
+        core_put_text(&body, entry->key);
+        core_put_u32(&body, entry->version);
+        core_put_bytes(&body, entry->data, entry->size);
     }
     bool ok = th_type_writer_finish(types, out);
     th_type_writer_free(types);
@@ -106,84 +77,40 @@ th_env_encode(const th_env *env, core_buffer_t *out)
 }
 
 typedef struct {
-    const uint8_t *data;
-    size_t length;
-    size_t at;
-    bool failed;
+    core_byte_cursor_t in;
     th_type_reader_t *types;
     th_ctx *ctx;
 } cursor_t;
 
-static uint32_t
-get_u32(cursor_t *c)
-{
-    if (c->failed || c->length - c->at < 4) {
-        c->failed = true;
-        return 0;
-    }
-    uint32_t value = 0;
-    for (int i = 0; i < 4; i++) value |= (uint32_t)c->data[c->at + i] << (8 * i);
-    c->at += 4;
-    return value;
-}
-
-static uint64_t
-get_u64(cursor_t *c)
-{
-    if (c->failed || c->length - c->at < 8) {
-        c->failed = true;
-        return 0;
-    }
-    uint64_t value = 0;
-    for (int i = 0; i < 8; i++) value |= (uint64_t)c->data[c->at + i] << (8 * i);
-    c->at += 8;
-    return value;
-}
-
-static const uint8_t *
-get_bytes(cursor_t *c, size_t *length)
-{
-    uint64_t size = get_u64(c);
-    *length = 0;
-    if (c->failed || size == UINT64_MAX) return nullptr;
-    if (size > c->length - c->at) {
-        c->failed = true;
-        return nullptr;
-    }
-    const uint8_t *start = c->data + c->at;
-    c->at += (size_t)size;
-    *length = (size_t)size;
-    return start;
-}
-
 static core_string_t
 get_text(cursor_t *c)
 {
-    size_t length = 0;
-    const uint8_t *bytes = get_bytes(c, &length);
-    if (!bytes) return (core_string_t){};
-    core_string_t text =
-        th_strdup(c->ctx, core_string_borrow((const char *)bytes, length));
-    if (!text.data) c->failed = true;
-    return text;
+    return th_cursor_text(&c->in, c->ctx);
+}
+
+static th_env_visibility_t
+get_declared(cursor_t *c, core_string_t names[4])
+{
+    for (size_t i = 0; i < 4; i++) names[i] = get_text(c);
+    return (th_env_visibility_t)core_cursor_u32(&c->in);
 }
 
 static th_type *
 get_type(cursor_t *c)
 {
-    uint32_t index = get_u32(c);
+    uint32_t index = core_cursor_u32(&c->in);
     if (!index) return nullptr;
     th_type *type = th_type_reader_get(c->types, index);
-    if (!type) c->failed = true;
+    if (!type) c->in.failed = true;
     return type;
 }
 
 static uint64_t
 get_count(cursor_t *c)
 {
-    uint64_t count = get_u64(c);
-    if (count > c->length) c->failed = true;
-    return c->failed ? 0 : count;
+    uint64_t count = core_cursor_u64(&c->in);
+    if (count > (uint64_t)(c->in.end - c->in.at)) c->in.failed = true;
+    return c->in.failed ? 0 : count;
 }
 
 th_env *
@@ -201,44 +128,42 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
         return nullptr;
     }
     cursor_t c = {
-        .data = data, .length = length, .at = consumed, .types = reader,
+        .in = core_cursor(data + consumed, length - consumed),
+        .types = reader,
         .ctx = types,
     };
     bool ok = true;
     uint64_t count = get_count(&c);
-    for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
+    for (uint64_t i = 0; ok && !c.in.failed && i < count; i++) {
         core_string_t name = get_text(&c);
         core_string_t module = get_text(&c);
         core_string_t package = get_text(&c);
-        th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
+        th_env_visibility_t visibility = (th_env_visibility_t)core_cursor_u32(&c.in);
         th_env_type_shape_kind_t shape_kind =
-            (th_env_type_shape_kind_t)get_u32(&c);
+            (th_env_type_shape_kind_t)core_cursor_u32(&c.in);
         th_type *shape = get_type(&c);
-        ok = !c.failed && th_env_register_type(env, name, module, package,
+        ok = !c.in.failed && th_env_register_type(env, name, module, package,
                                                visibility);
         if (ok && shape_kind != TH_ENV_TYPE_SHAPE_NONE)
             ok = th_env_register_type_shape(env, name, shape_kind, shape);
     }
     count = get_count(&c);
-    for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
+    for (uint64_t i = 0; ok && !c.in.failed && i < count; i++) {
         core_string_t name = get_text(&c);
         core_string_t module = get_text(&c);
         core_string_t package = get_text(&c);
-        th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
+        th_env_visibility_t visibility = (th_env_visibility_t)core_cursor_u32(&c.in);
         th_type *contracts = get_type(&c);
-        ok = !c.failed && th_env_register_trait_contracts(env, name, module,
+        ok = !c.in.failed && th_env_register_trait_contracts(env, name, module,
             package, visibility, contracts);
     }
     count = get_count(&c);
-    for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        core_string_t qualified = get_text(&c);
-        core_string_t root = get_text(&c);
-        core_string_t module = get_text(&c);
-        core_string_t package = get_text(&c);
-        th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
-        uint64_t requirement_count = get_u64(&c);
+    for (uint64_t i = 0; ok && !c.in.failed && i < count; i++) {
+        core_string_t names[4];
+        th_env_visibility_t visibility = get_declared(&c, names);
+        uint64_t requirement_count = core_cursor_u64(&c.in);
         th_type *copied = get_type(&c);
-        uint64_t required = get_u64(&c);
+        uint64_t required = core_cursor_u64(&c.in);
         if (requirement_count > SIZE_MAX / sizeof(core_string_t)) {
             ok = false;
             break;
@@ -247,53 +172,50 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
             ? core_alloc_array(th_con_kind, requirement_count) : nullptr;
         core_string_t *traits = requirement_count
             ? core_alloc_array(core_string_t, requirement_count) : nullptr;
-        for (uint64_t r = 0; !c.failed && r < requirement_count; r++) {
-            kinds[r] = (th_con_kind)get_u32(&c);
+        for (uint64_t r = 0; !c.in.failed && r < requirement_count; r++) {
+            kinds[r] = (th_con_kind)core_cursor_u32(&c.in);
             traits[r] = get_text(&c);
         }
         th_env_function_t function = {
-            .qualified_name = qualified, .root_name = root,
-            .module = module, .package = package, .visibility = visibility,
+            .qualified_name = names[0], .root_name = names[1],
+            .module = names[2], .package = names[3], .visibility = visibility,
             .required_params = required,
             .requirement_kinds = kinds, .requirement_traits = traits,
             .requirement_count = requirement_count,
         };
-        ok = !c.failed && copied && th_env_copy_function(env, &function,
+        ok = !c.in.failed && copied && th_env_copy_function(env, &function,
                                                          copied);
         core_free(kinds);
         core_free(traits);
     }
     count = get_count(&c);
-    for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        core_string_t qualified = get_text(&c);
-        core_string_t root = get_text(&c);
-        core_string_t module = get_text(&c);
-        core_string_t package = get_text(&c);
-        th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
+    for (uint64_t i = 0; ok && !c.in.failed && i < count; i++) {
+        core_string_t names[4];
+        th_env_visibility_t visibility = get_declared(&c, names);
         th_type *type = get_type(&c);
-        ok = !c.failed && th_env_register_value(env, qualified, root, module,
-            package, visibility, type);
+        ok = !c.in.failed && th_env_register_value(env, names[0], names[1],
+            names[2], names[3], visibility, type);
     }
     count = get_count(&c);
-    for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
+    for (uint64_t i = 0; ok && !c.in.failed && i < count; i++) {
         core_string_t trait = get_text(&c);
         th_type *receiver = get_type(&c);
-        ok = !c.failed && th_env_register_intrinsic_type_pattern(env, trait,
+        ok = !c.in.failed && th_env_register_intrinsic_type_pattern(env, trait,
                                                                  receiver);
     }
     count = get_count(&c);
-    for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        th_env_metadata_owner_t kind = (th_env_metadata_owner_t)get_u32(&c);
+    for (uint64_t i = 0; ok && !c.in.failed && i < count; i++) {
+        th_env_metadata_owner_t kind = (th_env_metadata_owner_t)core_cursor_u32(&c.in);
         core_string_t owner = get_text(&c);
         core_string_t key = get_text(&c);
-        uint32_t version = get_u32(&c);
+        uint32_t version = core_cursor_u32(&c.in);
         size_t size = 0;
-        const uint8_t *bytes = get_bytes(&c, &size);
-        ok = !c.failed && th_env_register_metadata(env, kind, owner, key,
+        const uint8_t *bytes = core_cursor_bytes(&c.in, &size);
+        ok = !c.in.failed && th_env_register_metadata(env, kind, owner, key,
             version, bytes, size);
     }
     th_type_reader_free(reader);
-    if (!ok || c.failed || !th_env_freeze(env)) {
+    if (!ok || c.in.failed || !th_env_freeze(env)) {
         th_env_free(env);
         return nullptr;
     }

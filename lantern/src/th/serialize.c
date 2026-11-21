@@ -135,133 +135,109 @@ th_type_writer_add(th_type_writer_t *writer, const th_type *type)
 }
 
 static void
-put_u32(core_buffer_t *out, uint32_t value)
-{
-    uint8_t bytes[4];
-    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 4);
-}
-
-static void
-put_u64(core_buffer_t *out, uint64_t value)
-{
-    uint8_t bytes[8];
-    for (int i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 8);
-}
-
-static void
-put_text(core_buffer_t *out, core_string_t text)
-{
-    put_u64(out, text.data ? text.u8_bytes : UINT64_MAX);
-    if (text.data && text.u8_bytes)
-        core_buffer_append(out, text.data, text.u8_bytes);
-}
-
-static void
 put_ref(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
 {
-    put_u32(out, writer_node(writer, type));
+    core_put_u32(out, writer_node(writer, type));
 }
 
 static void
 put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
 {
-    put_u32(out, (uint32_t)type->kind);
+    core_put_u32(out, (uint32_t)type->kind);
     switch (type->kind) {
     case TH_NAMED:
-        put_text(out, type->named.name);
-        put_u32(out, type->named.is_variant);
-        put_u64(out, type->named.nargs);
+        core_put_text(out, type->named.name);
+        core_put_u32(out, type->named.is_variant);
+        core_put_u64(out, type->named.nargs);
         for (size_t i = 0; i < type->named.nargs; i++) {
             const th_arg *arg = &type->named.args[i];
-            put_u32(out, (uint32_t)arg->kind);
+            core_put_u32(out, (uint32_t)arg->kind);
             switch (arg->kind) {
             case TH_ARG_TYPE: put_ref(writer, out, arg->type); break;
-            case TH_ARG_UINT: put_u64(out, arg->u); break;
-            case TH_ARG_SINT: put_u64(out, (uint64_t)arg->s); break;
-            case TH_ARG_STR: put_text(out, arg->str); break;
+            case TH_ARG_UINT: core_put_u64(out, arg->u); break;
+            case TH_ARG_SINT: core_put_u64(out, (uint64_t)arg->s); break;
+            case TH_ARG_STR: core_put_text(out, arg->str); break;
             }
         }
         break;
     case TH_BITINT:
-        put_u64(out, type->bitint.width);
-        put_u32(out, (uint32_t)type->bitint.flavor);
+        core_put_u64(out, type->bitint.width);
+        core_put_u32(out, (uint32_t)type->bitint.flavor);
         break;
     case TH_INDIRECTION:
-        put_u32(out, type->ind.attrs);
+        core_put_u32(out, type->ind.attrs);
         put_ref(writer, out, type->ind.referent);
         break;
     case TH_SEQUENCE:
-        put_u32(out, type->seq.has_extent);
-        put_u64(out, type->seq.extent);
+        core_put_u32(out, type->seq.has_extent);
+        core_put_u64(out, type->seq.extent);
         put_ref(writer, out, type->seq.elem);
         break;
     case TH_RECORD:
-        put_u64(out, type->record.n);
+        core_put_u64(out, type->record.n);
         for (size_t i = 0; i < type->record.n; i++) {
-            put_text(out, type->record.members[i].name);
+            core_put_text(out, type->record.members[i].name);
             put_ref(writer, out, type->record.members[i].type);
         }
         break;
     case TH_TRAIT:
-        put_text(out, type->trait.name);
-        put_u64(out, type->trait.n);
+        core_put_text(out, type->trait.name);
+        core_put_u64(out, type->trait.n);
         for (size_t i = 0; i < type->trait.n; i++) {
-            put_text(out, type->trait.methods[i].name);
+            core_put_text(out, type->trait.methods[i].name);
             put_ref(writer, out, type->trait.methods[i].type);
         }
-        put_u64(out, type->trait.nr);
+        core_put_u64(out, type->trait.nr);
         for (size_t i = 0; i < type->trait.nr; i++) {
             const th_trait_requirement *requirement =
                 &type->trait.requirements[i];
             put_ref(writer, out, requirement->subject);
-            put_u32(out, (uint32_t)requirement->kind);
+            core_put_u32(out, (uint32_t)requirement->kind);
             put_ref(writer, out, requirement->target);
-            put_text(out, requirement->iface);
+            core_put_text(out, requirement->iface);
         }
         break;
     case TH_FUNCTION:
         put_ref(writer, out, type->fn.ret);
         put_ref(writer, out, type->fn.error);
-        put_u64(out, type->fn.np);
+        core_put_u64(out, type->fn.np);
         for (size_t i = 0; i < type->fn.np; i++) {
-            put_u32(out, (uint32_t)type->fn.params[i].mode);
+            core_put_u32(out, (uint32_t)type->fn.params[i].mode);
             put_ref(writer, out, type->fn.params[i].type);
         }
-        put_u32(out, type->fn.rest != nullptr);
+        core_put_u32(out, type->fn.rest != nullptr);
         if (type->fn.rest) {
-            put_u32(out, (uint32_t)type->fn.rest->mode);
+            core_put_u32(out, (uint32_t)type->fn.rest->mode);
             put_ref(writer, out, type->fn.rest->type);
         }
-        put_u64(out, type->fn.nkw);
+        core_put_u64(out, type->fn.nkw);
         for (size_t i = 0; i < type->fn.nkw; i++) {
-            put_text(out, type->fn.kw[i].name);
-            put_u32(out, (uint32_t)type->fn.kw[i].mode);
+            core_put_text(out, type->fn.kw[i].name);
+            core_put_u32(out, (uint32_t)type->fn.kw[i].mode);
             put_ref(writer, out, type->fn.kw[i].type);
         }
         break;
     case TH_BINDER:
-        put_u64(out, type->binder.arity);
+        core_put_u64(out, type->binder.arity);
         put_ref(writer, out, type->binder.body);
-        put_u32(out, type->binder.qvars != nullptr);
+        core_put_u32(out, type->binder.qvars != nullptr);
         for (uint64_t i = 0; type->binder.qvars && i < type->binder.arity; i++)
             put_ref(writer, out, type->binder.qvars[i]);
         break;
     case TH_BOUND:
-        put_u64(out, type->bound.distance);
-        put_u64(out, type->bound.position);
+        core_put_u64(out, type->bound.distance);
+        core_put_u64(out, type->bound.position);
         break;
     case TH_SUM:
-        put_u32(out, (uint32_t)type->sum.comb);
-        put_u64(out, type->sum.n);
+        core_put_u32(out, (uint32_t)type->sum.comb);
+        core_put_u64(out, type->sum.n);
         for (size_t i = 0; i < type->sum.n; i++)
             put_ref(writer, out, type->sum.arms[i]);
         break;
     case TH_VAR:
-        put_u64(out, type->var.origin
+        core_put_u64(out, type->var.origin
             ? dense_id(&writer->var_origins, type->var.origin) : 0);
-        put_text(out, type->var.name);
+        core_put_text(out, type->var.name);
         put_ref(writer, out, type->var.ref);
         break;
     default:
@@ -275,60 +251,20 @@ th_type_writer_finish(th_type_writer_t *writer, core_buffer_t *out)
     if (!writer || !out) return false;
     for (size_t i = 0; i < writer->nodes.len; i++)
         visit_children(writer, writer->nodes.data[i]);
-    put_u64(out, writer->nodes.len);
+    core_put_u64(out, writer->nodes.len);
     for (size_t i = 0; i < writer->nodes.len; i++)
         put_node(writer, out, writer->nodes.data[i]);
     return true;
 }
 
-typedef struct {
-    const uint8_t *data;
-    size_t         length;
-    size_t         at;
-    bool           failed;
-} cursor_t;
+typedef core_byte_cursor_t cursor_t;
 
-static uint32_t
-get_u32(cursor_t *cursor)
+core_string_t
+th_cursor_text(cursor_t *cursor, th_ctx *ctx)
 {
-    if (cursor->failed || cursor->length - cursor->at < 4) {
-        cursor->failed = true;
-        return 0;
-    }
-    uint32_t value = 0;
-    for (int i = 0; i < 4; i++)
-        value |= (uint32_t)cursor->data[cursor->at + i] << (8 * i);
-    cursor->at += 4;
-    return value;
-}
-
-static uint64_t
-get_u64(cursor_t *cursor)
-{
-    if (cursor->failed || cursor->length - cursor->at < 8) {
-        cursor->failed = true;
-        return 0;
-    }
-    uint64_t value = 0;
-    for (int i = 0; i < 8; i++)
-        value |= (uint64_t)cursor->data[cursor->at + i] << (8 * i);
-    cursor->at += 8;
-    return value;
-}
-
-static core_string_t
-get_text(cursor_t *cursor, th_ctx *ctx)
-{
-    uint64_t size = get_u64(cursor);
-    if (cursor->failed || size == UINT64_MAX) return (core_string_t){};
-    if (size > cursor->length - cursor->at) {
-        cursor->failed = true;
-        return (core_string_t){};
-    }
-    core_string_t copy = th_strdup(
-        ctx, core_string_borrow((const char *)cursor->data + cursor->at,
-                                (size_t)size));
-    cursor->at += (size_t)size;
+    core_string_t text = core_cursor_text(cursor);
+    if (!text.data) return (core_string_t){};
+    core_string_t copy = th_strdup(ctx, text);
     if (!copy.data) cursor->failed = true;
     return copy;
 }
@@ -336,7 +272,7 @@ get_text(cursor_t *cursor, th_ctx *ctx)
 static th_type *
 get_ref(cursor_t *cursor, th_type_reader_t *reader)
 {
-    uint32_t index = get_u32(cursor);
+    uint32_t index = core_cursor_u32(cursor);
     if (!index) return nullptr;
     if (index > reader->count) {
         cursor->failed = true;
@@ -349,7 +285,8 @@ static void *
 get_array(cursor_t *cursor, th_ctx *ctx, uint64_t count, size_t element)
 {
     if (!count) return nullptr;
-    if (count > cursor->length || count > SIZE_MAX / element) {
+    if (count > (uint64_t)(cursor->end - cursor->at)
+        || count > SIZE_MAX / element) {
         cursor->failed = true;
         return nullptr;
     }
@@ -365,20 +302,20 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
     th_ctx *ctx = reader->ctx;
     switch (type->kind) {
     case TH_NAMED: {
-        type->named.name = get_text(cursor, ctx);
-        type->named.is_variant = get_u32(cursor) != 0;
-        uint64_t count = get_u64(cursor);
+        type->named.name = th_cursor_text(cursor, ctx);
+        type->named.is_variant = core_cursor_u32(cursor) != 0;
+        uint64_t count = core_cursor_u64(cursor);
         type->named.args = get_array(cursor, ctx, count, sizeof(th_arg));
         type->named.nargs = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->named.nargs; i++) {
             th_arg *arg = &type->named.args[i];
-            arg->kind = (th_argkind)get_u32(cursor);
+            arg->kind = (th_argkind)core_cursor_u32(cursor);
             switch (arg->kind) {
             case TH_ARG_TYPE: arg->type = get_ref(cursor, reader); break;
-            case TH_ARG_UINT: arg->u = get_u64(cursor); break;
-            case TH_ARG_SINT: arg->s = (int64_t)get_u64(cursor); break;
+            case TH_ARG_UINT: arg->u = core_cursor_u64(cursor); break;
+            case TH_ARG_SINT: arg->s = (int64_t)core_cursor_u64(cursor); break;
             case TH_ARG_STR:
-                arg->str = get_text(cursor, ctx);
+                arg->str = th_cursor_text(cursor, ctx);
                 break;
             default: cursor->failed = true; break;
             }
@@ -388,83 +325,83 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
         break;
     }
     case TH_BITINT:
-        type->bitint.width = get_u64(cursor);
-        type->bitint.flavor = (th_bitint_flavor)get_u32(cursor);
+        type->bitint.width = core_cursor_u64(cursor);
+        type->bitint.flavor = (th_bitint_flavor)core_cursor_u32(cursor);
         break;
     case TH_INDIRECTION:
-        type->ind.attrs = (uint8_t)get_u32(cursor);
+        type->ind.attrs = (uint8_t)core_cursor_u32(cursor);
         type->ind.referent = get_ref(cursor, reader);
         break;
     case TH_SEQUENCE:
-        type->seq.has_extent = get_u32(cursor) != 0;
-        type->seq.extent = get_u64(cursor);
+        type->seq.has_extent = core_cursor_u32(cursor) != 0;
+        type->seq.extent = core_cursor_u64(cursor);
         type->seq.elem = get_ref(cursor, reader);
         break;
     case TH_RECORD: {
-        uint64_t count = get_u64(cursor);
+        uint64_t count = core_cursor_u64(cursor);
         type->record.members = get_array(cursor, ctx, count,
                                          sizeof(th_member));
         type->record.n = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->record.n; i++) {
-            type->record.members[i].name = get_text(cursor, ctx);
+            type->record.members[i].name = th_cursor_text(cursor, ctx);
             type->record.members[i].type = get_ref(cursor, reader);
         }
         break;
     }
     case TH_TRAIT: {
-        type->trait.name = get_text(cursor, ctx);
-        uint64_t count = get_u64(cursor);
+        type->trait.name = th_cursor_text(cursor, ctx);
+        uint64_t count = core_cursor_u64(cursor);
         type->trait.methods = get_array(cursor, ctx, count,
                                         sizeof(th_member));
         type->trait.n = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->trait.n; i++) {
-            type->trait.methods[i].name = get_text(cursor, ctx);
+            type->trait.methods[i].name = th_cursor_text(cursor, ctx);
             type->trait.methods[i].type = get_ref(cursor, reader);
         }
-        uint64_t requirements = get_u64(cursor);
+        uint64_t requirements = core_cursor_u64(cursor);
         type->trait.requirements = get_array(cursor, ctx, requirements,
                                              sizeof(th_trait_requirement));
         type->trait.nr = cursor->failed ? 0 : (size_t)requirements;
         for (size_t i = 0; i < type->trait.nr; i++) {
             th_trait_requirement *requirement = &type->trait.requirements[i];
             requirement->subject = get_ref(cursor, reader);
-            requirement->kind = (th_con_kind)get_u32(cursor);
+            requirement->kind = (th_con_kind)core_cursor_u32(cursor);
             requirement->target = get_ref(cursor, reader);
-            requirement->iface = get_text(cursor, ctx);
+            requirement->iface = th_cursor_text(cursor, ctx);
         }
         break;
     }
     case TH_FUNCTION: {
         type->fn.ret = get_ref(cursor, reader);
         type->fn.error = get_ref(cursor, reader);
-        uint64_t count = get_u64(cursor);
+        uint64_t count = core_cursor_u64(cursor);
         type->fn.params = get_array(cursor, ctx, count, sizeof(th_param));
         type->fn.np = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->fn.np; i++) {
-            type->fn.params[i].mode = (th_mode)get_u32(cursor);
+            type->fn.params[i].mode = (th_mode)core_cursor_u32(cursor);
             type->fn.params[i].type = get_ref(cursor, reader);
         }
-        if (get_u32(cursor)) {
+        if (core_cursor_u32(cursor)) {
             type->fn.rest = get_array(cursor, ctx, 1, sizeof(th_param));
             if (type->fn.rest) {
-                type->fn.rest->mode = (th_mode)get_u32(cursor);
+                type->fn.rest->mode = (th_mode)core_cursor_u32(cursor);
                 type->fn.rest->type = get_ref(cursor, reader);
             }
         }
-        uint64_t keywords = get_u64(cursor);
+        uint64_t keywords = core_cursor_u64(cursor);
         type->fn.kw = get_array(cursor, ctx, keywords, sizeof(th_kwparam));
         type->fn.nkw = cursor->failed ? 0 : (size_t)keywords;
         for (size_t i = 0; i < type->fn.nkw; i++) {
-            type->fn.kw[i].name = get_text(cursor, ctx);
-            type->fn.kw[i].mode = (th_mode)get_u32(cursor);
+            type->fn.kw[i].name = th_cursor_text(cursor, ctx);
+            type->fn.kw[i].mode = (th_mode)core_cursor_u32(cursor);
             type->fn.kw[i].type = get_ref(cursor, reader);
         }
         break;
     }
     case TH_BINDER:
-        type->binder.arity = get_u64(cursor);
+        type->binder.arity = core_cursor_u64(cursor);
         type->binder.body = get_ref(cursor, reader);
-        if (get_u32(cursor)) {
+        if (core_cursor_u32(cursor)) {
             type->binder.qvars = get_array(cursor, ctx, type->binder.arity,
                                            sizeof(th_type *));
             for (uint64_t i = 0; type->binder.qvars
@@ -473,12 +410,12 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
         }
         break;
     case TH_BOUND:
-        type->bound.distance = get_u64(cursor);
-        type->bound.position = get_u64(cursor);
+        type->bound.distance = core_cursor_u64(cursor);
+        type->bound.position = core_cursor_u64(cursor);
         break;
     case TH_SUM: {
-        type->sum.comb = (th_comb)get_u32(cursor);
-        uint64_t count = get_u64(cursor);
+        type->sum.comb = (th_comb)core_cursor_u32(cursor);
+        uint64_t count = core_cursor_u64(cursor);
         type->sum.arms = get_array(cursor, ctx, count, sizeof(th_type *));
         type->sum.n = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->sum.n; i++)
@@ -486,7 +423,7 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
         break;
     }
     case TH_VAR: {
-        uint64_t origin = get_u64(cursor);
+        uint64_t origin = core_cursor_u64(cursor);
         type->var.index = ctx->next_var++;
         type->var.origin = 0;
         if (origin) {
@@ -500,7 +437,7 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
             }
             type->var.origin = (uint64_t)(uintptr_t)slot;
         }
-        type->var.name = get_text(cursor, ctx);
+        type->var.name = th_cursor_text(cursor, ctx);
         type->var.ref = get_ref(cursor, reader);
         break;
     }
@@ -514,8 +451,8 @@ th_type_reader_open(th_ctx *ctx, const uint8_t *data, size_t length,
                     size_t *consumed)
 {
     if (!ctx || (length && !data)) return nullptr;
-    cursor_t cursor = {.data = data, .length = length};
-    uint64_t count = get_u64(&cursor);
+    cursor_t cursor = core_cursor(data, length);
+    uint64_t count = core_cursor_u64(&cursor);
     if (cursor.failed || count > length) return nullptr;
     th_type_reader_t *reader = core_alloc(th_type_reader_t);
     if (!reader) return nullptr;
@@ -531,7 +468,7 @@ th_type_reader_open(th_ctx *ctx, const uint8_t *data, size_t length,
         if (valid) memset(reader->nodes[i], 0, sizeof(th_type));
     }
     for (size_t i = 0; valid && i < reader->count; i++) {
-        th_kind kind = (th_kind)get_u32(&cursor);
+        th_kind kind = (th_kind)core_cursor_u32(&cursor);
         reader->nodes[i]->kind = kind;
         get_node(&cursor, reader, reader->nodes[i]);
         valid = !cursor.failed;
@@ -540,7 +477,7 @@ th_type_reader_open(th_ctx *ctx, const uint8_t *data, size_t length,
         th_type_reader_free(reader);
         return nullptr;
     }
-    if (consumed) *consumed = cursor.at;
+    if (consumed) *consumed = (size_t)(cursor.at - data);
     return reader;
 }
 

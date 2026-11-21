@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -96,4 +97,33 @@ static inline uint64_t core_le_load_u64(const uint8_t in[8])
     uint64_t value = 0;
     for (unsigned i = 0; i < 8; i++) value |= (uint64_t)in[i] << (i * 8);
     return value;
+}
+
+static inline core_byte_cursor_t core_cursor(const void *data, size_t length)
+{
+    const uint8_t *at = data;
+    return (core_byte_cursor_t){at, at ? at + length : at, false};
+}
+
+static inline uint32_t core_cursor_u32(core_byte_cursor_t *c)
+{
+    return (uint32_t)core_cursor_le(c, 4);
+}
+
+static inline uint64_t core_cursor_u64(core_byte_cursor_t *c)
+{
+    return core_cursor_le(c, 8);
+}
+
+static inline const uint8_t *core_cursor_bytes(core_byte_cursor_t *c,
+                                               size_t *length)
+{
+    uint64_t size = core_cursor_u64(c);
+    *length = 0;
+    if (c->failed || size == UINT64_MAX) return nullptr;
+    const uint8_t *data = c->at;
+    core_cursor_skip(c, size);
+    if (c->failed) return nullptr;
+    *length = (size_t)size;
+    return data;
 }

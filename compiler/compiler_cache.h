@@ -50,14 +50,10 @@ bool n00bb_cache_library_module(const n00bb_cache_t *cache,
 bool n00bb_cache_module_source(const n00bb_cache_t *cache,
                                core_string_t module, core_string_t *path,
                                uint64_t *source_hash);
-bool n00bb_cache_declaration_sites(const n00bb_cache_t *cache,
-                                   core_string_t module, core_buffer_t *out);
-bool n00bb_cache_unused_facts(const n00bb_cache_t *cache,
-                              core_string_t module, core_buffer_t *out);
-bool n00bb_cache_module_summaries(const n00bb_cache_t *cache,
-                                  core_string_t module, core_string_t kind,
-                                  const uint8_t **data, size_t *length,
-                                  const th_type_reader_t **types);
+bool n00bb_cache_module_section(const n00bb_cache_t *cache,
+                                core_string_t module, core_string_t kind,
+                                const uint8_t **data, size_t *length,
+                                const th_type_reader_t **types);
 bool n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
                                  const core_translation_unit_t *unit,
                                  core_diagnostics_t *into);

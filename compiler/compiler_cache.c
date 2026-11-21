@@ -55,35 +55,6 @@ typedef struct {
 } cache_scc_t;
 core_list_decl(cache_scc_t);
 
-static void
-put_u32(core_buffer_t *out, uint32_t value)
-{
-    uint8_t bytes[4];
-    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 4);
-}
-
-static void
-put_u64(core_buffer_t *out, uint64_t value)
-{
-    uint8_t bytes[8];
-    for (int i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 8);
-}
-
-static void
-put_bytes(core_buffer_t *out, const void *data, size_t length)
-{
-    put_u64(out, length);
-    if (length) core_buffer_append(out, data, length);
-}
-
-static void
-put_text(core_buffer_t *out, core_string_t text)
-{
-    put_bytes(out, text.data, text.data ? text.u8_bytes : 0);
-}
-
 static uint64_t
 buffer_hash(const core_buffer_t *buffer)
 {
@@ -128,59 +99,16 @@ sections_release(core_list_t(cache_section_t) *sections)
     core_list_free(*sections);
 }
 
-static bool
-sections_parse(const uint8_t *data, size_t length,
-               core_list_t(cache_section_t) *sections)
-{
-    size_t at = 0;
-    if (length < 12) return false;
-    uint32_t magic = 0, version = 0, count = 0;
-    for (int i = 0; i < 4; i++) magic |= (uint32_t)data[i] << (8 * i);
-    for (int i = 0; i < 4; i++) version |= (uint32_t)data[4 + i] << (8 * i);
-    for (int i = 0; i < 4; i++) count |= (uint32_t)data[8 + i] << (8 * i);
-    if (magic != CACHE_MAGIC || version != CACHE_VERSION) return false;
-    at = 12;
-    for (uint32_t s = 0; s < count; s++) {
-        size_t fields[2] = {0};
-        const uint8_t *starts[2] = {0};
-        for (int f = 0; f < 2; f++) {
-            if (length - at < 8) return false;
-            uint64_t size = 0;
-            for (int i = 0; i < 8; i++)
-                size |= (uint64_t)data[at + i] << (8 * i);
-            at += 8;
-            if (size > length - at) return false;
-            starts[f] = data + at;
-            fields[f] = (size_t)size;
-            at += (size_t)size;
-        }
-        cache_section_t section = {
-            .name = core_string_dup(core_string_borrow(
-                (const char *)starts[0], fields[0])),
-            .data = malloc(fields[1] ? fields[1] : 1),
-            .length = fields[1],
-        };
-        if (!section.name.data || !section.data) {
-            core_free(section.name.data);
-            free(section.data);
-            return false;
-        }
-        if (fields[1]) memcpy(section.data, starts[1], fields[1]);
-        core_list_push(*sections, section);
-    }
-    return true;
-}
-
 static void
 sections_serialize(const core_list_t(cache_section_t) *sections,
                    core_buffer_t *out)
 {
-    put_u32(out, CACHE_MAGIC);
-    put_u32(out, CACHE_VERSION);
-    put_u32(out, (uint32_t)sections->len);
+    core_put_u32(out, CACHE_MAGIC);
+    core_put_u32(out, CACHE_VERSION);
+    core_put_u32(out, (uint32_t)sections->len);
     for (size_t i = 0; i < sections->len; i++) {
-        put_text(out, sections->data[i].name);
-        put_bytes(out, sections->data[i].data, sections->data[i].length);
+        core_put_text(out, sections->data[i].name);
+        core_put_bytes(out, sections->data[i].data, sections->data[i].length);
     }
 }
 
@@ -205,6 +133,24 @@ sections_set(core_list_t(cache_section_t) *sections, core_string_t name,
     }
     core_list_push(*sections, ((cache_section_t){owned, copy, length}));
     return true;
+}
+
+static bool
+sections_parse(const uint8_t *data, size_t length,
+               core_list_t(cache_section_t) *sections)
+{
+    core_byte_cursor_t in = core_cursor(data, length);
+    if (core_cursor_u32(&in) != CACHE_MAGIC
+        || core_cursor_u32(&in) != CACHE_VERSION) return false;
+    uint32_t count = core_cursor_u32(&in);
+    for (uint32_t s = 0; !in.failed && s < count; s++) {
+        core_string_t name = core_cursor_text(&in);
+        size_t bytes = 0;
+        const uint8_t *start = core_cursor_bytes(&in, &bytes);
+        if (in.failed || !name.data
+            || !sections_set(sections, name, start, bytes)) return false;
+    }
+    return !in.failed;
 }
 
 static void
@@ -393,15 +339,15 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         N00BB_KEY_BUILD_LTO, N00BB_KEY_BUILD_ATOMIC128,
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
-        put_u32(out, n00bb_setting_bool(settings[i]));
-    put_u32(out, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
+        core_put_u32(out, n00bb_setting_bool(settings[i]));
+    core_put_u32(out, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
     n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
-    put_u32(out, (uint32_t)n00bb_setting_count(preferences));
+    core_put_u32(out, (uint32_t)n00bb_setting_count(preferences));
     for (size_t i = 0; i < n00bb_setting_count(preferences); i++) {
         core_string_t value = n00bb_setting_at(preferences, i);
-        put_bytes(out, value.data, value.u8_bytes);
+        core_put_bytes(out, value.data, value.u8_bytes);
     }
-    put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
+    core_put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
         CORE_STRING_STATIC("--no-specialize"),
@@ -410,12 +356,12 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         CORE_STRING_STATIC("--function-summaries"),
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
-        put_u32(out, parse_cmdr_flag_present(args, flags[i]));
+        core_put_u32(out, parse_cmdr_flag_present(args, flags[i]));
     n00bb_setting_id_t defines = N00BB_KEY_BUILD_DEFINES;
-    put_u32(out, (uint32_t)n00bb_setting_count(defines));
+    core_put_u32(out, (uint32_t)n00bb_setting_count(defines));
     for (size_t i = 0; i < n00bb_setting_count(defines); i++) {
         core_string_t value = n00bb_setting_at(defines, i);
-        put_bytes(out, value.data, value.u8_bytes);
+        core_put_bytes(out, value.data, value.u8_bytes);
     }
     static const core_string_t valued[] = {
         CORE_STRING_STATIC("--native-root"),
@@ -423,10 +369,10 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     for (size_t f = 0; f < sizeof(valued) / sizeof(*valued); f++) {
         core_string_t flag = valued[f];
         int32_t count = parse_cmdr_flag_value_count(args, flag);
-        put_u32(out, (uint32_t)(count > 0 ? count : 0));
+        core_put_u32(out, (uint32_t)(count > 0 ? count : 0));
         for (int32_t i = 0; i < count; i++) {
             core_string_t value = parse_cmdr_flag_str_at(args, flag, i);
-            put_bytes(out, value.data, value.u8_bytes);
+            core_put_bytes(out, value.data, value.u8_bytes);
         }
     }
 }
@@ -449,7 +395,7 @@ generated_source_bytes(core_string_t owner_path, core_string_t inputs,
         core_string_t path = core_string_slice(inputs, at, end - at);
         at = end + 1;
         if (!path.u8_bytes) continue;
-        put_text(out, path);
+        core_put_text(out, path);
         bytes = nullptr;
         length = 0;
         if (read_file(path, &bytes, &length) && bytes)
@@ -462,8 +408,8 @@ static void
 freshness_member(core_buffer_t *input, const void *name, size_t name_bytes,
                  const void *source, size_t source_bytes)
 {
-    put_bytes(input, name, name_bytes);
-    put_bytes(input, source, source_bytes);
+    core_put_bytes(input, name, name_bytes);
+    core_put_bytes(input, source, source_bytes);
 }
 
 static void
@@ -494,7 +440,7 @@ scc_freshness(cache_scc_t *scc)
              i++) {
             core_string_t name =
                 core_translation_unit_import(unit, i)->module.identifier;
-            put_bytes(&input, name.data, name.u8_bytes);
+            core_put_bytes(&input, name.data, name.u8_bytes);
         }
     }
     scc->freshness = buffer_hash(&input);
@@ -712,8 +658,8 @@ capture_snapshot(cache_snapshot_t *snapshot, n00bb_link_analysis_t *analysis,
         if (n00bb_encode_stored_summaries(analysis, summaries,
                                           snapshot->modules.data[m], phase,
                                           snapshot->types, &encoded)) {
-            put_text(out, snapshot->names.data[m]);
-            put_bytes(out, encoded.data, encoded.byte_len);
+            core_put_text(out, snapshot->names.data[m]);
+            core_put_bytes(out, encoded.data, encoded.byte_len);
         }
         core_buffer_release(&encoded);
     }
@@ -758,14 +704,14 @@ scc_key(const n00bb_cache_t *cache, uint64_t freshness,
 {
     core_buffer_t key = {0};
     core_buffer_puts(&key, "n00b.scc.key.v5");
-    put_u64(&key, freshness);
-    put_u32(&key, (uint32_t)import_count);
-    for (size_t i = 0; i < import_count; i++) put_u64(&key, imports[i]);
-    put_u32(&key, (uint32_t)inlined_count);
-    for (size_t i = 0; i < inlined_count; i++) put_u64(&key, inlined[i]);
-    put_u64(&key, cache->compiler);
-    put_bytes(&key, cache->flags.data, cache->flags.byte_len);
-    put_text(&key, cache->triple);
+    core_put_u64(&key, freshness);
+    core_put_u32(&key, (uint32_t)import_count);
+    for (size_t i = 0; i < import_count; i++) core_put_u64(&key, imports[i]);
+    core_put_u32(&key, (uint32_t)inlined_count);
+    for (size_t i = 0; i < inlined_count; i++) core_put_u64(&key, inlined[i]);
+    core_put_u64(&key, cache->compiler);
+    core_put_bytes(&key, cache->flags.data, cache->flags.byte_len);
+    core_put_text(&key, cache->triple);
     uint64_t result = buffer_hash(&key);
     core_buffer_release(&key);
     return result;
@@ -813,63 +759,19 @@ phase_section(const cache_entry_t *entry, core_string_t kind,
     return section;
 }
 
-typedef struct {
-    const uint8_t *data;
-    size_t length;
-    size_t at;
-    bool failed;
-} manifest_reader_t;
-
-static uint64_t
-read_u64(manifest_reader_t *r)
-{
-    if (r->failed || r->length - r->at < 8) {
-        r->failed = true;
-        return 0;
-    }
-    uint64_t value = 0;
-    for (int i = 0; i < 8; i++)
-        value |= (uint64_t)r->data[r->at + i] << (8 * i);
-    r->at += 8;
-    return value;
-}
-
-static uint32_t
-read_u32(manifest_reader_t *r)
-{
-    if (r->failed || r->length - r->at < 4) {
-        r->failed = true;
-        return 0;
-    }
-    uint32_t value = 0;
-    for (int i = 0; i < 4; i++)
-        value |= (uint32_t)r->data[r->at + i] << (8 * i);
-    r->at += 4;
-    return value;
-}
-
 static core_string_t
-read_text(manifest_reader_t *r)
+read_text(core_byte_cursor_t *r)
 {
-    uint64_t length = read_u64(r);
-    if (r->failed || length > r->length - r->at) {
-        r->failed = true;
-        return (core_string_t){0};
-    }
-    core_string_t text = core_string_dup(core_string_borrow(
-        (const char *)r->data + r->at, (size_t)length));
-    r->at += (size_t)length;
-    if (!text.data) r->failed = true;
-    return text;
+    return core_string_dup(core_cursor_text(r));
 }
 
 static void
-read_links(manifest_reader_t *r, core_list_t(cache_link_t) *links)
+read_links(core_byte_cursor_t *r, core_list_t(cache_link_t) *links)
 {
-    uint32_t count = read_u32(r);
+    uint32_t count = core_cursor_u32(r);
     for (uint32_t i = 0; !r->failed && i < count; i++) {
         core_string_t name = read_text(r);
-        uint64_t value = read_u64(r);
+        uint64_t value = core_cursor_u64(r);
         if (!r->failed) core_list_push(*links, ((cache_link_t){name, value}));
         else core_free(name.data);
     }
@@ -919,27 +821,26 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
         core_buffer_string(&manifest_name));
     core_buffer_release(&manifest_name);
     if (!manifest) return false;
-    manifest_reader_t r = {.data = manifest->data,
-                           .length = manifest->length};
-    uint64_t key = read_u64(&r);
-    entry->freshness = read_u64(&r);
-    uint32_t members = read_u32(&r);
+    core_byte_cursor_t r = core_cursor(manifest->data, manifest->length);
+    uint64_t key = core_cursor_u64(&r);
+    entry->freshness = core_cursor_u64(&r);
+    uint32_t members = core_cursor_u32(&r);
     for (uint32_t m = 0; !r.failed && m < members; m++) {
         cache_member_t member = {
             .name = read_text(&r), .path = read_text(&r),
             .imports = core_list_new(core_string_t),
         };
-        member.source_hash = read_u64(&r);
-        uint32_t imports = read_u32(&r);
+        member.source_hash = core_cursor_u64(&r);
+        uint32_t imports = core_cursor_u32(&r);
         for (uint32_t i = 0; !r.failed && i < imports; i++) {
             core_string_t name = read_text(&r);
             if (name.data) core_list_push(member.imports, name);
         }
-        if (read_u32(&r)) {
+        if (core_cursor_u32(&r)) {
             member.owner = read_text(&r);
             member.owner_path = read_text(&r);
-            member.owner_hash = read_u64(&r);
-            uint32_t inputs = read_u32(&r);
+            member.owner_hash = core_cursor_u64(&r);
+            uint32_t inputs = core_cursor_u32(&r);
             for (uint32_t i = 0; !r.failed && i < inputs; i++) {
                 core_string_t path = read_text(&r);
                 if (path.data) {
@@ -953,12 +854,12 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
     }
     read_links(&r, &entry->imports);
     read_links(&r, &entry->inlined);
-    uint32_t references = read_u32(&r);
+    uint32_t references = core_cursor_u32(&r);
     for (uint32_t i = 0; !r.failed && i < references; i++) {
         core_string_t name = read_text(&r);
         if (name.data) core_list_push(entry->references, name);
     }
-    return !r.failed && r.at == r.length && key == entry->key;
+    return !r.failed && r.at == r.end && key == entry->key;
 }
 
 static bool
@@ -1063,7 +964,7 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
             freshness_member(&freshness, member->name.data,
                              member->name.u8_bytes, bytes, length);
             for (size_t i = 0; i < member->imports.len; i++)
-                put_text(&freshness, member->imports.data[i]);
+                core_put_text(&freshness, member->imports.data[i]);
         }
         core_free(source);
         core_buffer_release(&made);
@@ -1798,45 +1699,15 @@ n00bb_cache_module_source(const n00bb_cache_t *cache, core_string_t module,
 }
 
 bool
-n00bb_cache_declaration_sites(const n00bb_cache_t *cache,
-                              core_string_t module, core_buffer_t *out)
-{
-    const cache_entry_t *entry = nullptr;
-    const cache_member_t *member = loaded_member(cache, module, &entry);
-    const cache_section_t *section = member
-        ? phase_section(entry, CORE_STRING_STATIC("sites"), member->name)
-        : nullptr;
-    if (!section) return false;
-    out->byte_len = 0;
-    core_buffer_append(out, (const char *)section->data, section->length);
-    return true;
-}
-
-bool
-n00bb_cache_unused_facts(const n00bb_cache_t *cache, core_string_t module,
-                         core_buffer_t *out)
-{
-    const cache_entry_t *entry = nullptr;
-    const cache_member_t *member = loaded_member(cache, module, &entry);
-    const cache_section_t *section = member
-        ? phase_section(entry, CORE_STRING_STATIC("unused"), member->name)
-        : nullptr;
-    if (!section) return false;
-    out->byte_len = 0;
-    core_buffer_append(out, (const char *)section->data, section->length);
-    return true;
-}
-
-bool
-n00bb_cache_module_summaries(const n00bb_cache_t *cache, core_string_t module,
-                             core_string_t kind, const uint8_t **data,
-                             size_t *length, const th_type_reader_t **types)
+n00bb_cache_module_section(const n00bb_cache_t *cache, core_string_t module,
+                           core_string_t kind, const uint8_t **data,
+                           size_t *length, const th_type_reader_t **types)
 {
     const cache_entry_t *entry = nullptr;
     const cache_member_t *member = loaded_member(cache, module, &entry);
     const cache_section_t *section = member
         ? phase_section(entry, kind, member->name) : nullptr;
-    if (!section || !entry->types) return false;
+    if (!section) return false;
     *data   = section->data;
     *length = section->length;
     *types  = entry->types;
@@ -1855,21 +1726,17 @@ n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
         ? phase_section(entry, CORE_STRING_STATIC("warnings"), member->name)
         : nullptr;
     if (!section) return false;
-    manifest_reader_t reader = {
-        .data = section->data, .length = section->length,
-    };
-    uint32_t count = read_u32(&reader);
-    for (uint32_t i = 0; !reader.failed && i < count; i++) {
+    if (section->length < 4) return false;
+    uint32_t count = core_le_load_u32(section->data);
+    size_t at = 4;
+    for (uint32_t i = 0; i < count; i++) {
         core_diagnostic_t item = {0};
-        if (!core_diagnostic_decode(reader.data, reader.length, &reader.at,
-                                    &item)) {
-            reader.failed = true;
-            break;
-        }
+        if (!core_diagnostic_decode(section->data, section->length, &at,
+                                    &item)) return false;
         core_diagnostics_append(into, &item);
         core_diagnostic_release(&item);
     }
-    return !reader.failed;
+    return true;
 }
 
 void
@@ -2026,21 +1893,6 @@ static const cache_instance_t *loaded_instance(const n00bb_cache_t *cache,
                                                const ir_module_t *module);
 
 static bool
-read_request_text(const uint8_t *data, size_t size, size_t *at,
-                  core_string_t *out)
-{
-    if (size - *at < 8) return false;
-    uint64_t length = 0;
-    for (int i = 0; i < 8; i++)
-        length |= (uint64_t)data[*at + i] << (8 * i);
-    *at += 8;
-    if (length > size - *at) return false;
-    *out = core_string_borrow((const char *)data + *at, (size_t)length);
-    *at += (size_t)length;
-    return true;
-}
-
-static bool
 entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
             th_ctx *types, ir_module_lookup_fn lookup, void *context,
             core_list_t(n00bb_specialization_seed_t) *seeds)
@@ -2048,28 +1900,20 @@ entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
     const cache_section_t *section = phase_section(entry,
         CORE_STRING_STATIC("requests"), (core_string_t){0});
     if (!section) return true;
-    const uint8_t *data = section->data;
-    size_t size = section->length, consumed = 0;
-    if (size < 8) return false;
-    uint64_t blob = 0;
-    for (int i = 0; i < 8; i++) blob |= (uint64_t)data[i] << (8 * i);
-    if (blob > size - 8) return false;
-    th_type_reader_t *reader = th_type_reader_open(types, data + 8,
-                                                   (size_t)blob, &consumed);
+    core_byte_cursor_t in = core_cursor(section->data, section->length);
+    size_t blob = 0;
+    const uint8_t *table = core_cursor_bytes(&in, &blob);
+    th_type_reader_t *reader = table
+        ? th_type_reader_open(types, table, blob, nullptr) : nullptr;
     if (!reader) return false;
-    size_t at = 8 + (size_t)blob;
-    bool ok = size - at >= 4;
-    uint32_t count = 0;
-    for (int i = 0; ok && i < 4; i++) count |= (uint32_t)data[at + i] << (8 * i);
-    at += 4;
+    uint32_t count = core_cursor_u32(&in);
+    bool ok = !in.failed;
     for (uint32_t r = 0; ok && r < count; r++) {
-        core_string_t module = {0}, name = {0};
-        ok = read_request_text(data, size, &at, &module)
-            && read_request_text(data, size, &at, &name) && size - at >= 4;
+        core_string_t module = core_cursor_text(&in);
+        core_string_t name = core_cursor_text(&in);
+        uint32_t index = core_cursor_u32(&in);
+        ok = !in.failed;
         if (!ok) break;
-        uint32_t index = 0;
-        for (int i = 0; i < 4; i++) index |= (uint32_t)data[at + i] << (8 * i);
-        at += 4;
         ir_module_t *owner = n00bb_cache_module(cache, module);
         if (!owner && lookup) owner = lookup(context, module);
         ir_func_t *generic = owner && name.data
@@ -2082,7 +1926,7 @@ entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
             }));
     }
     th_type_reader_free(reader);
-    return ok && at == size;
+    return ok && in.at == in.end;
 }
 
 void
@@ -2128,8 +1972,8 @@ compare_requests(const void *left, const void *right)
 static bool
 request_key(const n00bb_specialization_t *item, core_buffer_t *key)
 {
-    put_text(key, ir_module_name(item->generic->owner));
-    put_text(key, item->generic->name);
+    core_put_text(key, ir_module_name(item->generic->owner));
+    core_put_text(key, item->generic->name);
     th_type_writer_t *writer = th_type_writer_new(
         ir_module_types(item->generic->owner));
     bool ok = writer && th_type_writer_add(writer, item->signature)
@@ -2179,9 +2023,9 @@ scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
     core_buffer_t entries = {0};
     for (uint32_t i = 0; writer && i < count; i++) {
         const n00bb_specialization_t *item = requests[i].item;
-        put_text(&entries, ir_module_name(item->generic->owner));
-        put_text(&entries, item->generic->name);
-        put_u32(&entries, th_type_writer_add(writer, item->signature));
+        core_put_text(&entries, ir_module_name(item->generic->owner));
+        core_put_text(&entries, item->generic->name);
+        core_put_u32(&entries, th_type_writer_add(writer, item->signature));
     }
     for (uint32_t i = 0; i < count; i++)
         core_buffer_release(&requests[i].key);
@@ -2189,9 +2033,8 @@ scc_requests(const n00bb_link_analysis_t *analysis, const cache_scc_t *scc,
     if (!writer) count = 0;
     core_buffer_t blob = {0};
     if (writer) th_type_writer_finish(writer, &blob);
-    put_u64(out, blob.byte_len);
-    if (blob.byte_len) core_buffer_append(out, blob.data, blob.byte_len);
-    put_u32(out, count);
+    core_put_bytes(out, blob.data, blob.byte_len);
+    core_put_u32(out, count);
     if (entries.byte_len)
         core_buffer_append(out, entries.data, entries.byte_len);
     core_buffer_release(&blob);
@@ -2309,12 +2152,12 @@ static void
 put_links(core_buffer_t *out, const core_list_t(cache_scc_t) *sccs,
           const core_list_t(size_t) *links, bool freshness)
 {
-    put_u32(out, (uint32_t)links->len);
+    core_put_u32(out, (uint32_t)links->len);
     for (size_t i = 0; i < links->len; i++) {
         const cache_scc_t *linked = &sccs->data[links->data[i]];
         core_string_t name = linked->members.data[0]->module.identifier;
-        put_bytes(out, name.data, name.u8_bytes);
-        put_u64(out, freshness ? linked->freshness : linked->key);
+        core_put_bytes(out, name.data, name.u8_bytes);
+        core_put_u64(out, freshness ? linked->freshness : linked->key);
     }
 }
 
@@ -2419,7 +2262,7 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
         groups[group_count - 1].count++;
     }
     qsort(groups, group_count, sizeof(*groups), warning_group_order);
-    put_u32(out, (uint32_t)item_count);
+    core_put_u32(out, (uint32_t)item_count);
     for (size_t g = 0; g < group_count; g++)
         for (size_t i = 0; i < groups[g].count; i++)
             core_diagnostic_encode(out, groups[g].items[i]);
@@ -2432,24 +2275,12 @@ snapshot_summaries(const cache_snapshot_t *snapshot, uint8_t phase,
                    core_string_t module, const uint8_t **data, size_t *length)
 {
     if (!snapshot || !snapshot->captured[phase]) return false;
-    manifest_reader_t r = {
-        .data   = (const uint8_t *)snapshot->summaries[phase].data,
-        .length = snapshot->summaries[phase].byte_len,
-    };
-    while (r.data && !r.failed && r.at < r.length) {
-        uint64_t name_bytes = read_u64(&r);
-        if (r.failed || name_bytes > r.length - r.at) return false;
-        core_string_t name = core_string_borrow((const char *)r.data + r.at,
-                                                (size_t)name_bytes);
-        r.at += (size_t)name_bytes;
-        uint64_t bytes = read_u64(&r);
-        if (r.failed || bytes > r.length - r.at) return false;
-        if (core_string_eq(name, module)) {
-            *data   = r.data + r.at;
-            *length = (size_t)bytes;
-            return true;
-        }
-        r.at += (size_t)bytes;
+    core_byte_cursor_t r = core_cursor(snapshot->summaries[phase].data,
+                                       snapshot->summaries[phase].byte_len);
+    while (!r.failed && r.at < r.end) {
+        core_string_t name = core_cursor_text(&r);
+        *data = core_cursor_bytes(&r, length);
+        if (!r.failed && core_string_eq(name, module)) return true;
     }
     return false;
 }
@@ -2462,54 +2293,54 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
 {
     core_string_t phase = phase_name();
     core_buffer_t manifest = {0};
-    put_u64(&manifest, scc->key);
-    put_u64(&manifest, scc->freshness);
-    put_u32(&manifest, (uint32_t)scc->members.len);
+    core_put_u64(&manifest, scc->key);
+    core_put_u64(&manifest, scc->freshness);
+    core_put_u32(&manifest, (uint32_t)scc->members.len);
     for (size_t m = 0; m < scc->members.len; m++) {
         core_translation_unit_t *unit = scc->members.data[m];
         core_string_t path = core_source_file_path(&unit->source);
         core_string_t canonical = canonical_path(path);
-        put_bytes(&manifest, unit->module.identifier.data,
+        core_put_bytes(&manifest, unit->module.identifier.data,
                   unit->module.identifier.u8_bytes);
-        put_text(&manifest, canonical);
+        core_put_text(&manifest, canonical);
         core_free(canonical.data);
-        put_u64(&manifest, core_xxh3_64bits_raw(
+        core_put_u64(&manifest, core_xxh3_64bits_raw(
             core_source_file_contents(&unit->source).data,
             core_source_file_size(&unit->source)));
-        put_u32(&manifest,
+        core_put_u32(&manifest,
                 (uint32_t)core_translation_unit_import_count(unit));
         for (size_t i = 0; i < core_translation_unit_import_count(unit);
              i++) {
             core_string_t name =
                 core_translation_unit_import(unit, i)->module.identifier;
-            put_bytes(&manifest, name.data, name.u8_bytes);
+            core_put_bytes(&manifest, name.data, name.u8_bytes);
         }
         core_string_t owner = {0}, owner_path = {0};
         core_string_t owner_canonical = {0};
         if (n00bb_source_file_generated_owner(&unit->source, &owner,
                                               &owner_path))
             owner_canonical = canonical_path(owner_path);
-        put_u32(&manifest, owner_canonical.data ? 1 : 0);
+        core_put_u32(&manifest, owner_canonical.data ? 1 : 0);
         if (owner_canonical.data) {
             core_string_t inputs =
                 n00bb_source_file_generated_inputs(&unit->source);
             core_buffer_t made = {0};
             generated_source_bytes(owner_canonical, inputs, &made);
-            put_text(&manifest, owner);
-            put_text(&manifest, owner_canonical);
-            put_u64(&manifest, core_xxh3_64bits_raw(
+            core_put_text(&manifest, owner);
+            core_put_text(&manifest, owner_canonical);
+            core_put_u64(&manifest, core_xxh3_64bits_raw(
                 made.data ? made.data : "", made.byte_len));
             core_buffer_release(&made);
             uint32_t count = 0;
             for (size_t c = 0; c < inputs.u8_bytes; c++)
                 if (inputs.data[c] == '\n') count++;
-            put_u32(&manifest, count);
+            core_put_u32(&manifest, count);
             size_t at = 0;
             while (inputs.data && at < inputs.u8_bytes) {
                 size_t end = at;
                 while (end < inputs.u8_bytes && inputs.data[end] != '\n')
                     end++;
-                put_text(&manifest, core_string_slice(inputs, at, end - at));
+                core_put_text(&manifest, core_string_slice(inputs, at, end - at));
                 at = end + 1;
             }
         }
@@ -2525,11 +2356,11 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
          at && at < end;) {
         const char *line = memchr(at, '\n', (size_t)(end - at));
         size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
-        put_bytes(&references, at, span);
+        core_put_bytes(&references, at, span);
         reference_count++;
         at = line ? line + 1 : end;
     }
-    put_u32(&manifest, reference_count);
+    core_put_u32(&manifest, reference_count);
     if (references.byte_len)
         core_buffer_append(&manifest, references.data, references.byte_len);
     core_buffer_release(&references);
@@ -2606,7 +2437,7 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         if (root && n00bb_resolver_same_root(analysis->resolver, root,
                                              scc->members.data[m]))
             put_warnings(&warnings, scc->members.data[m]);
-        else put_u32(&warnings, 0);
+        else core_put_u32(&warnings, 0);
         module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 warnings.data ? (const uint8_t *)warnings.data
@@ -2868,24 +2699,24 @@ instance_key(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     bool saved = scc_ir_hash(cache, &sccs->data[generic], &generic_ir);
     core_buffer_t input = {0};
     core_buffer_puts(&input, "n00b.instance.key.v4");
-    put_u64(&input, sccs->data[generic].key);
-    put_u64(&input, generic_ir);
-    put_text(&input, ir_module_name(item->instance->owner));
-    put_text(&input, item->instance->name);
-    put_u32(&input, (uint32_t)owners.len);
+    core_put_u64(&input, sccs->data[generic].key);
+    core_put_u64(&input, generic_ir);
+    core_put_text(&input, ir_module_name(item->instance->owner));
+    core_put_text(&input, item->instance->name);
+    core_put_u32(&input, (uint32_t)owners.len);
     for (size_t i = 0; i < owners.len; i++)
-        put_u64(&input, sccs->data[owners.data[i]].key);
+        core_put_u64(&input, sccs->data[owners.data[i]].key);
     ir_module_t *module = item->instance->owner;
     for (size_t f = 0; f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
-        put_u32(&input, allocates_direct(function));
+        core_put_u32(&input, allocates_direct(function));
         for (uint32_t b = 0; b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_func_t *callee = n00bb_direct_call_target(
                     function->blocks[b]->instrs[i]);
                 if (!callee || !allocates_direct(callee)) continue;
-                put_text(&input, ir_module_name(callee->owner));
-                put_text(&input, callee->name);
+                core_put_text(&input, ir_module_name(callee->owner));
+                core_put_text(&input, callee->name);
             }
     }
     *key = buffer_hash(&input);
@@ -3026,10 +2857,10 @@ take_fill_lock(n00bb_cache_t *cache)
         || core_dict_contains(&cache->loaded_members, &builtin))
         return false;
     core_buffer_t variant = {0};
-    put_text(&variant, phase_name());
-    put_u64(&variant, cache->compiler);
-    put_bytes(&variant, cache->flags.data, cache->flags.byte_len);
-    put_text(&variant, cache->triple);
+    core_put_text(&variant, phase_name());
+    core_put_u64(&variant, cache->compiler);
+    core_put_bytes(&variant, cache->flags.data, cache->flags.byte_len);
+    core_put_text(&variant, cache->triple);
     core_buffer_t path = {0};
     core_buffer_append_string(&path, cache->shared);
     core_buffer_printf(&path, "/fill-%016llx.lock",

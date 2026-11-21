@@ -247,6 +247,7 @@ void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
 void *th_alloc(th_ctx *ctx, size_t n);
 uint64_t th_var_fresh_origin(void);
 core_string_t th_strdup(th_ctx *ctx, core_string_t s);
+core_string_t th_cursor_text(core_byte_cursor_t *cursor, th_ctx *ctx);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);

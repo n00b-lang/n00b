@@ -2435,10 +2435,19 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
             "a cached module interface has malformed package declarations");
         return false;
     }
-    n00bb_cache_declaration_sites(driver->loader->cache, module,
-                                  &tu_state(unit)->declaration_sites);
-    n00bb_cache_unused_facts(driver->loader->cache, module,
-                             &tu_state(unit)->unused_facts);
+    struct { core_string_t kind; core_buffer_t *out; } facts[] = {
+        {CORE_STRING_STATIC("sites"), &tu_state(unit)->declaration_sites},
+        {CORE_STRING_STATIC("unused"), &tu_state(unit)->unused_facts},
+    };
+    for (size_t f = 0; f < sizeof(facts) / sizeof(*facts); f++) {
+        const uint8_t *bytes = nullptr;
+        size_t length = 0;
+        const th_type_reader_t *types = nullptr;
+        if (!n00bb_cache_module_section(driver->loader->cache, module,
+                facts[f].kind, &bytes, &length, &types)) continue;
+        facts[f].out->byte_len = 0;
+        core_buffer_append(facts[f].out, (const char *)bytes, length);
+    }
     core_string_t module_name = module;
     size_t size = 0;
     const uint8_t *data = module_name.data

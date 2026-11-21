@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "lib/alloc.h"
+#include "lib/byteorder.h"
 #include "lib/string.h"
 
 #include <stdarg.h>
@@ -186,4 +187,53 @@ core_buffer_free(core_buffer_t *buf)
 
     core_buffer_release(buf);
     core_free(buf);
+}
+
+static inline void
+core_put_le(core_buffer_t *out, uint64_t value, unsigned bytes)
+{
+    uint8_t encoded[8];
+    for (unsigned i = 0; i < bytes; i++)
+        encoded[i] = (uint8_t)(value >> (i * 8));
+    core_buffer_append(out, (const char *)encoded, bytes);
+}
+
+static inline void
+core_put_u8(core_buffer_t *out, uint8_t value)
+{
+    core_put_le(out, value, 1);
+}
+
+static inline void
+core_put_u32(core_buffer_t *out, uint32_t value)
+{
+    core_put_le(out, value, 4);
+}
+
+static inline void
+core_put_u64(core_buffer_t *out, uint64_t value)
+{
+    core_put_le(out, value, 8);
+}
+
+static inline void
+core_put_bytes(core_buffer_t *out, const void *data, size_t length)
+{
+    core_put_u64(out, data ? length : UINT64_MAX);
+    if (data && length) core_buffer_append(out, data, length);
+}
+
+static inline void
+core_put_text(core_buffer_t *out, core_string_t text)
+{
+    core_put_bytes(out, text.data, text.u8_bytes);
+}
+
+static inline core_string_t
+core_cursor_text(core_byte_cursor_t *c)
+{
+    size_t length = 0;
+    const uint8_t *data = core_cursor_bytes(c, &length);
+    return data ? core_string_borrow((const char *)data, length)
+                : (core_string_t){0};
 }

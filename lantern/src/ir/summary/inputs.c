@@ -399,13 +399,6 @@ stored_deps_hold(ir_summaries_t *summaries, const ir_summary_t *summary,
     return holds;
 }
 
-static uint64_t
-get_u64(summary_reader_t *r)
-{
-    uint64_t low = get_u32(r);
-    return low | (uint64_t)get_u32(r) << 32;
-}
-
 static void
 put_function(core_buffer_t *out, const ir_summary_texts_t *texts,
              const ir_func_t *function)
@@ -423,7 +416,7 @@ get_function(summary_reader_t *r, const ir_func_t **out)
     core_string_t module = get_text(r);
     core_string_t name   = get_text(r);
     *out = nullptr;
-    if (r->failed) return false;
+    if (r->in.failed) return false;
     if (!name.u8_bytes) return true;
     ir_func_t *found = r->resolver && r->resolver->function
         ? r->resolver->function(r->resolver->context, module, name) : nullptr;
@@ -440,25 +433,25 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
     if (!summary) return false;
     core_buffer_t codec = {0};
     bool ok = encode_summary(summary, &codec, texts);
-    put_u32(out, (uint32_t)codec.byte_len);
+    core_put_u32(out, (uint32_t)codec.byte_len);
     core_buffer_append(out, codec.data, codec.byte_len);
     core_buffer_release(&codec);
-    put_u8(out, (uint8_t)(summary->proof_free | summary->bookkept << 1));
-    put_u64(out, body);
-    put_u64(out, stable_content(summary));
-    put_u32(out, (uint32_t)summary->deps.len);
+    core_put_u8(out, (uint8_t)(summary->proof_free | summary->bookkept << 1));
+    core_put_u64(out, body);
+    core_put_u64(out, stable_content(summary));
+    core_put_u32(out, (uint32_t)summary->deps.len);
     for (size_t d = 0; d < summary->deps.len; d++) {
         const ir_func_t *dep = summary->deps.data[d].function;
         put_function(out, texts, dep);
-        put_u64(out, stable_content(target_summary(summaries,
+        core_put_u64(out, stable_content(target_summary(summaries,
                                                    (ir_func_t *)dep)));
     }
     type_sink_t types = {ir_module_types(function->owner), texts->types};
-    put_u32(out, (uint32_t)summary->inputs.len);
+    core_put_u32(out, (uint32_t)summary->inputs.len);
     for (size_t i = 0; i < summary->inputs.len; i++) {
         const summary_input_t *input = &summary->inputs.data[i];
-        put_u8(out, input->kind);
-        put_u32(out, input->site);
+        core_put_u8(out, input->kind);
+        core_put_u32(out, input->site);
         put_function(out, texts, input->caller);
         put_function(out, texts, input->function);
         put_global(out, texts, input->global);
@@ -468,7 +461,7 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
         put_type(out, &types, input->from);
         put_type(out, &types, input->to);
         put_text(out, texts, input->effect);
-        put_u64(out, input->answer);
+        core_put_u64(out, input->answer);
     }
     return ok;
 }
@@ -480,42 +473,43 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
                          ir_summary_module_fn module_named,
                          ir_summary_body_fn body_matches)
 {
-    summary_reader_t r = {.data = data, .size = size, .resolver = resolver,
+    summary_reader_t r = {.in = core_cursor(data, size), .resolver = resolver,
                           .texts = resolver ? resolver->texts : nullptr};
-    uint32_t codec = get_u32(&r);
-    if (r.failed || codec > size - r.at || !r.texts) return nullptr;
+    uint32_t codec = core_cursor_u32(&r.in);
+    const uint8_t *encoded = r.in.at;
+    core_cursor_skip(&r.in, codec);
+    if (r.in.failed || !r.texts) return nullptr;
     ir_summary_t *summary = ir_summary_new(nullptr, function);
     summary->stored       = true;
-    summary->encoded      = data + r.at;
+    summary->encoded      = encoded;
     summary->encoded_size = codec;
     summary->resolver     = *resolver;
-    r.at += codec;
-    uint8_t extras = get_u8(&r);
+    uint8_t extras = core_cursor_u8(&r.in);
     summary->proof_free = extras & 1;
     summary->bookkept   = extras >> 1 & 1;
-    uint64_t body = get_u64(&r);
-    if (!r.failed
+    uint64_t body = core_cursor_u64(&r.in);
+    if (!r.in.failed
         && (!body_matches
             || !body_matches(resolver->context, function, body)))
-        r.failed = true;
-    summary->stable = get_u64(&r);
-    uint32_t deps = get_u32(&r);
-    for (uint32_t d = 0; !r.failed && d < deps; d++) {
+        r.in.failed = true;
+    summary->stable = core_cursor_u64(&r.in);
+    uint32_t deps = core_cursor_u32(&r.in);
+    for (uint32_t d = 0; !r.in.failed && d < deps; d++) {
         summary_dep_t dep = {0};
         if (!get_function(&r, &dep.function) || !dep.function) {
-            r.failed = true;
+            r.in.failed = true;
             break;
         }
-        dep.stable = get_u64(&r);
+        dep.stable = core_cursor_u64(&r.in);
         core_list_push(summary->deps, dep);
     }
-    uint32_t inputs = get_u32(&r);
-    for (uint32_t i = 0; !r.failed && i < inputs; i++) {
-        summary_input_t input = {.kind = get_u8(&r)};
-        input.site = get_u32(&r);
+    uint32_t inputs = core_cursor_u32(&r.in);
+    for (uint32_t i = 0; !r.in.failed && i < inputs; i++) {
+        summary_input_t input = {.kind = core_cursor_u8(&r.in)};
+        input.site = core_cursor_u32(&r.in);
         if (!get_function(&r, &input.caller)
             || !get_function(&r, &input.function)) {
-            r.failed = true;
+            r.in.failed = true;
             break;
         }
         core_string_t global_module = get_text(&r);
@@ -525,7 +519,7 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
                 ? resolver->global(resolver->context, global_module,
                                    global_name)
                 : nullptr;
-            if (!input.global) r.failed = true;
+            if (!input.global) r.in.failed = true;
         }
         core_string_t module = get_text(&r);
         if (module.u8_bytes) {
@@ -533,18 +527,18 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
                 ? module_named(resolver ? resolver->context : nullptr,
                                module)
                 : nullptr;
-            if (!input.module) r.failed = true;
+            if (!input.module) r.in.failed = true;
         }
         input.from = get_type(&r);
         input.to   = get_type(&r);
         core_string_t effect = get_text(&r);
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};
-        input.answer = get_u64(&r);
-        if (input.kind > SUMMARY_INPUT_ENTRY_ACCESS) r.failed = true;
-        if (!r.failed) core_list_push(summary->inputs, input);
+        input.answer = core_cursor_u64(&r.in);
+        if (input.kind > SUMMARY_INPUT_ENTRY_ACCESS) r.in.failed = true;
+        if (!r.in.failed) core_list_push(summary->inputs, input);
     }
-    if (r.failed || r.at != r.size || !summary->stable) {
+    if (r.in.failed || r.in.at != r.in.end || !summary->stable) {
         summary_free(summary);
         return nullptr;
     }

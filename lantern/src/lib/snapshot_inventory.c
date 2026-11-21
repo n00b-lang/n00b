@@ -509,29 +509,13 @@ cache_signature(inventory_reader_t *reader, file_signature_t *out)
 }
 
 static void
-cache_put_u32(core_buffer_t *buffer, uint32_t value)
-{
-    uint8_t bytes[4];
-    core_le_store_u32(bytes, value);
-    core_buffer_append(buffer, (const char *)bytes, sizeof bytes);
-}
-
-static void
-cache_put_u64(core_buffer_t *buffer, uint64_t value)
-{
-    uint8_t bytes[8];
-    core_le_store_u64(bytes, value);
-    core_buffer_append(buffer, (const char *)bytes, sizeof bytes);
-}
-
-static void
 cache_put_signature(core_buffer_t *buffer, file_signature_t signature)
 {
-    cache_put_u64(buffer, signature.size);
-    cache_put_u64(buffer, signature.modified);
-    cache_put_u64(buffer, signature.changed);
-    cache_put_u64(buffer, signature.device);
-    cache_put_u64(buffer, signature.inode);
+    core_put_u64(buffer, signature.size);
+    core_put_u64(buffer, signature.modified);
+    core_put_u64(buffer, signature.changed);
+    core_put_u64(buffer, signature.device);
+    core_put_u64(buffer, signature.inode);
 }
 
 static bool
@@ -771,15 +755,15 @@ write_package_cache(refresh_context_t *refresh, size_t root_index,
     }
     core_buffer_t buffer = {0};
     core_buffer_append(&buffer, "LNSINV2", 8);
-    cache_put_u64(&buffer, 0);
-    cache_put_u64(&buffer,
+    core_put_u64(&buffer, 0);
+    core_put_u64(&buffer,
         cache_identity(inventory->roots.data[root_index].path, group));
-    cache_put_u64(&buffer, inventory->filter_revision);
-    cache_put_u32(&buffer, (uint32_t)directories->len);
-    cache_put_u32(&buffer, (uint32_t)(refresh->entries.len - first_entry));
+    core_put_u64(&buffer, inventory->filter_revision);
+    core_put_u32(&buffer, (uint32_t)directories->len);
+    core_put_u32(&buffer, (uint32_t)(refresh->entries.len - first_entry));
     for (size_t i = 0; i < directories->len; i++) {
         inventory_directory_t *dir = &directories->data[i];
-        cache_put_u32(&buffer, (uint32_t)dir->relative.u8_bytes);
+        core_put_u32(&buffer, (uint32_t)dir->relative.u8_bytes);
         cache_put_signature(&buffer, dir->signature);
         core_buffer_append_string(&buffer, dir->relative);
     }
@@ -787,9 +771,9 @@ write_package_cache(refresh_context_t *refresh, size_t root_index,
         inventory_entry_t *entry = &refresh->entries.data[i];
         core_string_t contents = core_source_snapshot_contents(
             entry->snapshot);
-        cache_put_u32(&buffer, (uint32_t)entry->relative.u8_bytes);
+        core_put_u32(&buffer, (uint32_t)entry->relative.u8_bytes);
         cache_put_signature(&buffer, entry->signature);
-        cache_put_u64(&buffer, contents.u8_bytes);
+        core_put_u64(&buffer, contents.u8_bytes);
         core_buffer_append_string(&buffer, entry->relative);
         core_buffer_append_string(&buffer, contents);
     }
@@ -987,13 +971,13 @@ core_snapshot_inventory_product_write(
     product_name(&name, relative_path, kind, profile);
     core_buffer_t buffer = {0};
     core_buffer_append(&buffer, "LNSDRV1", 8);
-    cache_put_u64(&buffer, core_xxh3_64bits_raw(relative_path.data,
+    core_put_u64(&buffer, core_xxh3_64bits_raw(relative_path.data,
                                                 relative_path.u8_bytes));
-    cache_put_u64(&buffer, core_xxh3_64bits_raw(kind.data, kind.u8_bytes));
-    cache_put_u64(&buffer, profile);
+    core_put_u64(&buffer, core_xxh3_64bits_raw(kind.data, kind.u8_bytes));
+    core_put_u64(&buffer, profile);
     cache_put_signature(&buffer, entry->signature);
-    cache_put_u64(&buffer, size);
-    cache_put_u64(&buffer, core_xxh3_64bits_raw(data ? data : "", size));
+    core_put_u64(&buffer, size);
+    core_put_u64(&buffer, core_xxh3_64bits_raw(data ? data : "", size));
     core_buffer_append(&buffer, data, size);
     bool ok = write_atomic_cache_file(directory, core_buffer_string(&name),
                                       buffer.data, buffer.byte_len);

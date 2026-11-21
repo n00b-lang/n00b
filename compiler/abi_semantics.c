@@ -13,10 +13,7 @@ typedef struct {
     th_type *type;
     uint32_t index;
 } receiver_t;
-typedef struct {
-    uint32_t child;
-    uint32_t parent;
-} specialization_t;
+typedef n00bb_abi_specialization_t specialization_t;
 core_list_decl(receiver_t);
 core_list_decl(specialization_t);
 core_list_decl(n00b_abi_dispatch_v1);
@@ -387,61 +384,11 @@ add_specializations(n00bb_abi_merged_rows_t *merged,
         if (!unique || compare_specializations(&edges.data[i],
                                                 &edges.data[unique - 1]))
             edges.data[unique++] = edges.data[i];
-    bool valid = unique < UINT32_MAX;
-    uint32_t *incoming = valid
-        ? core_alloc_array(uint32_t, types->record_count) : nullptr;
-    uint32_t *queue = valid
-        ? core_alloc_array(uint32_t, types->record_count) : nullptr;
-    n00b_abi_range_v1 *spans = valid
-        ? core_alloc_array(n00b_abi_range_v1, types->record_count) : nullptr;
-    uint32_t *rebuilt = valid
-        ? core_alloc_array(uint32_t, unique + 1) : nullptr;
-    valid = valid && incoming && queue && spans && rebuilt;
-    if (valid) {
-        memset(incoming, 0, types->record_count * sizeof(*incoming));
-        memset(spans, 0, types->record_count * sizeof(*spans));
-        rebuilt[0] = 0;
-        for (size_t i = 0; valid && i < unique; i++) {
-            specialization_t edge = edges.data[i];
-            if (!edge.child || !edge.parent || edge.child == edge.parent
-                || edge.child >= types->record_count
-                || edge.parent >= types->record_count) { valid = false; break; }
-            n00b_abi_range_v1 *span = &spans[edge.child];
-            if (!span->count) span->first = (uint32_t)i + 1;
-            span->count++;
-            rebuilt[i + 1] = edge.parent;
-            incoming[edge.parent]++;
-        }
-        size_t head = 0, tail = 0;
-        for (uint32_t i = 0; valid && i < types->record_count; i++)
-            if (!incoming[i]) queue[tail++] = i;
-        while (valid && head < tail) {
-            uint32_t child = queue[head++];
-            n00b_abi_range_v1 span = spans[child];
-            for (uint32_t j = 0; j < span.count; j++) {
-                uint32_t parent = rebuilt[span.first + j];
-                if (!--incoming[parent]) queue[tail++] = parent;
-            }
-        }
-        valid = valid && tail == types->record_count;
-    }
-    if (valid) {
-        for (uint32_t i = 0; i < types->record_count; i++) {
-            n00b_abi_type_v1 *type = (void *)(types->records
-                + (size_t)i * types->record_bytes);
-            type->specialization_start_ix = spans[i].first;
-            type->specialization_end_ix = spans[i].count
-                ? spans[i].first + spans[i].count : 0;
-        }
-        core_free(links->records);
-        links->records = (uint8_t *)rebuilt;
-        links->record_count = (uint32_t)unique + 1;
-        rebuilt = nullptr;
-    }
-    core_free(rebuilt);
-    core_free(spans);
-    core_free(queue);
-    core_free(incoming);
+    bool valid = true;
+    for (size_t i = 0; i < unique; i++)
+        valid = valid && edges.data[i].child && edges.data[i].parent;
+    valid = valid
+        && n00bb_abi_link_specializations(types, links, edges.data, unique);
     core_list_free(edges);
     return valid;
 }

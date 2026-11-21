@@ -50,10 +50,7 @@ read_callbacks_tag(core_string_t name, ir_summary_t *summary)
 }
 
 typedef struct {
-    const uint8_t *data;
-    size_t         size;
-    size_t         at;
-    bool           failed;
+    core_byte_cursor_t           in;
     const ir_summary_texts_t    *texts;
     const ir_summary_resolver_t *resolver;
 } summary_reader_t;
@@ -64,49 +61,24 @@ typedef struct {
 } type_sink_t;
 
 static void
-put_u8(core_buffer_t *out, uint8_t value)
-{
-    core_buffer_append(out, (const char *)&value, 1);
-}
-
-static void
-put_u32(core_buffer_t *out, uint32_t value)
-{
-    uint8_t bytes[4];
-    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 4);
-}
-
-static void
-put_u64(core_buffer_t *out, uint64_t value)
-{
-    put_u32(out, (uint32_t)value);
-    put_u32(out, (uint32_t)(value >> 32));
-}
-
-static void
 put_type(core_buffer_t *out, const type_sink_t *sink, th_type *type)
 {
     if (sink && sink->writer)
-        put_u32(out, type ? th_type_writer_add(sink->writer,
+        core_put_u32(out, type ? th_type_writer_add(sink->writer,
             th_is_closed(sink->ctx, type) ? type
                 : th_type_clone_fresh(sink->ctx, type)) : 0);
     else
-        put_u64(out, type && sink && sink->ctx ? th_hash(sink->ctx, type) : 0);
+        core_put_u64(out, type && sink && sink->ctx ? th_hash(sink->ctx, type) : 0);
 }
 
 static void
 put_text(core_buffer_t *out, const ir_summary_texts_t *texts,
          core_string_t text)
 {
-    if (texts) {
-        put_u32(out, text.data && text.u8_bytes
+    if (texts)
+        core_put_u32(out, text.data && text.u8_bytes
             ? texts->intern(texts->context, text) : 0);
-        return;
-    }
-    put_u32(out, text.data ? (uint32_t)text.u8_bytes : 0);
-    if (text.data && text.u8_bytes)
-        core_buffer_append(out, text.data, text.u8_bytes);
+    else core_put_text(out, text);
 }
 
 static void
@@ -125,13 +97,13 @@ static void
 put_path(core_buffer_t *out, const ir_summary_texts_t *texts,
          const type_sink_t *types, const ir_spath_t *path)
 {
-    put_u8(out, path->root);
-    put_u32(out, path->param);
+    core_put_u8(out, path->root);
+    core_put_u32(out, path->param);
     put_global(out, texts, named_root(path->root) ? path->global : nullptr);
     put_type(out, types, path->type);
-    put_u8(out, path->flags);
-    put_u8(out, path->output);
-    put_u32(out, path->depth);
+    core_put_u8(out, path->flags);
+    core_put_u8(out, path->output);
+    core_put_u32(out, path->depth);
     for (uint32_t s = 0; s < path->depth; s++)
         put_text(out, texts, path->steps[s]);
 }
@@ -140,7 +112,7 @@ static void
 put_paths(core_buffer_t *out, const ir_summary_texts_t *texts,
           const type_sink_t *types, const path_list_t *paths)
 {
-    put_u32(out, (uint32_t)paths->len);
+    core_put_u32(out, (uint32_t)paths->len);
     for (size_t i = 0; i < paths->len; i++)
         put_path(out, texts, types, &paths->data[i]);
 }
@@ -148,10 +120,10 @@ put_paths(core_buffer_t *out, const ir_summary_texts_t *texts,
 static void
 put_bits(core_buffer_t *out, const flow_bits_t *bits)
 {
-    put_u32(out, (uint32_t)bits->len);
+    core_put_u32(out, (uint32_t)bits->len);
     for (size_t w = 0; w < bits->len; w++) {
-        put_u32(out, (uint32_t)bits->data[w]);
-        put_u32(out, (uint32_t)(bits->data[w] >> 32));
+        core_put_u32(out, (uint32_t)bits->data[w]);
+        core_put_u32(out, (uint32_t)(bits->data[w] >> 32));
     }
 }
 
@@ -232,7 +204,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts,
     }
     if (used > 1)
         qsort(sources, used, sizeof(encoded_item_t), compare_encoded);
-    put_u32(out, (uint32_t)used);
+    core_put_u32(out, (uint32_t)used);
     for (size_t k = 0; k < used; k++) {
         rank[sources[k].index] = (uint32_t)k;
         put_path(out, texts, types, flows->sources.data[sources[k].index]);
@@ -248,7 +220,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts,
         dests[kept++].index = d;
     }
     if (kept > 1) qsort(dests, kept, sizeof(encoded_item_t), compare_encoded);
-    put_u32(out, (uint32_t)kept);
+    core_put_u32(out, (uint32_t)kept);
     for (size_t k = 0; k < kept; k++) {
         const flow_dest_t *dest = &flows->dests.data[dests[k].index];
         put_path(out, texts, types, dest->to);
@@ -278,17 +250,17 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         ? ir_module_types(summary->function->owner) : nullptr,
         texts ? texts->types : nullptr};
     const type_sink_t *types = &sink;
-    put_u32(out, summary->flags);
-    put_u8(out, summary->traps);
-    put_u32(out, (uint32_t)summary->trap_sites.len);
+    core_put_u32(out, summary->flags);
+    core_put_u8(out, summary->traps);
+    core_put_u32(out, (uint32_t)summary->trap_sites.len);
     for (size_t i = 0; i < summary->trap_sites.len; i++) {
         const ir_strap_site_t *site = &summary->trap_sites.data[i];
-        put_u8(out, site->kind);
-        put_u32(out, site->line);
-        put_u32(out, site->column);
+        core_put_u8(out, site->kind);
+        core_put_u32(out, site->line);
+        core_put_u32(out, site->column);
     }
     bool callbacks = summary->callback_params != 0;
-    put_u32(out, (uint32_t)summary->effects.len + (callbacks ? 1 : 0));
+    core_put_u32(out, (uint32_t)summary->effects.len + (callbacks ? 1 : 0));
     for (size_t i = 0; i < summary->effects.len; i++)
         put_text(out, texts, summary->effects.data[i]);
     if (callbacks) {
@@ -298,34 +270,34 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         core_buffer_release(&tag);
     }
     put_paths(out, texts, types, &summary->paths);
-    put_u8(out, (uint8_t)(summary->results_known
+    core_put_u8(out, (uint8_t)(summary->results_known
                           | summary->returns_external << 1));
     put_flows(out, texts, types, &summary->flows[IR_SFLOW_RESULTS]);
     put_flows(out, texts, types, &summary->flows[IR_SFLOW_STORES]);
-    put_u32(out, (uint32_t)summary->witnesses.len);
+    core_put_u32(out, (uint32_t)summary->witnesses.len);
     for (size_t i = 0; i < summary->witnesses.len; i++) {
         const ir_switness_t *witness = &summary->witnesses.data[i];
-        put_u32(out, witness->flag);
+        core_put_u32(out, witness->flag);
         put_text(out, texts, witness->module);
         put_text(out, texts, witness->name);
-        put_u32(out, witness->line);
-        put_u32(out, witness->column);
+        core_put_u32(out, witness->line);
+        core_put_u32(out, witness->column);
     }
     size_t heap_count = summary->heaps.len;
     ir_sheap_t *heaps = core_alloc_array(ir_sheap_t, heap_count + 1);
     if (heap_count)
         memcpy(heaps, summary->heaps.data, heap_count * sizeof(*heaps));
     qsort(heaps, heap_count, sizeof(*heaps), heap_order);
-    put_u32(out, (uint32_t)heap_count);
+    core_put_u32(out, (uint32_t)heap_count);
     for (size_t i = 0; i < heap_count; i++) {
         const ir_sheap_t *heap = &heaps[i];
-        put_u32(out, heap->origin);
+        core_put_u32(out, heap->origin);
         put_type(out, types, heap->type);
-        put_u8(out, heap->elements);
+        core_put_u8(out, heap->elements);
         put_text(out, texts, heap->module);
         put_text(out, texts, heap->name);
-        put_u32(out, heap->line);
-        put_u32(out, heap->column);
+        core_put_u32(out, heap->line);
+        core_put_u32(out, heap->column);
     }
     core_free(heaps);
     return true;
@@ -339,24 +311,24 @@ points_to_content(const ir_summary_t *summary)
         ? ir_module_types(summary->function->owner) : nullptr, nullptr};
     const type_sink_t *types = &sink;
     core_buffer_t out = {0};
-    put_u32(&out, summary->flags
+    core_put_u32(&out, summary->flags
         & (IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN | IR_SUMMARY_MAY_FAIL
            | IR_SUMMARY_CALLS_FINALIZERS | IR_SUMMARY_STARTS_THREADS));
     put_paths(&out, nullptr, types, &summary->paths);
-    put_u8(&out, (uint8_t)(summary->results_known
+    core_put_u8(&out, (uint8_t)(summary->results_known
                            | summary->returns_external << 1));
     put_flows(&out, nullptr, types, &summary->flows[IR_SFLOW_RESULTS]);
     put_flows(&out, nullptr, types, &summary->flows[IR_SFLOW_STORES]);
-    put_u32(&out, (uint32_t)summary->heaps.len);
+    core_put_u32(&out, (uint32_t)summary->heaps.len);
     for (size_t i = 0; i < summary->heaps.len; i++) {
         const ir_sheap_t *heap = &summary->heaps.data[i];
-        put_u32(&out, heap->origin);
+        core_put_u32(&out, heap->origin);
         put_type(&out, types, heap->type);
-        put_u8(&out, heap->elements);
+        core_put_u8(&out, heap->elements);
         put_text(&out, nullptr, heap->module);
         put_text(&out, nullptr, heap->name);
-        put_u32(&out, heap->line);
-        put_u32(&out, heap->column);
+        core_put_u32(&out, heap->line);
+        core_put_u32(&out, heap->column);
     }
     uint64_t hash = core_xxh3_64bits_raw(out.data ? out.data : "",
                                          out.byte_len) | 1;
@@ -377,39 +349,21 @@ ir_summary_encode_with(const ir_summary_t *summary, core_buffer_t *out,
     return texts && encode_summary(summary, out, texts);
 }
 
-static uint8_t
-get_u8(summary_reader_t *r)
-{
-    if (r->failed || r->at >= r->size) {
-        r->failed = true;
-        return 0;
-    }
-    return r->data[r->at++];
-}
-
-static uint32_t
-get_u32(summary_reader_t *r)
-{
-    uint32_t value = 0;
-    for (int i = 0; i < 4; i++) value |= (uint32_t)get_u8(r) << (8 * i);
-    return value;
-}
-
 static th_type *
 get_type(summary_reader_t *r)
 {
-    uint32_t index = get_u32(r);
+    uint32_t index = core_cursor_u32(&r->in);
     th_type *type = index ? th_type_reader_get(r->texts->reader, index)
                           : nullptr;
-    if (index && !type) r->failed = true;
+    if (index && !type) r->in.failed = true;
     return type;
 }
 
 static core_string_t
 get_text(summary_reader_t *r)
 {
-    uint32_t reference = get_u32(r);
-    return reference && !r->failed
+    uint32_t reference = core_cursor_u32(&r->in);
+    return reference && !r->in.failed
         ? r->texts->lookup(r->texts->context, reference)
         : (core_string_t){0};
 }
@@ -419,7 +373,7 @@ get_global(summary_reader_t *r)
 {
     core_string_t module = get_text(r);
     core_string_t name   = get_text(r);
-    return !r->failed && module.data && name.data && r->resolver
+    return !r->in.failed && module.data && name.data && r->resolver
         && r->resolver->global
         ? r->resolver->global(r->resolver->context, module, name) : nullptr;
 }
@@ -428,21 +382,21 @@ get_global(summary_reader_t *r)
 static ir_spath_t
 get_path(summary_reader_t *r)
 {
-    ir_spath_t path = {.root = (ir_splace_kind_t)get_u8(r)};
-    path.param  = get_u32(r);
+    ir_spath_t path = {.root = (ir_splace_kind_t)core_cursor_u8(&r->in)};
+    path.param  = core_cursor_u32(&r->in);
     path.global = get_global(r);
     path.type   = get_type(r);
-    path.flags  = get_u8(r);
-    path.output = get_u8(r);
-    uint32_t depth = get_u32(r);
-    if (path.root > IR_SPLACE_SOURCE) r->failed = true;
+    path.flags  = core_cursor_u8(&r->in);
+    path.output = core_cursor_u8(&r->in);
+    uint32_t depth = core_cursor_u32(&r->in);
+    if (path.root > IR_SPLACE_SOURCE) r->in.failed = true;
     core_list_t(core_string_t) steps = core_list_new(core_string_t);
-    for (uint32_t s = 0; !r->failed && s < depth; s++) {
+    for (uint32_t s = 0; !r->in.failed && s < depth; s++) {
         core_string_t step = get_text(r);
-        if (!step.u8_bytes) r->failed = true;
+        if (!step.u8_bytes) r->in.failed = true;
         else core_list_push(steps, step);
     }
-    if (!r->failed) {
+    if (!r->in.failed) {
         path.depth = depth;
         path.steps = steps_make(steps.data, depth);
     }
@@ -453,10 +407,10 @@ get_path(summary_reader_t *r)
 static void
 get_paths(summary_reader_t *r, path_list_t *paths)
 {
-    uint32_t count = get_u32(r);
-    for (uint32_t i = 0; !r->failed && i < count; i++) {
+    uint32_t count = core_cursor_u32(&r->in);
+    for (uint32_t i = 0; !r->in.failed && i < count; i++) {
         ir_spath_t path = get_path(r);
-        if (!r->failed) add_path_to(paths, &path);
+        if (!r->in.failed) add_path_to(paths, &path);
     }
 }
 
@@ -465,14 +419,14 @@ get_bits(summary_reader_t *r, flow_table_t *flows, flow_dest_t **dest,
          const ir_spath_t *to, const path_list_t *sources, uint32_t *mapped,
          ir_sflow_kind_t kind)
 {
-    uint32_t words = get_u32(r);
-    for (uint32_t w = 0; !r->failed && w < words; w++) {
-        uint64_t low  = get_u32(r);
-        uint64_t word = low | (uint64_t)get_u32(r) << 32;
-        for (; !r->failed && word; word &= word - 1) {
+    uint32_t words = core_cursor_u32(&r->in);
+    for (uint32_t w = 0; !r->in.failed && w < words; w++) {
+        uint64_t low  = core_cursor_u32(&r->in);
+        uint64_t word = low | (uint64_t)core_cursor_u32(&r->in) << 32;
+        for (; !r->in.failed && word; word &= word - 1) {
             size_t source = (size_t)w * 64 + (size_t)__builtin_ctzll(word);
             if (source >= sources->len) {
-                r->failed = true;
+                r->in.failed = true;
                 break;
             }
             if (mapped[source] == UINT32_MAX)
@@ -490,15 +444,15 @@ static void
 get_flows(summary_reader_t *r, flow_table_t *flows)
 {
     path_list_t sources = core_list_new(ir_spath_t);
-    uint32_t    count   = get_u32(r);
-    for (uint32_t s = 0; !r->failed && s < count; s++) {
+    uint32_t    count   = core_cursor_u32(&r->in);
+    for (uint32_t s = 0; !r->in.failed && s < count; s++) {
         ir_spath_t path = get_path(r);
         core_list_push(sources, path);
     }
     uint32_t *mapped = core_alloc_array(uint32_t, sources.len + 1);
     for (size_t s = 0; s < sources.len; s++) mapped[s] = UINT32_MAX;
-    uint32_t dests = get_u32(r);
-    for (uint32_t d = 0; !r->failed && d < dests; d++) {
+    uint32_t dests = core_cursor_u32(&r->in);
+    for (uint32_t d = 0; !r->in.failed && d < dests; d++) {
         ir_spath_t   to   = get_path(r);
         flow_dest_t *dest = nullptr;
         get_bits(r, flows, &dest, &to, &sources, mapped, IR_SFLOW_DATA);
@@ -514,18 +468,18 @@ static core_string_t
 get_owned_text(summary_reader_t *r, const ir_func_t *function)
 {
     core_string_t text = get_text(r);
-    return text.u8_bytes && function && !r->failed
+    return text.u8_bytes && function && !r->in.failed
         ? ir_strdup(function->owner->ctx, text) : (core_string_t){0};
 }
 
 static ir_switness_t
 get_witness(summary_reader_t *r, const ir_func_t *function)
 {
-    ir_switness_t witness = {.flag = get_u32(r)};
+    ir_switness_t witness = {.flag = core_cursor_u32(&r->in)};
     witness.module = get_owned_text(r, function);
     witness.name   = get_owned_text(r, function);
-    witness.line   = get_u32(r);
-    witness.column = get_u32(r);
+    witness.line   = core_cursor_u32(&r->in);
+    witness.column = core_cursor_u32(&r->in);
     const ir_summary_resolver_t *resolver = r->resolver;
     if (witness.module.data && witness.name.data && resolver
         && resolver->function)
@@ -540,52 +494,52 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
                const ir_summary_resolver_t *resolver,
                const ir_summary_texts_t *texts)
 {
-    summary_reader_t r = {.data = data, .size = size, .texts = texts,
+    summary_reader_t r = {.in = core_cursor(data, size), .texts = texts,
                           .resolver = resolver};
     if (!data || !texts || !texts->lookup) return nullptr;
     ir_summary_t *summary = ir_summary_new(nullptr, function);
-    summary->flags      = get_u32(&r);
-    summary->traps      = get_u8(&r) & IR_STRAP_ALL;
-    uint32_t trap_sites = get_u32(&r);
-    for (uint32_t i = 0; !r.failed && i < trap_sites; i++) {
-        ir_strap_site_t site = {.kind = get_u8(&r) & IR_STRAP_ALL};
-        site.line   = get_u32(&r);
-        site.column = get_u32(&r);
+    summary->flags      = core_cursor_u32(&r.in);
+    summary->traps      = core_cursor_u8(&r.in) & IR_STRAP_ALL;
+    uint32_t trap_sites = core_cursor_u32(&r.in);
+    for (uint32_t i = 0; !r.in.failed && i < trap_sites; i++) {
+        ir_strap_site_t site = {.kind = core_cursor_u8(&r.in) & IR_STRAP_ALL};
+        site.line   = core_cursor_u32(&r.in);
+        site.column = core_cursor_u32(&r.in);
         core_list_push(summary->trap_sites, site);
     }
-    uint32_t effects = get_u32(&r);
-    for (uint32_t i = 0; !r.failed && i < effects; i++) {
+    uint32_t effects = core_cursor_u32(&r.in);
+    for (uint32_t i = 0; !r.in.failed && i < effects; i++) {
         core_string_t name = get_text(&r);
         if (callbacks_tag(name)) {
-            if (!read_callbacks_tag(name, summary)) r.failed = true;
+            if (!read_callbacks_tag(name, summary)) r.in.failed = true;
             continue;
         }
         if (!name.u8_bytes || !ir_summary_add_effect(summary, name))
-            r.failed = true;
+            r.in.failed = true;
     }
     get_paths(&r, &summary->paths);
-    uint8_t results = get_u8(&r);
+    uint8_t results = core_cursor_u8(&r.in);
     summary->results_known    = results & 1;
     summary->returns_external = results >> 1 & 1;
     get_flows(&r, &summary->flows[IR_SFLOW_RESULTS]);
     get_flows(&r, &summary->flows[IR_SFLOW_STORES]);
-    uint32_t witnesses = get_u32(&r);
-    for (uint32_t i = 0; !r.failed && i < witnesses; i++) {
+    uint32_t witnesses = core_cursor_u32(&r.in);
+    for (uint32_t i = 0; !r.in.failed && i < witnesses; i++) {
         ir_switness_t witness = get_witness(&r, function);
-        if (!r.failed) core_list_push(summary->witnesses, witness);
+        if (!r.in.failed) core_list_push(summary->witnesses, witness);
     }
-    uint32_t heaps = get_u32(&r);
-    for (uint32_t i = 0; !r.failed && i < heaps; i++) {
-        ir_sheap_t heap = {.origin = get_u32(&r)};
+    uint32_t heaps = core_cursor_u32(&r.in);
+    for (uint32_t i = 0; !r.in.failed && i < heaps; i++) {
+        ir_sheap_t heap = {.origin = core_cursor_u32(&r.in)};
         heap.type     = get_type(&r);
-        heap.elements = get_u8(&r) != 0;
+        heap.elements = core_cursor_u8(&r.in) != 0;
         heap.module   = get_owned_text(&r, function);
         heap.name   = get_owned_text(&r, function);
-        heap.line   = get_u32(&r);
-        heap.column = get_u32(&r);
-        if (!r.failed) core_list_push(summary->heaps, heap);
+        heap.line   = core_cursor_u32(&r.in);
+        heap.column = core_cursor_u32(&r.in);
+        if (!r.in.failed) core_list_push(summary->heaps, heap);
     }
-    if (r.failed || r.at != r.size) {
+    if (r.in.failed || r.in.at != r.in.end) {
         summary_free(summary);
         return nullptr;
     }
