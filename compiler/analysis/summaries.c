@@ -63,6 +63,48 @@ runtime_function_add(core_list_t(n00bb_ir_func_ptr_t) *functions,
 }
 
 bool
+visit_runtime_symbols(runtime_scan_t *scan, runtime_symbol_fn visit)
+{
+    parse_grammar_t *grammar = scan->grammar;
+    for (size_t i = 0; i < scan->analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(scan->analysis->units.data[i]);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        if (!symtab) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                bool tracked = symbol->kind == PARSE_SYM_VARIABLE
+                    && is_module_global_symbol(grammar, symbol)
+                    && (symbol->is_thread_local
+                        || !global_has_explicit_initializer(grammar,
+                                                            symbol));
+                ir_global_t *global = tracked
+                    ? link_ir_global_for_symbol(scan->analysis, symbol)
+                    : nullptr;
+                tracked = tracked && (global || symbol->is_thread_local);
+                if (!visit(scan, symbol, global, tracked)) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
+add_runtime_symbol(runtime_scan_t *scan, parse_sym_entry_t *symbol,
+                   ir_global_t *global, bool tracked)
+{
+    if (tracked && !runtime_init_target_add(scan->runtime, global))
+        return false;
+    if (!thread_runtime_entry_function(scan->grammar, symbol)) return true;
+    ir_func_t *function = link_ir_function_for_symbol(scan->analysis, symbol);
+    if (function && function->n_blocks)
+        runtime_function_add(&scan->runtime->entry_functions, function);
+    return true;
+}
+
+bool
 runtime_init_entries(parse_grammar_t *grammar,
                      n00bb_link_analysis_t *analysis,
                      n00bb_runtime_init_analysis_t *runtime)
@@ -71,35 +113,8 @@ runtime_init_entries(parse_grammar_t *grammar,
     runtime->entry_functions = core_list_new(n00bb_ir_func_ptr_t);
     core_dict_init(&runtime->targets, nullptr, nullptr);
     core_dict_init(&runtime->reachable, nullptr, nullptr);
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        if (!symtab) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
-             scope = scope->all_next) {
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                if (symbol->kind == PARSE_SYM_VARIABLE
-                    && is_module_global_symbol(grammar, symbol)
-                    && (symbol->is_thread_local
-                        || !global_has_explicit_initializer(grammar,
-                                                            symbol))) {
-                    ir_global_t *global = link_ir_global_for_symbol(analysis,
-                                                                    symbol);
-                    if ((global || symbol->is_thread_local)
-                        && !runtime_init_target_add(runtime, global))
-                        return false;
-                }
-                if (!thread_runtime_entry_function(grammar, symbol)) continue;
-                ir_func_t *function = link_ir_function_for_symbol(analysis,
-                                                                  symbol);
-                if (!function || !function->n_blocks) continue;
-                runtime_function_add(&runtime->entry_functions, function);
-            }
-        }
-    }
-    return true;
+    runtime_scan_t scan = {grammar, analysis, runtime};
+    return visit_runtime_symbols(&scan, add_runtime_symbol);
 }
 
 bool
@@ -582,7 +597,7 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
         }
     }
     size_t subjects = roots.len;
-    push_effect_query_subjects(analysis, &roots);
+    visit_effect_queries(analysis, &roots);
     push_effect_check_subjects(analysis, &roots);
     push_effects_of_roots(analysis, &roots);
     bind_summary_hooks(analysis, false);

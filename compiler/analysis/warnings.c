@@ -44,9 +44,6 @@ static bool
 add_entry_param(core_list_t(entry_param_t) *params, ir_func_t *function,
                 uint64_t bit);
 static void
-visit_function_values(const core_list_t(n00bb_ir_func_ptr_t) *functions,
-                      function_value_fn visit, void *context);
-static void
 add_taken_entry(void *context, const ir_value_t *value);
 static void
 note_taken_value(void *context, const ir_value_t *value);
@@ -839,9 +836,10 @@ add_entry_param(core_list_t(entry_param_t) *params, ir_func_t *function,
     return true;
 }
 
-static void
+void
 visit_function_values(const core_list_t(n00bb_ir_func_ptr_t) *functions,
-                      function_value_fn visit, void *context)
+                      function_value_fn visit, function_instr_fn after,
+                      void *context)
 {
     for (size_t f = 0; f < functions->len; f++) {
         ir_func_t *function = functions->data[f];
@@ -855,6 +853,7 @@ visit_function_values(const core_list_t(n00bb_ir_func_ptr_t) *functions,
                     if (value && value->kind == IR_VAL_FUNC && value->owner)
                         visit(context, value);
                 }
+                if (after) after(context, in);
             }
     }
 }
@@ -876,7 +875,7 @@ add_address_taken_functions(const core_list_t(n00bb_ir_func_ptr_t) *functions,
     core_dict_init(&taken.listed, nullptr, nullptr);
     for (size_t e = 0; e < entries->len; e++)
         core_dict_put(&taken.listed, entries->data[e], 1);
-    visit_function_values(functions, add_taken_entry, &taken);
+    visit_function_values(functions, add_taken_entry, nullptr, &taken);
     core_dict_free(&taken.listed);
 }
 
@@ -945,7 +944,7 @@ thread_entries(const core_list_t(n00bb_ir_func_ptr_t) *functions,
     if (*complete) {
         taken_values_t taken = {0};
         core_dict_init(&taken.taken, nullptr, nullptr);
-        visit_function_values(functions, note_taken_value, &taken);
+        visit_function_values(functions, note_taken_value, nullptr, &taken);
         *complete = !taken.entry_natives;
         for (size_t i = 0; *complete && i < params.len; i++)
             *complete = !core_dict_contains(&taken.taken,
@@ -1410,7 +1409,7 @@ warn_unused_params(n00bb_link_analysis_t *analysis)
     core_dict_t reported;
     core_dict_init(&reported, param_site_hash, param_site_eq);
     visit_function_values(&analysis->emitted_functions, note_taken_owner,
-                          &taken);
+                          nullptr, &taken);
     for (size_t f = 0; f < analysis->emitted_functions.len; f++) {
         ir_func_t *function = analysis->emitted_functions.data[f];
         core_translation_unit_t *unit = function->n_blocks
@@ -2109,6 +2108,45 @@ validate_uninitialized_global_reads(
     return true;
 }
 
+static bool
+validate_thread_global_reads(runtime_scan_t *scan,
+                             parse_sym_entry_t *thread_global,
+                             ir_global_t *global, bool tracked)
+{
+    n00bb_link_analysis_t *analysis = scan->analysis;
+    n00bb_runtime_init_analysis_t *runtime = scan->runtime;
+    if (!tracked) return true;
+    if (!global || !runtime_init_is_target(runtime, global)) return false;
+    ir_splace_t place = ir_splace_global(global);
+    bool runtime_succeeds = false;
+    uint8_t entry_state = thread_runtime_entry_state(
+        runtime, global,
+        global->has_static_initializer
+            || (thread_global->has_comptime_value
+                && thread_global->comptime_value)
+            || n00bb_comptime_seeds(unit_for_ir_module(analysis,
+                   ir_global_identity(global)->owner), global),
+        &runtime_succeeds);
+    for (size_t f = 0; runtime_succeeds
+         && f < runtime->entry_functions.len; f++) {
+        ir_func_t *function = runtime->entry_functions.data[f];
+        ir_instr_t *read = first_uninitialized_read(
+            analysis, function, &place, entry_state);
+        core_translation_unit_t *unit = read
+            ? unit_for_ir_module(analysis, function->owner)
+            : nullptr;
+        if (!unit) continue;
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_GLOBAL_READ_BEFORE_INIT,
+            n00bb_span_location(read->span),
+            thread_global->is_thread_local
+                ? N00B_TEXT_THREAD_READ_BEFORE_INIT
+                : N00B_TEXT_GLOBAL_READ_BEFORE_SET,
+            N00BB_ARGS(ARG_TEXT(thread_global->name)));
+    }
+    return true;
+}
+
 bool
 validate_thread_function_reads(
     core_link_unit_t *link, n00bb_link_analysis_t *analysis,
@@ -2117,58 +2155,8 @@ validate_thread_function_reads(
 {
     if (!link || !analysis || !runtime) return false;
     if (!comptime_phase_succeeds) return true;
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        if (!symtab) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
-             scope = scope->all_next) {
-            for (parse_sym_entry_t *thread_global = scope->first_in_scope;
-                 thread_global; thread_global = thread_global->next_in_scope) {
-                if (thread_global->kind != PARSE_SYM_VARIABLE
-                    || !is_module_global_symbol(analysis->grammar,
-                                                thread_global)
-                    || (!thread_global->is_thread_local
-                        && global_has_explicit_initializer(analysis->grammar,
-                                                           thread_global)))
-                    continue;
-                ir_global_t *global = link_ir_global_for_symbol(analysis,
-                                                                thread_global);
-                if (!global && !thread_global->is_thread_local) continue;
-                if (!global || !runtime_init_is_target(runtime, global))
-                    return false;
-                ir_splace_t place = ir_splace_global(global);
-                bool runtime_succeeds = false;
-                uint8_t entry_state = thread_runtime_entry_state(
-                    runtime, global,
-                    global->has_static_initializer
-                        || (thread_global->has_comptime_value
-                            && thread_global->comptime_value)
-                        || n00bb_comptime_seeds(unit_for_ir_module(analysis,
-                               ir_global_identity(global)->owner), global),
-                    &runtime_succeeds);
-                for (size_t f = 0; runtime_succeeds
-                     && f < runtime->entry_functions.len; f++) {
-                    ir_func_t *function = runtime->entry_functions.data[f];
-                    ir_instr_t *read = first_uninitialized_read(
-                        analysis, function, &place, entry_state);
-                    core_translation_unit_t *unit = read
-                        ? unit_for_ir_module(analysis, function->owner)
-                        : nullptr;
-                    if (!unit) continue;
-                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
-                        N00B_DIAG_GLOBAL_READ_BEFORE_INIT,
-                        n00bb_span_location(read->span),
-                        thread_global->is_thread_local
-                            ? N00B_TEXT_THREAD_READ_BEFORE_INIT
-                            : N00B_TEXT_GLOBAL_READ_BEFORE_SET,
-                        N00BB_ARGS(ARG_TEXT(thread_global->name)));
-                }
-            }
-        }
-    }
-    return true;
+    runtime_scan_t scan = {analysis->grammar, analysis, runtime};
+    return visit_runtime_symbols(&scan, validate_thread_global_reads);
 }
 
 typedef struct {

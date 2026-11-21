@@ -35,33 +35,6 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
     return analysis->escapes != nullptr;
 }
 
-bool
-mark_diverging_calls(n00bb_link_analysis_t *analysis)
-{
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        ir_module_t *module = state->ir_module;
-        for (size_t f = 0; f < ir_func_count(module); f++) {
-            ir_func_t *function = ir_func_at(module, f);
-            for (uint32_t b = 0; b < function->n_blocks; b++)
-                for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-                    ir_instr_t *call = function->blocks[b]->instrs[i];
-                    if ((call->op != IR_OP_CALL
-                         && call->op != IR_OP_CALLBACK_INVOKE)
-                        || !ir_summary_call_diverges(analysis->escapes, call))
-                        continue;
-                    if (!ir_annot_set(analysis->ir_context,
-                            &call->annots, (ir_annot_t){
-                                .key = CORE_STRING_STATIC("ir.diverges"),
-                                .kind = IR_ANNOT_BOOL, .b = true}))
-                        return false;
-                }
-        }
-    }
-    return true;
-}
-
 static void
 merge_call_return(void *context, const ir_func_t *target,
                   const ir_summary_t *summary)
@@ -95,7 +68,7 @@ mark_external_call_return(n00bb_link_analysis_t *analysis,
 }
 
 bool
-mark_external_call_returns(n00bb_link_analysis_t *analysis)
+mark_calls(n00bb_link_analysis_t *analysis, bool diverging)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
@@ -105,10 +78,17 @@ mark_external_call_returns(n00bb_link_analysis_t *analysis)
             ir_func_t *function = ir_func_at(module, f);
             for (uint32_t b = 0; b < function->n_blocks; b++)
                 for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-                    ir_instr_t *in = function->blocks[b]->instrs[i];
-                    if ((in->op == IR_OP_CALL
-                         || in->op == IR_OP_CALLBACK_INVOKE)
-                        && !mark_external_call_return(analysis, function, in))
+                    ir_instr_t *call = function->blocks[b]->instrs[i];
+                    if (call->op != IR_OP_CALL
+                        && call->op != IR_OP_CALLBACK_INVOKE) continue;
+                    if (diverging
+                        ? ir_summary_call_diverges(analysis->escapes, call)
+                          && !ir_annot_set(analysis->ir_context,
+                              &call->annots, (ir_annot_t){
+                                  .key = CORE_STRING_STATIC("ir.diverges"),
+                                  .kind = IR_ANNOT_BOOL, .b = true})
+                        : !mark_external_call_return(analysis, function,
+                                                     call))
                         return false;
                 }
         }

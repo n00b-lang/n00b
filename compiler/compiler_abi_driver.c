@@ -280,6 +280,17 @@ unique_runtime_function(core_translation_unit_t *const *units,
     return matched;
 }
 
+static void *
+n00bb_binding_rows(const n00bb_abi_object_view_t *view, uint32_t kind,
+                   size_t size, bool have_out, uint32_t *records)
+{
+    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(view,
+                                                                      kind);
+    if (!table || !have_out) return nullptr;
+    *records = table->record_count;
+    return calloc(*records ? *records : 1, size);
+}
+
 static bool
 n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                               core_translation_unit_t *const *units,
@@ -289,14 +300,13 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                               n00bb_llvm_function_binding_t **out,
                               size_t *out_count)
 {
-    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(view,
-        N00B_ABI_TABLE_FUNCTION);
-    if (!table || !out || !out_count) return false;
-    n00bb_llvm_function_binding_t *bindings = calloc(
-        table->record_count ? table->record_count : 1, sizeof(*bindings));
+    uint32_t records = 0;
+    n00bb_llvm_function_binding_t *bindings = n00bb_binding_rows(view,
+        N00B_ABI_TABLE_FUNCTION, sizeof(*bindings), out && out_count,
+        &records);
     if (!bindings) return false;
     size_t count = 0;
-    for (uint32_t i = 1; i < table->record_count; i++) {
+    for (uint32_t i = 1; i < records; i++) {
         const n00b_abi_function_v1 *function = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_FUNCTION, i);
         const n00b_abi_symbol_v1 *symbol = function
@@ -414,15 +424,13 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                         n00bb_llvm_finalizer_binding_t **out,
                         size_t *out_count)
 {
-    const n00bb_abi_directory_entry_t *table = n00bb_abi_object_table(view,
-        N00B_ABI_TABLE_TYPE);
-    if (!table || !out || !out_count) return false;
-    n00bb_llvm_finalizer_binding_t *bindings = calloc(
-        table->record_count ? table->record_count : 1, sizeof(*bindings));
+    uint32_t records = 0;
+    n00bb_llvm_finalizer_binding_t *bindings = n00bb_binding_rows(view,
+        N00B_ABI_TABLE_TYPE, sizeof(*bindings), out && out_count, &records);
     if (!bindings) return false;
     size_t count = 0;
     bool valid = true;
-    for (uint32_t i = 1; valid && i < table->record_count; i++) {
+    for (uint32_t i = 1; valid && i < records; i++) {
         const n00b_abi_type_v1 *type = n00bb_abi_object_row(view,
             N00B_ABI_TABLE_TYPE, i);
         if (!type) { valid = false; break; }

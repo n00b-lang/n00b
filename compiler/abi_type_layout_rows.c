@@ -521,17 +521,14 @@ append_runs(const ir_layout_bit_run_t *source, size_t count,
             core_list_t(uint32_t) *indexes, n00b_abi_range_v1 *range)
 {
     *range = (n00b_abi_range_v1){0};
-    if (!count) return true;
-    if (!source || indexes->len > UINT32_MAX - stream_base) return false;
-    range->first = stream_base + (uint32_t)indexes->len;
+    if (count && !source) return false;
     for (size_t i = 0; i < count; i++) {
         uint64_t bit = source[i].offset;
         uint64_t remaining = source[i].width;
         if (!remaining || bit > extent_bits
             || remaining > extent_bits - bit) return false;
         while (remaining) {
-            if (runs->len >= UINT32_MAX
-                || indexes->len >= UINT32_MAX - stream_base) return false;
+            if (runs->len >= UINT32_MAX) return false;
             uint32_t width = remaining > UINT32_MAX
                 ? UINT32_MAX : (uint32_t)remaining;
             uint32_t run_index = (uint32_t)runs->len;
@@ -540,12 +537,12 @@ append_runs(const ir_layout_bit_run_t *source, size_t count,
                 .bit_offset = (uint32_t)(bit % 8),
                 .width_bits = width,
             }));
-            core_list_push(*indexes, run_index);
+            if (!trace_index_append(stream_base, indexes, run_index, range))
+                return false;
             bit += width;
             remaining -= width;
         }
     }
-    range->count = (uint32_t)(stream_base + indexes->len - range->first);
     return true;
 }
 
@@ -556,9 +553,7 @@ append_accesses(const ir_layout_access_t *source, size_t count,
                 core_list_t(uint32_t) *indexes, n00b_abi_range_v1 *range)
 {
     *range = (n00b_abi_range_v1){0};
-    if (!count) return true;
-    if (!source || indexes->len > UINT32_MAX - stream_base) return false;
-    range->first = stream_base + (uint32_t)indexes->len;
+    if (count && !source) return false;
     for (size_t i = 0; i < count; i++) {
         const ir_layout_access_t *access = &source[i];
         if (!access->unit_width_bits || !access->value_width_bits
@@ -570,8 +565,7 @@ append_accesses(const ir_layout_access_t *source, size_t count,
             || access->lsb > extent_bits - access->unit_bit_offset
             || access->value_width_bits
                 > extent_bits - access->unit_bit_offset - access->lsb
-            || runs->len >= UINT32_MAX
-            || indexes->len >= UINT32_MAX - stream_base) return false;
+            || runs->len >= UINT32_MAX) return false;
         uint32_t run_index = (uint32_t)runs->len;
         core_list_push(*runs, ((n00b_abi_packed_run_v1){
             .unit_byte_offset = access->unit_bit_offset / 8,
@@ -579,9 +573,9 @@ append_accesses(const ir_layout_access_t *source, size_t count,
             .lsb_position = access->lsb,
             .width_bits = access->value_width_bits,
         }));
-        core_list_push(*indexes, run_index);
+        if (!trace_index_append(stream_base, indexes, run_index, range))
+            return false;
     }
-    range->count = (uint32_t)(stream_base + indexes->len - range->first);
     return true;
 }
 

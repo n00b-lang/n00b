@@ -41,10 +41,9 @@ initialize_static_global(parse_grammar_t *grammar,
                          ir_module_t *module,
                          parse_sym_entry_t *symbol, ir_global_t *global,
                          ir_diags_t *diagnostics, int32_t file_id);
-static bool
-n00bb_unit_defines_global(n00bb_link_analysis_t *analysis,
-                          core_translation_unit_t *unit,
-                          parse_sym_entry_t *symbol);
+static core_list_t(parse_sym_entry_ptr_t)
+n00bb_unit_defined_globals(n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit);
 static core_hash_value_t
 reference_pair_hash(void *key);
 static bool
@@ -72,6 +71,9 @@ bind_cached_global_identities(ir_ctx_t *ir_context,
 static th_type *
 function_semantic_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
                         parse_sym_entry_t *symbol, th_type *source_type);
+static th_type *
+semantic_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+               parse_tree_t *parameters_node, th_type *source);
 static th_type *
 function_semantic_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
                        parse_sym_entry_t *symbol);
@@ -642,15 +644,28 @@ initialize_static_global(parse_grammar_t *grammar,
     return true;
 }
 
-static bool
-n00bb_unit_defines_global(n00bb_link_analysis_t *analysis,
-                          core_translation_unit_t *unit,
-                          parse_sym_entry_t *symbol)
+static core_list_t(parse_sym_entry_ptr_t)
+n00bb_unit_defined_globals(n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit)
 {
-    core_link_declaration_t *declaration =
-        link_declaration_for_symbol(analysis, symbol);
-    return !declaration || core_string_eq(
-        core_link_declaration_module(declaration), unit->module.identifier);
+    core_list_t(parse_sym_entry_ptr_t) globals =
+        core_list_new(parse_sym_entry_ptr_t);
+    core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+        tu_state(unit), CORE_STRING_STATIC(""));
+    for (size_t s = 0; s < scopes.len; s++)
+        for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
+             symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)
+                || symbol->kind != PARSE_SYM_VARIABLE) continue;
+            core_link_declaration_t *declaration =
+                link_declaration_for_symbol(analysis, symbol);
+            if (!declaration || core_string_eq(
+                    core_link_declaration_module(declaration),
+                    unit->module.identifier))
+                core_list_push(globals, symbol);
+        }
+    core_list_free(scopes);
+    return globals;
 }
 
 static core_hash_value_t
@@ -707,141 +722,134 @@ register_module_globals(parse_grammar_t *grammar,
     if (!diagnostics) return false;
     int32_t source_file = source_state->ir_module
         ? ir_file_count(source_state->ir_module) - 1 : -1;
-    core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
-        source_state, CORE_STRING_STATIC(""));
+    core_list_t(parse_sym_entry_ptr_t) globals =
+        n00bb_unit_defined_globals(analysis, source);
     bool ok = true;
-    for (size_t s = 0; ok && s < scopes.len; s++) {
-        for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-             ok && symbol; symbol = symbol->next_in_scope) {
-            if (n00bb_injected_member(symbol)) continue;
-            if (symbol->kind != PARSE_SYM_VARIABLE
-                || (!symbol_binding_node(symbol)
-                    && !source_state->interface_module)
-                || !symbol->type
-                || !n00bb_unit_defines_global(analysis, source, symbol))
-                continue;
-            if (source != destination_unit) {
-                reference_pair_t wanted = {
-                    .referrer = destination_unit,
-                    .target = link_declaration_for_symbol(analysis, symbol),
-                };
-                if (!wanted.target
-                    || !core_dict_contains(references, &wanted)) continue;
-            }
-            core_buffer_t name = {0};
-            append_module_symbol_name(source, symbol, &name);
-            th_type *global_type = static_global_type(grammar, source,
-                                                       symbol);
-            ir_global_t *global = global_type
-                ? ir_global_add(destination, core_buffer_string(&name),
-                                global_type) : nullptr;
-            ir_shape_t *array_shape = parse_sym_binding(symbol,
-                CORE_STRING_STATIC("ir.array-shape"));
-            bool local_owner = destination == source_state->ir_module;
-            bool canonical_owner = local_owner;
-            bool local_definition = local_owner
-                && !source_state->interface_module;
-            if (global) {
-                bool shape_bound = !array_shape
-                    || ir_global_set_shape(global, array_shape);
-                global->is_extern = !local_definition;
-                global->is_static = local_definition
-                    && symbol_is_private(symbol);
-                global->mutability = symbol->mutability == PARSE_SYM_MUTABLE
-                    ? IR_MUT_MUTABLE
-                    : symbol->mutability == PARSE_SYM_CONST ? IR_MUT_CONST
-                    : IR_MUT_IMMUTABLE;
-                th_type *referent = th_resolve(global->type);
-                ok = shape_bound
-                    && (!referent || (th_kind_of(referent) != TH_INDIRECTION
-                            && !n00bb_reference_definition(
-                                ir_module_types(destination), referent))
-                        || ir_value_set_indirect_access(ir_context,
-                            ir_global_address(destination, global),
-                            IR_INDIRECT_ACCESS_READ_WRITE));
-                ir_storage_duration_t duration =
-                    IR_STORAGE_DURATION_UNSPECIFIED;
-                switch (symbol->storage_duration) {
-                case PARSE_SYM_STORAGE_COMPTIME:
-                    duration = IR_STORAGE_DURATION_COMPTIME;
-                    break;
-                case PARSE_SYM_STORAGE_AUTOMATIC:
-                    duration = IR_STORAGE_DURATION_AUTOMATIC;
-                    break;
-                case PARSE_SYM_STORAGE_MODULE:
-                    duration = IR_STORAGE_DURATION_MODULE;
-                    break;
-                case PARSE_SYM_STORAGE_THREAD:
-                    duration = IR_STORAGE_DURATION_THREAD;
-                    break;
-                case PARSE_SYM_STORAGE_DYNAMIC:
-                    duration = IR_STORAGE_DURATION_DYNAMIC;
-                    break;
-                case PARSE_SYM_STORAGE_UNSPECIFIED:
-                    break;
-                }
-                if (ok)
-                    ok = ir_global_set_storage_duration(
-                        ir_context, global, duration)
-                        && ir_global_set_storage_class(ir_context, global,
-                            symbol->requested_storage_class,
-                            symbol->storage_class_required,
-                            symbol->selected_storage_class);
-                if (symbol->is_thread_local)
-                    ir_annot_set(ir_context, &global->annots,
-                        (ir_annot_t){.key = CORE_STRING_STATIC("n00b.thread_local"),
-                                     .kind = IR_ANNOT_BOOL, .b = true});
-                if (local_owner) {
-                    if (symbol->decl_node)
-                        global->span = lower_span_for_tree(
-                            &(ir_lower_context_t){.file_id = source_file},
-                            symbol->decl_node);
-                    if (ok && local_definition)
-                        ok = initialize_static_global(grammar, source,
-                            destination, symbol, global, diagnostics,
-                            source_file);
-                    core_link_declaration_t *declaration = canonical_owner
-                        ? link_declaration_for_symbol(analysis, symbol)
-                        : nullptr;
-                    bool already_bound = declaration
-                        && core_link_declaration_binding(declaration,
-                            CORE_STRING_STATIC("n00bb.ir.global"));
-                    if (ok && canonical_owner && (!declaration
-                        || ((!source_state->interface_module
-                                || !already_bound)
-                            && !core_link_declaration_set_binding(link,
-                                declaration,
-                                CORE_STRING_STATIC("n00bb.ir.global"),
-                                producer_stage, global)))) {
-                        if (!n00bb_unit_failed(source))
-                            n00bb_internal_error(
-                                core_translation_unit_diagnostics(source),
-                                source,
-                                link_source_location(symbol->decl_node),
-                                "registering module globals",
-                                "could not bind global `%.*s` to its "
-                                "canonical declaration",
-                                (int)symbol->name.u8_bytes,
-                                symbol->name.data);
-                        ok = false;
-                    }
-                }
-            }
-            else {
-                if (!n00bb_unit_failed(source))
-                    n00bb_internal_error(
-                        core_translation_unit_diagnostics(source), source,
-                        link_source_location(symbol->decl_node),
-                        "registering module globals",
-                        "could not create storage for global `%.*s`",
-                        (int)symbol->name.u8_bytes, symbol->name.data);
-                ok = false;
-            }
-            core_buffer_release(&name);
-            if (!ok && n00bb_unit_failed(source)) ok = true;
+    for (size_t g = 0; ok && g < globals.len; g++) {
+        parse_sym_entry_t *symbol = globals.data[g];
+        if ((!symbol_binding_node(symbol) && !source_state->interface_module)
+            || !symbol->type)
+            continue;
+        if (source != destination_unit) {
+            reference_pair_t wanted = {
+                .referrer = destination_unit,
+                .target = link_declaration_for_symbol(analysis, symbol),
+            };
+            if (!wanted.target
+                || !core_dict_contains(references, &wanted)) continue;
         }
+        core_buffer_t name = {0};
+        append_module_symbol_name(source, symbol, &name);
+        th_type *global_type = static_global_type(grammar, source, symbol);
+        ir_global_t *global = global_type
+            ? ir_global_add(destination, core_buffer_string(&name),
+                            global_type) : nullptr;
+        ir_shape_t *array_shape = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("ir.array-shape"));
+        bool local_owner = destination == source_state->ir_module;
+        bool canonical_owner = local_owner;
+        bool local_definition = local_owner
+            && !source_state->interface_module;
+        if (global) {
+            bool shape_bound = !array_shape
+                || ir_global_set_shape(global, array_shape);
+            global->is_extern = !local_definition;
+            global->is_static = local_definition
+                && symbol_is_private(symbol);
+            global->mutability = symbol->mutability == PARSE_SYM_MUTABLE
+                ? IR_MUT_MUTABLE
+                : symbol->mutability == PARSE_SYM_CONST ? IR_MUT_CONST
+                : IR_MUT_IMMUTABLE;
+            th_type *referent = th_resolve(global->type);
+            ok = shape_bound
+                && (!referent || (th_kind_of(referent) != TH_INDIRECTION
+                        && !n00bb_reference_definition(
+                            ir_module_types(destination), referent))
+                    || ir_value_set_indirect_access(ir_context,
+                        ir_global_address(destination, global),
+                        IR_INDIRECT_ACCESS_READ_WRITE));
+            ir_storage_duration_t duration =
+                IR_STORAGE_DURATION_UNSPECIFIED;
+            switch (symbol->storage_duration) {
+            case PARSE_SYM_STORAGE_COMPTIME:
+                duration = IR_STORAGE_DURATION_COMPTIME;
+                break;
+            case PARSE_SYM_STORAGE_AUTOMATIC:
+                duration = IR_STORAGE_DURATION_AUTOMATIC;
+                break;
+            case PARSE_SYM_STORAGE_MODULE:
+                duration = IR_STORAGE_DURATION_MODULE;
+                break;
+            case PARSE_SYM_STORAGE_THREAD:
+                duration = IR_STORAGE_DURATION_THREAD;
+                break;
+            case PARSE_SYM_STORAGE_DYNAMIC:
+                duration = IR_STORAGE_DURATION_DYNAMIC;
+                break;
+            case PARSE_SYM_STORAGE_UNSPECIFIED:
+                break;
+            }
+            if (ok)
+                ok = ir_global_set_storage_duration(
+                    ir_context, global, duration)
+                    && ir_global_set_storage_class(ir_context, global,
+                        symbol->requested_storage_class,
+                        symbol->storage_class_required,
+                        symbol->selected_storage_class);
+            if (symbol->is_thread_local)
+                ir_annot_set(ir_context, &global->annots,
+                    (ir_annot_t){.key = CORE_STRING_STATIC("n00b.thread_local"),
+                                 .kind = IR_ANNOT_BOOL, .b = true});
+            if (local_owner) {
+                if (symbol->decl_node)
+                    global->span = lower_span_for_tree(
+                        &(ir_lower_context_t){.file_id = source_file},
+                        symbol->decl_node);
+                if (ok && local_definition)
+                    ok = initialize_static_global(grammar, source,
+                        destination, symbol, global, diagnostics,
+                        source_file);
+                core_link_declaration_t *declaration = canonical_owner
+                    ? link_declaration_for_symbol(analysis, symbol)
+                    : nullptr;
+                bool already_bound = declaration
+                    && core_link_declaration_binding(declaration,
+                        CORE_STRING_STATIC("n00bb.ir.global"));
+                if (ok && canonical_owner && (!declaration
+                    || ((!source_state->interface_module
+                            || !already_bound)
+                        && !core_link_declaration_set_binding(link,
+                            declaration,
+                            CORE_STRING_STATIC("n00bb.ir.global"),
+                            producer_stage, global)))) {
+                    if (!n00bb_unit_failed(source))
+                        n00bb_internal_error(
+                            core_translation_unit_diagnostics(source),
+                            source,
+                            link_source_location(symbol->decl_node),
+                            "registering module globals",
+                            "could not bind global `%.*s` to its "
+                            "canonical declaration",
+                            (int)symbol->name.u8_bytes,
+                            symbol->name.data);
+                    ok = false;
+                }
+            }
+        }
+        else {
+            if (!n00bb_unit_failed(source))
+                n00bb_internal_error(
+                    core_translation_unit_diagnostics(source), source,
+                    link_source_location(symbol->decl_node),
+                    "registering module globals",
+                    "could not create storage for global `%.*s`",
+                    (int)symbol->name.u8_bytes, symbol->name.data);
+            ok = false;
+        }
+        core_buffer_release(&name);
+        if (!ok && n00bb_unit_failed(source)) ok = true;
     }
-    core_list_free(scopes);
+    core_list_free(globals);
     return ok && (!ir_diags_failed(diagnostics)
                   || n00bb_unit_failed(source));
 }
@@ -855,36 +863,29 @@ bind_module_global_identities(ir_ctx_t *ir_context,
         core_translation_unit_t *source = analysis->units.data[i];
         n00bb_tu_state_t *source_state = tu_state(source);
         if (!source_state || !source_state->annotations) return false;
-        core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
-            source_state, CORE_STRING_STATIC(""));
+        core_list_t(parse_sym_entry_ptr_t) globals =
+            n00bb_unit_defined_globals(analysis, source);
         bool ok = true;
-        for (size_t s = 0; ok && s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 ok && symbol; symbol = symbol->next_in_scope) {
-                if (n00bb_injected_member(symbol)) continue;
-                if (symbol->kind != PARSE_SYM_VARIABLE
-                    || !n00bb_unit_defines_global(analysis, source, symbol)
-                    || !is_module_global_symbol(analysis->grammar, symbol))
-                    continue;
-                ir_global_t *canonical = link_ir_global_for_symbol(analysis,
-                                                                    symbol);
-                if (!canonical) continue;
-                core_buffer_t name = {0};
-                append_module_symbol_name(source, symbol, &name);
-                for (size_t j = 0; ok && j < analysis->units.len; j++) {
-                    ir_module_t *module = unit_module(
-                        tu_state(analysis->units.data[j]));
-                    ir_global_t *view = module
-                        ? ir_global_find(module, core_buffer_string(&name))
-                        : nullptr;
-                    if (view)
-                        ok = ir_global_set_identity(ir_context, view,
-                                                    canonical);
-                }
-                core_buffer_release(&name);
+        for (size_t g = 0; ok && g < globals.len; g++) {
+            parse_sym_entry_t *symbol = globals.data[g];
+            if (!is_module_global_symbol(analysis->grammar, symbol)) continue;
+            ir_global_t *canonical = link_ir_global_for_symbol(analysis,
+                                                                symbol);
+            if (!canonical) continue;
+            core_buffer_t name = {0};
+            append_module_symbol_name(source, symbol, &name);
+            for (size_t j = 0; ok && j < analysis->units.len; j++) {
+                ir_module_t *module = unit_module(
+                    tu_state(analysis->units.data[j]));
+                ir_global_t *view = module
+                    ? ir_global_find(module, core_buffer_string(&name))
+                    : nullptr;
+                if (view)
+                    ok = ir_global_set_identity(ir_context, view, canonical);
             }
+            core_buffer_release(&name);
         }
-        core_list_free(scopes);
+        core_list_free(globals);
         if (!ok) return false;
     }
     return true;
@@ -968,56 +969,8 @@ function_semantic_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
     if (parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.generated-value-method")))
         return source_type;
-    parse_tree_t *signature = child_nt(grammar, symbol->decl_node,
-                                       CORE_STRING_STATIC("func-type-signature"));
-    core_list_t(parse_sym_entry_ptr_t) formals =
-        core_list_new(parse_sym_entry_ptr_t);
-    parse_sym_entry_t *rest_symbol = nullptr;
-    collect_ir_parameters(grammar, signature, &formals, &rest_symbol);
-    if (formals.len != th_func_nparams(source_type)
-        || ((rest_symbol != nullptr) != (th_func_rest(source_type) != nullptr))) {
-        core_list_free(formals);
-        return nullptr;
-    }
-
-    core_list_t(th_param) parameters = core_list_new(th_param);
-    core_list_t(th_kwparam) keywords = core_list_new(th_kwparam);
-    bool ok = true;
-    for (size_t i = 0; ok && i < formals.len; i++) {
-        const th_param *source = th_func_param(source_type, i);
-        parse_sym_entry_t *formal = formals.data[i];
-        th_mode mode = formal && formal->has_mode ? formal->mode : TH_IN;
-        if (!source || !formal || !th_mode_is_valid(mode)) {
-            ok = false;
-            break;
-        }
-        core_list_push(parameters, ((th_param){
-            .mode = mode, .type = source->type,
-        }));
-    }
-    const th_param *source_rest = th_func_rest(source_type);
-    th_param lowered_rest = {0};
-    const th_param *rest = nullptr;
-    if (source_rest) {
-        th_mode mode = rest_symbol && rest_symbol->has_mode
-            ? rest_symbol->mode : TH_IN;
-        rest = lowered_rest_type(state->types, source_rest, mode,
-                                 &lowered_rest) ? &lowered_rest : nullptr;
-        if (!rest) ok = false;
-    }
-    for (size_t i = 0; ok && i < th_func_nkw(source_type); i++) {
-        const th_kwparam *keyword = th_func_kw(source_type, i);
-        if (!keyword) ok = false;
-        else core_list_push(keywords, *keyword);
-    }
-    th_type *semantic_type = ok
-        ? th_func_with_error(state->types, th_func_ret(source_type),
-            th_func_error(source_type), parameters.data, parameters.len,
-            rest, keywords.data, keywords.len) : nullptr;
-    core_list_free(formals);
-    core_list_free(parameters);
-    core_list_free(keywords);
-    return semantic_type;
+    return semantic_shape(grammar, state, child_nt(grammar, symbol->decl_node,
+        CORE_STRING_STATIC("func-type-signature")), source_type);
 }
 
 static th_type *
@@ -1057,6 +1010,13 @@ trait_method_semantic_shape(parse_grammar_t *grammar,
         ? child_nt(grammar, signature, CORE_STRING_STATIC("trait-param-decl")) : nullptr;
     if (!state || !source || th_kind_of(source) != TH_FUNCTION
         || !parameters_node) return nullptr;
+    return semantic_shape(grammar, state, parameters_node, source);
+}
+
+static th_type *
+semantic_shape(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+               parse_tree_t *parameters_node, th_type *source)
+{
     core_list_t(parse_sym_entry_ptr_t) formals =
         core_list_new(parse_sym_entry_ptr_t);
     parse_sym_entry_t *rest_symbol = nullptr;

@@ -467,8 +467,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok) ok = build_escape_facts(analysis)
         && check_lease_storage(analysis)
         && report_bookkeeping_writes(analysis)
-        && mark_external_call_returns(analysis)
-        && mark_diverging_calls(analysis);
+        && mark_calls(analysis, false)
+        && mark_calls(analysis, true);
     ir_policy_t *verify_policy = ok ? ir_policy_new(ir_context) : nullptr;
     if (ok) ok = verify_policy && ir_policy_set(verify_policy,
         CORE_STRING_STATIC("IR-E0023"), IR_POLICY_ALLOW);
@@ -654,7 +654,7 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     if (ok) ok = build_function_summaries(analysis, &initializer_functions,
                                           &runtime_init.entry_functions)
-        && fold_function_effects(analysis);
+        && visit_effect_queries(analysis, nullptr);
     if (ok) {
         bool marks = check_marks(analysis);
         bool checks = evaluate_effect_checks(analysis);

@@ -1678,12 +1678,9 @@ clause_applies(n00bb_link_analysis_t *analysis,
 bool
 user_span(const ir_instr_t *in);
 
-void
-push_effect_query_subjects(n00bb_link_analysis_t *analysis,
-                           core_list_t(n00bb_ir_func_ptr_t) *roots);
-
 bool
-fold_function_effects(n00bb_link_analysis_t *analysis);
+visit_effect_queries(n00bb_link_analysis_t *analysis,
+                     core_list_t(n00bb_ir_func_ptr_t) *roots);
 
 void
 collect_callback_handlers(n00bb_link_analysis_t *analysis);
@@ -1832,6 +1829,19 @@ runtime_init_entries(parse_grammar_t *grammar,
                      n00bb_link_analysis_t *analysis,
                      n00bb_runtime_init_analysis_t *runtime);
 
+typedef struct runtime_scan {
+    parse_grammar_t               *grammar;
+    n00bb_link_analysis_t         *analysis;
+    n00bb_runtime_init_analysis_t *runtime;
+} runtime_scan_t;
+
+typedef bool (*runtime_symbol_fn)(runtime_scan_t *scan,
+                                  parse_sym_entry_t *symbol,
+                                  ir_global_t *global, bool tracked);
+
+bool
+visit_runtime_symbols(runtime_scan_t *scan, runtime_symbol_fn visit);
+
 bool
 runtime_init_analysis_build(
     core_list_t(core_translation_unit_ptr_t) *runtime_initializer_order,
@@ -1870,16 +1880,13 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
 bool
 build_escape_facts(n00bb_link_analysis_t *analysis);
 
-bool
-mark_diverging_calls(n00bb_link_analysis_t *analysis);
-
 typedef struct {
     ir_sreturn_t returned;
     uint32_t     targets;
 } call_return_t;
 
 bool
-mark_external_call_returns(n00bb_link_analysis_t *analysis);
+mark_calls(n00bb_link_analysis_t *analysis, bool diverging);
 
 core_string_t
 ir_value_source_name(const ir_value_t *value);
@@ -1955,6 +1962,12 @@ bool
 diagnose_ranges(n00bb_link_analysis_t *analysis);
 
 typedef void (*function_value_fn)(void *context, const ir_value_t *value);
+typedef void (*function_instr_fn)(void *context, ir_instr_t *in);
+
+void
+visit_function_values(const core_list_t(n00bb_ir_func_ptr_t) *functions,
+                      function_value_fn visit, function_instr_fn after,
+                      void *context);
 
 typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) *entries;
