@@ -350,7 +350,7 @@ static void test_final_layout_is_bit_precise_and_owned(void)
     close_env(e);
 }
 
-static void test_imported_final_layout_uses_definition_owner(void)
+static void test_final_layouts_are_published_not_borrowed(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ctx);
@@ -375,11 +375,11 @@ static void test_imported_final_layout_uses_definition_owner(void)
         && ir_layout_publish_final(owner, named, S("x86_64"), &layout));
     check("an importer retains no locally published final layout",
           ir_layout_final(consumer, named, S("x86_64")) == nullptr);
-    check("an importer reads the defining module's visible final layout",
-          ir_layout_final_visible(consumer, named, S("x86_64"))
-              == ir_layout_final(owner, named, S("x86_64")));
-    check("an importer does not inherit a layout for another target",
-          ir_layout_final_visible(consumer, named, S("wasm32")) == nullptr);
+    check("an importer sees no layout the defining module did not publish to it",
+          ir_layout_final_visible(consumer, named, S("x86_64")) == nullptr);
+    check("an importer sees the layout once it is published to it",
+          ir_layout_publish_final(consumer, named, S("x86_64"), &layout)
+              && ir_layout_final_visible(consumer, named, S("x86_64")));
     ir_ctx_free(ctx);
 }
 
@@ -1178,7 +1178,7 @@ int main(void)
     test_record_initializers_and_rest_bindings();
     test_descriptors_are_keyed_and_scoped();
     test_final_layout_is_bit_precise_and_owned();
-    test_imported_final_layout_uses_definition_owner();
+    test_final_layouts_are_published_not_borrowed();
     test_inline_member_layout();
     test_final_layout_copy_preserves_representation();
     test_zero_sized_member_keeps_logical_offset();

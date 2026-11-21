@@ -59,7 +59,7 @@ main(void)
     n00bb_abi_name_pool_t *names = n00bb_abi_name_pool_new();
     n00bb_abi_type_identity_rows_t rows = {0};
     assert(n00bb_abi_type_identity_rows_build(index, runtime,
-                                               false, symbols, nullptr, nullptr,
+                                               symbols, nullptr, nullptr,
                                                names, &rows));
     assert(rows.count == 3 && string_index != record_index);
     assert(rows.rows[0].kind == N00B_ABI_TYPE_NIL
@@ -153,7 +153,7 @@ main(void)
                                    &bits3_layout));
     n00bb_abi_type_identity_rows_t handle_rows = {0};
     assert(n00bb_abi_type_identity_rows_build(handles, runtime,
-                                               false, nullptr, nullptr, nullptr,
+                                               nullptr, nullptr, nullptr,
                                                handle_names,
                                                &handle_rows));
     for (size_t i = 0; i < sizeof(handle_kinds) / sizeof(*handle_kinds); i++)

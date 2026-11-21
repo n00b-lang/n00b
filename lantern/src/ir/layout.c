@@ -376,11 +376,7 @@ const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
 const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
                                                 core_string_t target)
 {
-    const ir_final_layout_t *local = ir_layout_final(m, t, target);
-    if (local) return local;
-    ir_module_t *owner = m && t ? ir_type_definition_owner(m, t) : nullptr;
-    if (!owner || owner == m) return nullptr;
-    return ir_layout_final(owner, t, target);
+    return ir_layout_final(m, t, target);
 }
 
 bool ir_layout_member_inline(ir_module_t *m, th_type *record,
