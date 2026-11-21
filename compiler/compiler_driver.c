@@ -1064,7 +1064,7 @@ make_interface_module_source(locate_worker_context_t *context,
     core_buffer_release(&path);
     if (!initialized) return false;
     n00bb_source_file_set_package(source, package);
-    n00bb_source_file_mark_interface(source, source_hash);
+    n00bb_source_file_mark_interface(source, source_hash, !cached_path.data);
     return true;
 }
 
@@ -4774,6 +4774,14 @@ dump_final_ir(const n00bb_link_analysis_t *analysis)
     core_dict_free(&printed);
 }
 
+static int
+instance_order(const void *left, const void *right)
+{
+    const n00bb_specialization_t *a = left, *b = right;
+    return core_string_cmp(ir_module_name(a->instance->owner),
+                           ir_module_name(b->instance->owner));
+}
+
 static bool
 specialize_emitted(n00bb_link_analysis_t *analysis,
                    const n00bb_specialization_seed_t *seeds,
@@ -4828,6 +4836,9 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
     core_dict_free(&visited);
     core_dict_free(&binder_state.found);
     core_list_free(callers);
+    if (ok && analysis->specializations.len > 1)
+        qsort(analysis->specializations.data, analysis->specializations.len,
+              sizeof(*analysis->specializations.data), instance_order);
     if (ok && n00bb_setting_bool(N00BB_KEY_DEV_DUMP_FINAL_IR))
         dump_final_ir(analysis);
     return ok;
