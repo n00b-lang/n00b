@@ -503,6 +503,7 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
     }
     ok = ok && read_word(reader, 8, &changes);
     core_string_t name = ir_module_name(tu_state(unit)->ir_module);
+    diagnostics = core_translation_unit_diagnostics(unit);
     bool starts = ir_func_find(tu_state(unit)->ir_module,
         CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)) != nullptr;
     for (uint64_t i = 0; ok && i < changes; i++) {
