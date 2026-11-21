@@ -165,7 +165,8 @@ plain_call(const ir_instr_t *call, const call_targets_t *targets, bool hooked)
         ? ir_operand_value(&call->operands[0]) : nullptr;
     return hooked && !targets->unknown && targets->targets.len == 1
         && callee && callee->kind == IR_VAL_FUNC
-        && callee->owner == targets->targets.data[0];
+        && ir_func_definition(callee->owner)
+            == ir_func_definition(targets->targets.data[0]);
 }
 
 static void
