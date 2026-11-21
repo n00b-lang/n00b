@@ -29,7 +29,6 @@
     X(FALLBACK, "lex-fallback") \
     X(BIDI, "lex-bidi") \
     X(DIRECTIVE, "lex-directive") \
-    X(LITERAL_HOOK, "lex-literal-hook") \
     X(RECOVER, "lex-recover") \
     X(SOFT_KEYWORDS, "lex-soft-keywords")
 

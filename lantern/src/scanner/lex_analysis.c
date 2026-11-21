@@ -25,13 +25,6 @@ typedef struct {
 } lex_prefix_frame_t;
 
 typedef struct {
-    core_string_t token;
-    core_string_t origin;
-} lex_output_t;
-
-core_list_decl(lex_output_t);
-
-typedef struct {
     scan_lex_decl_kind_t kind;
     core_string_t        spelling;
     core_string_t        origin;
@@ -69,8 +62,6 @@ kind_name(scan_lex_decl_kind_t kind)
     case SCAN_LEX_DECL_OPERATOR: return CORE_STRING_STATIC("operator");
     case SCAN_LEX_DECL_SOFT_KEYWORD:
         return CORE_STRING_STATIC("soft-keyword");
-    case SCAN_LEX_DECL_LITERAL_HOOK:
-        return CORE_STRING_STATIC("literal-hook");
     case SCAN_LEX_DECL_RECOVERY: return CORE_STRING_STATIC("recovery");
     case SCAN_LEX_DECL_NONE: return CORE_STRING_STATIC("fixed-terminal");
     }
@@ -302,8 +293,7 @@ set_declaration_error(core_string_t *error, core_string_t prefix,
 static bool
 analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
                  lex_decl_origin_t *origins, size_t origin_count,
-                 core_string_t *error,
-                 core_list_t(scan_lex_issue_t) *issues)
+                 core_string_t *error)
 {
     size_t codepoint_count = 0;
     for (size_t i = 0; i < grammar->rules.len; i++) {
@@ -472,14 +462,7 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
                 }
             }
             if (conditional_sigil) goto keep_opening;
-            if (items[i].kind == SCAN_LEX_DECL_NONE) {
-                core_list_push(*issues, ((scan_lex_issue_t){
-                    .kind = SCAN_LEX_ISSUE_SHADOWED_TERMINAL,
-                    .token = core_string_dup(items[i].spelling),
-                    .origin = core_string_dup(items[shadow].origin),
-                }));
-                goto keep_opening;
-            }
+            if (items[i].kind == SCAN_LEX_DECL_NONE) goto keep_opening;
             set_declaration_error(
                 error, CORE_STRING_STATIC("unreachable lexer declaration: "),
                 &items[shadow], CORE_STRING_STATIC(" shadows "), &items[i]);
@@ -583,14 +566,6 @@ scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
         register_output(grammar, item->tok_eol);
         register_output(grammar, item->tok_other);
     }
-    for (const scan_lex_literal_hook_t *item = spec->literal_hooks;
-         item && item->token.data; item++) {
-        register_output(grammar, item->token);
-        for (const core_string_t *output = item->outputs;
-             output && output->data; output++) {
-            register_output(grammar, *output);
-        }
-    }
     for (const scan_lex_recovery_t *item = spec->recoveries;
          item && item->token.data; item++) {
         register_output(grammar, item->token);
@@ -609,41 +584,6 @@ require_token(parse_grammar_t *grammar, core_string_t name,
               (int)declaration.u8_bytes, declaration.data,
               (int)name.u8_bytes, name.data);
     return false;
-}
-
-static int
-string_item_compare(const void *left, const void *right)
-{
-    return string_compare(*(const core_string_t *)left,
-                          *(const core_string_t *)right);
-}
-
-static bool
-require_unique_outputs(const core_string_t *items, core_string_t declaration,
-                       core_string_t *error)
-{
-    size_t count = 0;
-    while (items && items[count].data) {
-        count++;
-    }
-    if (count < 2) {
-        return true;
-    }
-    core_string_t *sorted = core_alloc_array(core_string_t, count);
-    memcpy(sorted, items, count * sizeof(*sorted));
-    qsort(sorted, count, sizeof(*sorted), string_item_compare);
-    bool unique = true;
-    for (size_t i = 1; i < count; i++) {
-        if (core_string_eq(sorted[i - 1], sorted[i])) {
-            set_error(error, "%.*s declares duplicate output token '%.*s'",
-                      (int)declaration.u8_bytes, declaration.data,
-                      (int)sorted[i].u8_bytes, sorted[i].data);
-            unique = false;
-            break;
-        }
-    }
-    core_free(sorted);
-    return unique;
 }
 
 static bool
@@ -717,19 +657,6 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
         REQUIRE(item->tok_eol, "@lex-directive");
         REQUIRE(item->tok_other, "@lex-directive");
     }
-    for (const scan_lex_literal_hook_t *item = spec->literal_hooks;
-         item && item->token.data; item++) {
-        REQUIRE(item->token, "@lex-literal-hook");
-        if (!require_unique_outputs(item->outputs,
-                                    CORE_STRING_STATIC("@lex-literal-hook"),
-                                    error)) {
-            return false;
-        }
-        for (const core_string_t *output = item->outputs;
-             output && output->data; output++) {
-            REQUIRE(*output, "@lex-literal-hook");
-        }
-    }
     for (const scan_lex_recovery_t *item = spec->recoveries;
          item && item->token.data; item++) {
         REQUIRE(item->token, "@lex-recover");
@@ -752,233 +679,19 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     return true;
 }
 
-static void
-add_output(core_list_t(lex_output_t) *items, core_string_t token,
-           core_string_t origin)
-{
-    if (!token.data || !token.u8_bytes) {
-        return;
-    }
-    core_list_push(*items, ((lex_output_t){
-        .token = token,
-        .origin = origin,
-    }));
-}
-
-static int
-output_compare(const void *left, const void *right)
-{
-    const lex_output_t *a = left;
-    const lex_output_t *b = right;
-    size_t common = a->token.u8_bytes < b->token.u8_bytes
-                  ? a->token.u8_bytes : b->token.u8_bytes;
-    int order = memcmp(a->token.data, b->token.data, common);
-    if (order) {
-        return order;
-    }
-    if (a->token.u8_bytes != b->token.u8_bytes) {
-        return (a->token.u8_bytes > b->token.u8_bytes)
-             - (a->token.u8_bytes < b->token.u8_bytes);
-    }
-    common = a->origin.u8_bytes < b->origin.u8_bytes
-           ? a->origin.u8_bytes : b->origin.u8_bytes;
-    order = common ? memcmp(a->origin.data, b->origin.data, common) : 0;
-    if (order) {
-        return order;
-    }
-    return (a->origin.u8_bytes > b->origin.u8_bytes)
-         - (a->origin.u8_bytes < b->origin.u8_bytes);
-}
-
-static bool
-grammar_uses_token(const parse_grammar_t *grammar, int64_t tid)
-{
-    for (size_t i = 0; i < grammar->rules.len; i++) {
-        const parse_rule_t *rule = &grammar->rules.data[i];
-        for (size_t j = 0; j < rule->contents.len; j++) {
-            const parse_match_t *match = &rule->contents.data[j];
-            switch (match->kind) {
-            case PARSE_MATCH_TERMINAL:
-                if (match->terminal_id == tid
-                    || parse_contextual_source_tid(grammar,
-                                                   match->terminal_id) == tid) {
-                    return true;
-                }
-                break;
-            case PARSE_MATCH_ANY:
-                return true;
-            case PARSE_MATCH_SET:
-                if (parse_match_set_holds(match->set_items, tid)) {
-                    return true;
-                }
-                break;
-            default:
-                break;
-            }
-        }
-    }
-    return false;
-}
-
-static bool
-collect_unused_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
-                       lex_decl_origin_t *origins, size_t origin_count,
-                       core_list_t(scan_lex_issue_t) *issues)
-{
-    if (!grammar->rules.len) {
-        return true;
-    }
-
-    core_list_t(lex_output_t) outputs = {};
-#define ADD_BASE(field) add_output(&outputs, spec->field, (core_string_t){0})
-    ADD_BASE(tok_newline);
-    ADD_BASE(tok_terminator);
-    ADD_BASE(tok_indent);
-    ADD_BASE(tok_dedent);
-    ADD_BASE(tok_eof);
-    ADD_BASE(tok_ident);
-    ADD_BASE(tok_ident_upper);
-#undef ADD_BASE
-
-#define RECIPE_ORIGIN(kind_value, spelling_value)                              \
-    lookup_origin(origins, origin_count, kind_value, spelling_value, false)
-    for (const scan_lex_comment_t *item = spec->comments;
-         item && item->opener.data; item++) {
-        add_output(&outputs, item->tok,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_COMMENT, item->opener));
-    }
-    for (const scan_lex_string_t *item = spec->strings;
-         item && item->opener.data; item++) {
-        core_string_t origin
-            = RECIPE_ORIGIN(SCAN_LEX_DECL_STRING, item->opener);
-        add_output(&outputs, item->tok, origin);
-        add_output(&outputs, item->tok_mid, origin);
-        add_output(&outputs, item->tok_end, origin);
-    }
-    for (const scan_lex_number_form_t *item = spec->number_forms;
-         item && item->digits.data; item++) {
-        core_string_t origin
-            = RECIPE_ORIGIN(SCAN_LEX_DECL_NUMBER, item->prefix);
-        add_output(&outputs, item->tok_int, origin);
-        add_output(&outputs, item->tok_float, origin);
-        for (const scan_lex_suffix_t *suffix = item->suffixes;
-             suffix && suffix->suffix.data; suffix++) {
-            add_output(&outputs, suffix->tok, origin);
-        }
-    }
-    for (const scan_lex_sigil_t *item = spec->sigils;
-         item && item->prefix.data; item++) {
-        if (!item->attach_previous)
-            add_output(&outputs, item->tok,
-                       RECIPE_ORIGIN(SCAN_LEX_DECL_SIGIL, item->prefix));
-    }
-    for (const scan_lex_regex_t *item = spec->regexes;
-         item && item->opener.data; item++) {
-        add_output(&outputs, item->tok,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_REGEX, item->opener));
-    }
-    for (const scan_lex_heredoc_t *item = spec->heredocs;
-         item && item->opener.data; item++) {
-        core_string_t origin
-            = RECIPE_ORIGIN(SCAN_LEX_DECL_HEREDOC, item->opener);
-        add_output(&outputs, item->tok, origin);
-        add_output(&outputs, item->interpolated_tok,
-                   origin);
-    }
-    for (const scan_lex_embed_t *item = spec->embeds;
-         item && item->open.data; item++) {
-        core_string_t origin
-            = RECIPE_ORIGIN(SCAN_LEX_DECL_EMBED, item->open);
-        add_output(&outputs, item->tok, origin);
-        add_output(&outputs, item->open_tok, origin);
-        add_output(&outputs, item->close_tok, origin);
-    }
-    for (const scan_lex_fence_t *item = spec->fences;
-         item && item->outer_open.data; item++) {
-        add_output(&outputs, item->tok,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_FENCE, item->outer_open));
-    }
-    for (const scan_lex_directive_t *item = spec->directives;
-         item && item->open.data; item++) {
-        core_string_t origin
-            = RECIPE_ORIGIN(SCAN_LEX_DECL_DIRECTIVE, item->open);
-        add_output(&outputs, item->tok_eol, origin);
-        add_output(&outputs, item->tok_other, origin);
-    }
-    for (const scan_lex_literal_hook_t *item = spec->literal_hooks;
-         item && item->token.data; item++) {
-        core_string_t origin
-            = RECIPE_ORIGIN(SCAN_LEX_DECL_LITERAL_HOOK, item->token);
-        for (const core_string_t *output = item->outputs;
-             output && output->data; output++) {
-            add_output(&outputs, *output, origin);
-        }
-    }
-    for (const scan_lex_recovery_t *item = spec->recoveries;
-         item && item->token.data; item++) {
-        add_output(&outputs, item->replacement,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_RECOVERY, item->token));
-    }
-    for (const core_string_t *item = spec->operators;
-         item && item->data; item++) {
-        add_output(&outputs, *item,
-                   RECIPE_ORIGIN(SCAN_LEX_DECL_OPERATOR, *item));
-    }
-#undef RECIPE_ORIGIN
-
-    lex_output_t *items = outputs.data;
-    size_t count = outputs.len;
-    qsort(items, count, sizeof(*items), output_compare);
-    for (size_t i = 0; i < count;) {
-        size_t next = i + 1;
-        while (next < count
-               && core_string_eq(items[i].token, items[next].token)) {
-            next++;
-        }
-        int64_t tid = parse_terminal_id(grammar, items[i].token);
-        if (tid && !grammar_uses_token(grammar, tid)) {
-            core_list_push(*issues, ((scan_lex_issue_t){
-                .kind = SCAN_LEX_ISSUE_UNUSED_OUTPUT,
-                .token = core_string_dup(items[i].token),
-                .origin = core_string_dup(items[i].origin),
-            }));
-        }
-        i = next;
-    }
-    core_list_free(outputs);
-    return true;
-}
-
 bool
 scan_lex_analyze_spec(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
-                      core_string_t *error,
-                      core_list_t(scan_lex_issue_t) *issues)
+                      core_string_t *error)
 {
-    if (!spec || !grammar || !error || !issues) {
+    if (!spec || !grammar || !error) {
         return false;
     }
     *error = (core_string_t){0};
-    *issues = (core_list_t(scan_lex_issue_t)){};
     size_t origin_count = 0;
     lex_decl_origin_t *origins = declaration_index(spec, &origin_count);
     bool valid = analyze_outputs(spec, grammar, error)
               && analyze_openings(spec, grammar, origins, origin_count,
-                                  error, issues)
-              && collect_unused_outputs(spec, grammar, origins, origin_count,
-                                        issues);
+                                  error);
     core_free(origins);
-    if (!valid) {
-        scan_lex_issues_free(issues);
-    }
     return valid;
-}
-
-void
-scan_lex_issues_free(core_list_t(scan_lex_issue_t) *issues)
-{
-    for (size_t i = 0; i < issues->len; i++) {
-        core_free(issues->data[i].token.data);
-        core_free(issues->data[i].origin.data);
-    }
-    core_list_free(*issues);
 }

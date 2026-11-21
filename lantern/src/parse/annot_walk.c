@@ -642,7 +642,6 @@ cf_notrivia(parse_visit_t *v)
         parse_trivia_free(parse_token_trailing_trivia(tok));
         parse_token_set_leading_trivia(tok, nullptr);
         parse_token_set_trailing_trivia(tok, nullptr);
-        parse_token_set_no_trivia(tok, true);
     }
 
     return true;

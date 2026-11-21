@@ -307,47 +307,6 @@ scan_float(parse_scanner_t *s)
     return core_option_set(core_string_t, scan_extract(s));
 }
 
-bool
-scan_number(parse_scanner_t *s, int32_t int_tid, int32_t float_tid)
-{
-    core_codepoint_t cp = scan_peek(s, 0);
-
-    if (!unicode_cp_is_ascii_digit(cp)) {
-        return false;
-    }
-
-    size_t   saved_cursor = s->cursor;
-    uint32_t saved_line   = s->line;
-    uint32_t saved_col    = s->column;
-
-    scan_mark(s);
-
-    core_option_t(core_string_t) fval = scan_float(s);
-
-    if (core_option_is_set(fval)) {
-        scan_emit_owned(s, float_tid, fval);
-        return true;
-    }
-
-    s->cursor = saved_cursor;
-    s->line   = saved_line;
-    s->column = saved_col;
-
-    scan_mark(s);
-
-    core_option_t(core_string_t) ival = scan_integer(s);
-
-    if (core_option_is_set(ival)) {
-        scan_emit_owned(s, int_tid, ival);
-        return true;
-    }
-
-    s->cursor = saved_cursor;
-    s->line   = saved_line;
-    s->column = saved_col;
-
-    return false;
-}
 
 core_option_t(core_string_t)
 scan_identifier(parse_scanner_t *s)

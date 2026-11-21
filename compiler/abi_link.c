@@ -238,73 +238,6 @@ n00bb_abi_functions_rooted(const n00bb_abi_object_view_t *view,
         ? rows_named(&view->function_roots, root) : nullptr;
 }
 
-typedef struct {
-    const core_target_desc_t *target;
-    n00bb_abi_archive_inputs_t inputs;
-    size_t capacity;
-} archive_inputs_build_t;
-
-static bool
-archive_inputs_visit(const core_native_archive_member_t *member, void *user)
-{
-    archive_inputs_build_t *build = user;
-    n00bb_abi_object_view_t view = {0};
-    if (!n00bb_abi_object_open(build->target, member->bytes,
-                               member->size, &view)) return true;
-    const n00b_abi_module_v1 *module = n00bb_abi_object_row(&view,
-        N00B_ABI_TABLE_MODULE, 1);
-    n00bb_abi_string_view_t name;
-    bool valid = module
-        && n00bb_abi_object_string(&view, &module->full_path, &name)
-        && name.length;
-    if (valid) {
-        if (build->inputs.count == build->capacity) {
-            size_t next = build->capacity ? build->capacity * 2 : 4;
-            if (next < build->capacity
-                || next > SIZE_MAX / sizeof(*build->inputs.objects))
-                valid = false;
-            else {
-                build->inputs.objects = core_realloc(build->inputs.objects,
-                    next * sizeof(*build->inputs.objects));
-                build->capacity = next;
-            }
-        }
-        if (valid) build->inputs.objects[build->inputs.count++] =
-            (n00bb_abi_object_input_t){
-                .module = core_string_borrow((const char *)name.bytes,
-                                             name.length),
-                .object = member->bytes,
-                .object_bytes = member->size,
-            };
-    }
-    n00bb_abi_object_close(&view);
-    return valid;
-}
-
-bool
-n00bb_abi_archive_inputs_open(const core_target_desc_t *target,
-                              const void *archive, size_t archive_bytes,
-                              n00bb_abi_archive_inputs_t *out)
-{
-    if (!target || !out) return false;
-    archive_inputs_build_t build = {.target = target};
-    if (!core_native_archive_visit(archive, archive_bytes,
-                                   archive_inputs_visit, &build)) {
-        core_free(build.inputs.objects);
-        return false;
-    }
-    *out = build.inputs;
-    return true;
-}
-
-void
-n00bb_abi_archive_inputs_release(n00bb_abi_archive_inputs_t *inputs)
-{
-    if (!inputs) return;
-    core_free(inputs->objects);
-    *inputs = (n00bb_abi_archive_inputs_t){0};
-}
-
 const n00bb_abi_directory_entry_t *
 n00bb_abi_object_table(const n00bb_abi_object_view_t *view, uint32_t kind)
 {
@@ -2213,12 +2146,6 @@ n00bb_abi_index_plan_build_detailed(
         return nullptr;
     }
     return plan;
-}
-
-n00bb_abi_index_plan_t *
-n00bb_abi_index_plan_build(const n00bb_abi_selected_objects_t *selected)
-{
-    return n00bb_abi_index_plan_build_detailed(selected, nullptr);
 }
 
 static bool

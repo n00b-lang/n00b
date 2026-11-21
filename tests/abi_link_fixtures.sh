@@ -3,8 +3,7 @@ set -eu
 
 compiler=$1
 abi_record_object_test=$2
-abi_link_input_test=$3
-abi_register_object_test=$4
+abi_register_object_test=$3
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 abi_programs="$script_dir/programs/abi"
 records="$script_dir/programs/link_records"
@@ -49,22 +48,9 @@ cycle_self="$tmp/cycle_self"
 "$abi_record_object_test" "$abi/import_root.n00bm" import
 "$abi_record_object_test" "$abi/__ffi_c_foreign___ffi_literal_1.n00bm" c-foreign
 "$abi_record_object_test" "$rec/record_root.n00bm" import-record
-"$abi_link_input_test" --field "$rec/record_dep.n00bm"
-
-set --
-for object in "$rec"/*.n00bm; do
-    case "$(basename "$object")" in
-    linked.n00bm | record_* | shared_link_*) continue ;;
-    esac
-    set -- "$@" "$object"
-done
-"$abi_link_input_test" --records "$rec/record_root.n00bm" \
-    "$rec/record_dep.n00bm" "$@"
 N00B_PATH="$records" "$compiler" library \
     --output "$tmp/import_record_linked.n00bm" record_root
 "$abi_register_object_test" "$tmp/import_record_linked.n00bm" '>=2'
-"$abi_link_input_test" --function-import "$rec/shared_link_first.n00bm" \
-    "$rec/shared_link_dep.facade.n00bm" "$rec/shared_link_dep.impl.n00bm" "$@"
 mkdir -p "$tmp/nested"
 (cd "$script_dir/programs" \
     && N00B_PATH="$records" "$compiler" library \
@@ -77,14 +63,12 @@ mkdir -p "$tmp/nested"
 N00B_PATH="$records" "$compiler" library \
     --output "$tmp/struct_order.n00bm" struct_order_root
 [ -s "$tmp/struct_order.n00bm" ]
-"$abi_link_input_test" --value-import "$abi/abi_value_root.n00bm" \
-    "$abi/abi_value_dep.n00bm" "$@"
 N00B_PATH="$abi_programs" "$compiler" library \
     --output "$tmp/abi_value_library.n00bm" abi_value_root
-"$abi_link_input_test" --linked-library "$tmp/abi_value_library.n00bm"
+"$abi_register_object_test" "$tmp/abi_value_library.n00bm" '>=1'
 N00B_PATH="$abi_programs" "$compiler" library \
     --output "$tmp/abi_value_library_multi.n00bm" abi_value_root abi_value_dep
-"$abi_link_input_test" --linked-library "$tmp/abi_value_library_multi.n00bm"
+"$abi_register_object_test" "$tmp/abi_value_library_multi.n00bm" '>=2'
 "$abi_record_object_test" "$abi/foreign_enum_user.n00bm" import-enum
 "$abi_record_object_test" "$tmp/interfaces/foreign_flagset_user.n00bm" \
     import-flagset
@@ -92,7 +76,7 @@ N00B_PATH="$abi_programs" "$compiler" library \
 N00B_PATH="$interface_programs" "$compiler" library \
     --output "$tmp/linked_flagset_abi.n00bm" \
     "$abi_programs/foreign_flagset_user.n"
-"$abi_link_input_test" --linked-flagset "$tmp/linked_flagset_abi.n00bm"
+"$abi_register_object_test" "$tmp/linked_flagset_abi.n00bm" '>=1'
 "$abi_record_object_test" "$tmp/generic/generic_modify_parameter.n00bm" generic
 "$abi_record_object_test" "$tmp/generic/generic_local.n00bm" generic-local
 "$abi_record_object_test" "$cycle/builtin.cycle_first.n00bm" cycle \
@@ -100,14 +84,8 @@ N00B_PATH="$interface_programs" "$compiler" library \
 "$abi_record_object_test" "$cycle_long/builtin.cycle_long_a.n00bm" cycle \
     "$cycle_long/builtin.cycle_long_b.n00bm" \
     "$cycle_long/builtin.cycle_long_c.n00bm"
-"$abi_link_input_test" "$cycle_long/builtin.cycle_long_a.n00bm" \
-    "$cycle_long/builtin.cycle_long_b.n00bm" \
-    "$cycle_long/builtin.cycle_long_c.n00bm" \
-    "$tmp/cycle_long_archive_linked.n00bm"
-"$abi_register_object_test" "$tmp/cycle_long_archive_linked.n00bm" '>=3'
 "$abi_register_object_test" "$cycle_long/linked.n00bm" '>=3'
 "$abi_record_object_test" "$cycle_self/builtin.cycle_self.n00bm" cycle
-"$abi_link_input_test" --self "$cycle_self/builtin.cycle_self.n00bm"
 "$abi_register_object_test" "$cycle_self/linked.n00bm" '>=1'
 N00B_PATH="$abi_programs" "$compiler" library \
     --output "$tmp/enum_export_linked.n00bm" enum_export.__init

@@ -99,7 +99,6 @@ struct parse_annotation_t {
 parse_annotation_t *parse_annot_new(parse_annot_kind_t kind);
 parse_annotation_t *parse_annot_clone(const parse_annotation_t *a);
 void              parse_annot_free(parse_annotation_t *a);
-core_string_t     parse_annot_kind_name(parse_annot_kind_t kind);
 parse_annot_kind_t  parse_annot_kind_from_name(core_string_t name);
 
 void parse_rule_annotate(parse_rule_t *rule, parse_annotation_t *a);

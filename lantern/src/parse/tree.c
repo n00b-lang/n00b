@@ -109,12 +109,6 @@ parse_tree_free(parse_tree_t *t)
 }
 
 parse_tree_t *
-parse_tree_new_node(parse_nt_node_t value)
-{
-    return core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, value);
-}
-
-parse_tree_t *
 parse_tree_new_owned_leaf(parse_token_info_t *token)
 {
     if (!token) return nullptr;

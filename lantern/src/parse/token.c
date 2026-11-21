@@ -15,15 +15,6 @@ clone_trivia(const parse_trivia_t *source)
         copy->text = core_string_dup(item->text);
         copy->region_name = item->region_name.data
             ? core_string_dup(item->region_name) : (core_string_t){0};
-        copy->regions = nullptr;
-        parse_trivia_region_link_t **region_tail = &copy->regions;
-        for (const parse_trivia_region_link_t *link = item->regions;
-             link; link = link->next) {
-            *region_tail = core_alloc(parse_trivia_region_link_t);
-            **region_tail = *link;
-            (*region_tail)->next = nullptr;
-            region_tail = &(*region_tail)->next;
-        }
         copy->owns_text = true;
         copy->owns_region_name = copy->region_name.data != nullptr;
         copy->next = nullptr;
@@ -46,38 +37,10 @@ parse_trivia_free(parse_trivia_t *t)
         if (t->owns_region_name) {
             core_free(t->region_name.data);
         }
-        while (t->regions) {
-            parse_trivia_region_link_t *next_region = t->regions->next;
-            core_free(t->regions);
-            t->regions = next_region;
-        }
 
         core_free(t);
         t = next;
     }
-}
-
-size_t
-parse_trivia_region_count(const parse_trivia_t *trivia)
-{
-    size_t result = 0;
-    for (const parse_trivia_region_link_t *link = trivia ? trivia->regions : nullptr;
-         link; link = link->next) {
-        result++;
-    }
-    return result;
-}
-
-bool
-parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id)
-{
-    for (const parse_trivia_region_link_t *link = trivia ? trivia->regions : nullptr;
-         link; link = link->next) {
-        if (link->region_id == region_id) {
-            return true;
-        }
-    }
-    return false;
 }
 
 static core_option_t(core_string_t)
@@ -135,7 +98,6 @@ parse_token_free_contents(parse_token_info_t *token)
     if (extras) {
         free_option(&extras->value, &extras->owns_value);
         free_option(&extras->file, &extras->owns_file);
-        free_option(&extras->literal_type, &extras->owns_literal_type);
         free_option(&extras->postfix_modifier,
                     &extras->owns_postfix_modifier);
         parse_trivia_free(extras->leading_trivia);
@@ -194,11 +156,9 @@ parse_token_copy(const parse_token_info_t *token, bool with_trivia)
         *to = *from;
         to->value = dup_option(from->value);
         to->file = dup_option(from->file);
-        to->literal_type = dup_option(from->literal_type);
         to->postfix_modifier = dup_option(from->postfix_modifier);
         to->owns_value = core_option_is_set(to->value);
         to->owns_file = core_option_is_set(to->file);
-        to->owns_literal_type = core_option_is_set(to->literal_type);
         to->owns_postfix_modifier = core_option_is_set(to->postfix_modifier);
         to->leading_trivia = with_trivia
             ? clone_trivia(from->leading_trivia) : nullptr;
@@ -378,18 +338,6 @@ parse_token_copy_location(parse_token_info_t *token,
 }
 
 void
-parse_token_set_literal_type(parse_token_info_t *token,
-                             core_option_t(core_string_t) value, bool owned)
-{
-    if (!token->extras && !core_option_is_set(value)) {
-        return;
-    }
-    parse_token_extras_t *extras = parse_token_extras_for_update(token);
-    store_option(&extras->literal_type, &extras->owns_literal_type, value,
-                 owned);
-}
-
-void
 parse_token_set_postfix_modifier(parse_token_info_t *token,
                                  core_option_t(core_string_t) value,
                                  bool owned)
@@ -440,36 +388,6 @@ parse_token_clear_content_span(parse_token_info_t *token)
         token->extras->content_start_byte = 0;
         token->extras->content_end_byte = 0;
     }
-}
-
-void
-parse_token_set_label_span(parse_token_info_t *token, size_t start,
-                           size_t end)
-{
-    parse_token_extras_t *extras = parse_token_extras_for_update(token);
-    extras->label_start_byte = start;
-    extras->label_end_byte = end;
-    extras->has_label_span = true;
-}
-
-void
-parse_token_clear_label_span(parse_token_info_t *token)
-{
-    if (token->extras) {
-        token->extras->has_label_span = false;
-        token->extras->label_start_byte = 0;
-        token->extras->label_end_byte = 0;
-    }
-}
-
-void
-parse_token_set_layout(parse_token_info_t *token, uint32_t depth,
-                       uint32_t column)
-{
-    parse_token_extras_t *extras = parse_token_extras_for_update(token);
-    extras->layout_depth = depth;
-    extras->layout_column = column;
-    extras->has_layout_info = true;
 }
 
 int32_t

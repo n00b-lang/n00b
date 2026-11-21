@@ -33,7 +33,6 @@ core_work_submit_result_t core_work_submit(
     core_work_job_t *const *dependencies, size_t dependency_count,
     core_work_job_t **out);
 
-bool core_work_take(core_work_queue_t *q, core_work_job_t **out);
 bool core_work_take_kind(core_work_queue_t *q, uint32_t kind,
                          core_work_job_t **out);
 bool core_work_complete(core_work_queue_t *q, core_work_job_t *job,

@@ -13,6 +13,21 @@ static bool count_row(const core_datalog_symbol_t *tuple, int32_t arity,
   return true;
 }
 
+static bool count_any(const core_datalog_symbol_t *tuple, int32_t arity,
+                      void *context) {
+  (void)tuple;
+  (void)arity;
+  (*(size_t *)context)++;
+  return true;
+}
+
+static size_t relation_size(core_datalog_engine_t *engine,
+                            core_datalog_relation_id_t relation) {
+  size_t count = 0;
+  core_datalog_query(engine, relation, count_any, &count);
+  return count;
+}
+
 static core_datalog_literal_t literal(core_datalog_relation_id_t relation,
                                       int32_t arity,
                                       const core_datalog_symbol_t *arguments,
@@ -74,7 +89,7 @@ static void test_transitive_closure_and_wide_bindings(void) {
 
   check("recursive Datalog closure evaluates", core_datalog_run(engine));
   check("recursive Datalog closure derives six paths",
-        core_datalog_count(engine, path) == 6);
+        relation_size(engine,path) == 6);
   size_t queried = 0;
   core_datalog_query(engine, path, count_row, &queried);
   check("tuple queries visit every derived row", queried == 6);
@@ -122,7 +137,7 @@ static void test_ancestor_derivation(void) {
   core_datalog_add_rule(engine, core_datalog_rule_builder_finish(builder));
 
   check("ancestor rules evaluate", core_datalog_run(engine));
-  size_t ancestor_count = core_datalog_count(engine, ancestor);
+  size_t ancestor_count = relation_size(engine,ancestor);
   check("ancestor closure derives all six pairs", ancestor_count == 6);
   core_datalog_engine_free(engine);
 }
@@ -160,7 +175,7 @@ static void test_join_and_duplicate_suppression(void) {
 
   check("multiway join evaluates", core_datalog_run(engine));
   check("joins deduplicate repeated derived tuples",
-        core_datalog_count(engine, sibling) == 5);
+        relation_size(engine,sibling) == 5);
   core_datalog_engine_free(engine);
 }
 
@@ -171,8 +186,8 @@ static void test_unstratified_negation_is_rejected(void) {
   core_datalog_symbol_t x =
       core_datalog_variable(engine, CORE_STRING_STATIC("X"));
   core_datalog_symbol_t args[] = {x};
-  core_datalog_goal_t *body = core_alloc_array(core_datalog_goal_t, 1);
-  body[0] = core_variant_make_1(core_datalog_goal_t, literal(p, 1, args, true));
+  core_datalog_literal_t *body = core_alloc_array(core_datalog_literal_t, 1);
+  body[0] = literal(p, 1, args, true);
   core_datalog_add_rule(engine, (core_datalog_rule_t){
                                     .head = literal(p, 1, args, false),
                                     .body = body,
@@ -182,7 +197,7 @@ static void test_unstratified_negation_is_rejected(void) {
   core_datalog_engine_free(engine);
 }
 
-static void test_stratified_negation_and_arithmetic_builtin(void) {
+static void test_stratified_negation(void) {
   core_datalog_engine_t *engine = core_datalog_engine_new();
   core_datalog_relation_id_t node =
       core_datalog_relation(engine, CORE_STRING_STATIC("node"), 1);
@@ -190,61 +205,27 @@ static void test_stratified_negation_and_arithmetic_builtin(void) {
       core_datalog_relation(engine, CORE_STRING_STATIC("blocked"), 1);
   core_datalog_relation_id_t allowed =
       core_datalog_relation(engine, CORE_STRING_STATIC("allowed"), 1);
-  core_datalog_relation_id_t number =
-      core_datalog_relation(engine, CORE_STRING_STATIC("number"), 1);
-  core_datalog_relation_id_t doubled =
-      core_datalog_relation(engine, CORE_STRING_STATIC("doubled"), 2);
   core_datalog_symbol_t n =
       core_datalog_constant(engine, CORE_STRING_STATIC("n"));
   core_datalog_symbol_t fact[] = {n};
   core_datalog_add_fact(engine, node, 1, fact);
-  core_datalog_symbol_t five = core_datalog_integer(engine, 5);
-  core_datalog_symbol_t number_fact[] = {five};
-  core_datalog_add_fact(engine, number, 1, number_fact);
 
   core_datalog_symbol_t x =
       core_datalog_variable(engine, CORE_STRING_STATIC("X"));
   core_datalog_symbol_t one_arg[] = {x};
-  core_datalog_goal_t *not_blocked = core_alloc_array(core_datalog_goal_t, 2);
-  not_blocked[0] = core_variant_make_1(core_datalog_goal_t,
-                                       literal(node, 1, one_arg, false));
-  not_blocked[1] = core_variant_make_1(core_datalog_goal_t,
-                                       literal(blocked, 1, one_arg, true));
+  core_datalog_literal_t *not_blocked =
+      core_alloc_array(core_datalog_literal_t, 2);
+  not_blocked[0] = literal(node, 1, one_arg, false);
+  not_blocked[1] = literal(blocked, 1, one_arg, true);
   core_datalog_add_rule(engine, (core_datalog_rule_t){
                                     .head = literal(allowed, 1, one_arg, false),
                                     .body = not_blocked,
                                     .body_count = 2,
                                 });
 
-  core_datalog_symbol_t y =
-      core_datalog_variable(engine, CORE_STRING_STATIC("Y"));
-  core_datalog_symbol_t num_arg[] = {x};
-  core_datalog_symbol_t out_args[] = {x, y};
-  core_datalog_goal_t *calc = core_alloc_array(core_datalog_goal_t, 2);
-  calc[0] = core_variant_make_1(core_datalog_goal_t,
-                                literal(number, 1, num_arg, false));
-  calc[1] = core_variant_make_2(
-      core_datalog_goal_t,
-      ((core_datalog_builtin_t){
-          .kind = CORE_DATALOG_BUILTIN_IS,
-          .left = core_datalog_expr_symbol(y),
-          .right = core_datalog_expr_binary(CORE_DATALOG_EXPR_MULTIPLY,
-                                            core_datalog_expr_symbol(x),
-                                            core_datalog_expr_integer(2)),
-      }));
-  core_datalog_add_rule(engine,
-                        (core_datalog_rule_t){
-                            .head = literal(doubled, 2, out_args, false),
-                            .body = calc,
-                            .body_count = 2,
-                        });
-
-  check("stratified negation and arithmetic evaluate",
-        core_datalog_run(engine));
+  check("stratified negation evaluates", core_datalog_run(engine));
   check("stratified negation derives allowed node",
-        core_datalog_count(engine, allowed) == 1);
-  check("arithmetic assignment derives one tuple",
-        core_datalog_count(engine, doubled) == 1);
+        relation_size(engine,allowed) == 1);
   core_datalog_engine_free(engine);
 }
 
@@ -266,31 +247,29 @@ static void test_multiple_negation_strata(void) {
       core_datalog_variable(engine, CORE_STRING_STATIC("X"));
   core_datalog_symbol_t args[] = {x};
 
-  core_datalog_goal_t *derive_body = core_alloc_array(core_datalog_goal_t, 1);
-  derive_body[0] =
-      core_variant_make_1(core_datalog_goal_t, literal(base, 1, args, false));
+  core_datalog_literal_t *derive_body =
+      core_alloc_array(core_datalog_literal_t, 1);
+  derive_body[0] = literal(base, 1, args, false);
   core_datalog_add_rule(engine, (core_datalog_rule_t){
                                     .head = literal(derived, 1, args, false),
                                     .body = derive_body,
                                     .body_count = 1,
                                 });
 
-  core_datalog_goal_t *exclude_body = core_alloc_array(core_datalog_goal_t, 2);
-  exclude_body[0] =
-      core_variant_make_1(core_datalog_goal_t, literal(base, 1, args, false));
-  exclude_body[1] =
-      core_variant_make_1(core_datalog_goal_t, literal(derived, 1, args, true));
+  core_datalog_literal_t *exclude_body =
+      core_alloc_array(core_datalog_literal_t, 2);
+  exclude_body[0] = literal(base, 1, args, false);
+  exclude_body[1] = literal(derived, 1, args, true);
   core_datalog_add_rule(engine, (core_datalog_rule_t){
                                     .head = literal(excluded, 1, args, false),
                                     .body = exclude_body,
                                     .body_count = 2,
                                 });
 
-  core_datalog_goal_t *final_body = core_alloc_array(core_datalog_goal_t, 2);
-  final_body[0] = core_variant_make_1(core_datalog_goal_t,
-                                      literal(derived, 1, args, false));
-  final_body[1] = core_variant_make_1(core_datalog_goal_t,
-                                      literal(excluded, 1, args, true));
+  core_datalog_literal_t *final_body =
+      core_alloc_array(core_datalog_literal_t, 2);
+  final_body[0] = literal(derived, 1, args, false);
+  final_body[1] = literal(excluded, 1, args, true);
   core_datalog_add_rule(engine, (core_datalog_rule_t){
                                     .head = literal(final, 1, args, false),
                                     .body = final_body,
@@ -299,11 +278,11 @@ static void test_multiple_negation_strata(void) {
 
   check("multi-stratum program is stratified", core_datalog_run(engine));
   check("first stratum derives all values",
-        core_datalog_count(engine, derived) == 3);
+        relation_size(engine,derived) == 3);
   check("second stratum sees completed derived relation",
-        core_datalog_count(engine, excluded) == 0);
+        relation_size(engine,excluded) == 0);
   check("third stratum sees completed exclusions",
-        core_datalog_count(engine, final) == 3);
+        relation_size(engine,final) == 3);
   core_datalog_engine_free(engine);
 }
 
@@ -323,9 +302,8 @@ static void test_rule_bindings_are_not_capped_at_64(void) {
         engine, core_string_borrow(name, (size_t)length));
   }
   core_datalog_add_fact(engine, source, 70, values);
-  core_datalog_goal_t *body = core_alloc_array(core_datalog_goal_t, 1);
-  body[0] = core_variant_make_1(core_datalog_goal_t,
-                                literal(source, 70, variables, false));
+  core_datalog_literal_t *body = core_alloc_array(core_datalog_literal_t, 1);
+  body[0] = literal(source, 70, variables, false);
   core_datalog_add_rule(engine, (core_datalog_rule_t){
                                     .head = literal(copy, 70, variables, false),
                                     .body = body,
@@ -333,7 +311,7 @@ static void test_rule_bindings_are_not_capped_at_64(void) {
                                 });
   check("rules with 70 distinct variables evaluate", core_datalog_run(engine));
   check("wide rule preserves its full tuple",
-        core_datalog_count(engine, copy) == 1);
+        relation_size(engine,copy) == 1);
   core_datalog_engine_free(engine);
 }
 
@@ -382,11 +360,6 @@ static void test_symbol_and_relation_introspection(void) {
                            CORE_STRING_STATIC("42")) &&
             core_string_eq(core_datalog_symbol_name(engine, named_variable),
                            CORE_STRING_STATIC("X")));
-  check("count-by-name returns relation cardinality",
-        core_datalog_count_by_name(engine, CORE_STRING_STATIC("items")) == 1 &&
-            core_datalog_count_by_name(engine, CORE_STRING_STATIC("missing")) ==
-                0 &&
-            core_datalog_relation_count(engine) == 1);
   core_datalog_engine_free(engine);
 }
 
@@ -471,7 +444,7 @@ int main(void) {
   test_ancestor_derivation();
   test_join_and_duplicate_suppression();
   test_unstratified_negation_is_rejected();
-  test_stratified_negation_and_arithmetic_builtin();
+  test_stratified_negation();
   test_multiple_negation_strata();
   test_rule_bindings_are_not_capped_at_64();
   test_symbol_and_relation_introspection();

@@ -37,11 +37,6 @@ typedef enum : uint8_t {
     PARSE_TRIVIA_REGION_CLOSE,
 } parse_trivia_kind_t;
 
-typedef struct parse_trivia_region_link_t {
-    uint64_t                           region_id;
-    struct parse_trivia_region_link_t *next;
-} parse_trivia_region_link_t;
-
 typedef enum : uint8_t {
     PARSE_TOKEN_SOURCE,
     PARSE_TOKEN_SYNTHETIC,
@@ -51,7 +46,6 @@ typedef struct parse_trivia_t {
     core_string_t         text;
     core_string_t         region_name;
     struct parse_trivia_t *next;
-    parse_trivia_region_link_t *regions;
     parse_trivia_kind_t    kind;
     uint32_t               line;
     uint32_t               column;
@@ -59,38 +53,27 @@ typedef struct parse_trivia_t {
     uint32_t               endcol;
     size_t                 start_byte;
     size_t                 end_byte;
-    uint64_t               region_id;
-    uint64_t               anchor_order;
-    uint64_t               anchor_group;
     bool                   owns_text;
     bool                   owns_region_name;
 } parse_trivia_t;
 
 typedef struct parse_token_extras_t {
     core_option_t(core_string_t)  value;
-    core_option_t(core_string_t)  literal_type;
     core_option_t(core_string_t)  postfix_modifier;
     core_option_t(core_string_t)  file;
     parse_trivia_t               *leading_trivia;
     parse_trivia_t               *trailing_trivia;
     size_t                        content_start_byte;
     size_t                        content_end_byte;
-    size_t                        label_start_byte;
-    size_t                        label_end_byte;
     uint32_t                      line;
     uint32_t                      column;
     uint32_t                      endline;
     uint32_t                      endcol;
-    uint32_t                      layout_depth;
-    uint32_t                      layout_column;
     bool                          owns_value;
-    bool                          owns_literal_type;
     bool                          owns_postfix_modifier;
     bool                          owns_file;
     bool                          has_position;
     bool                          has_content_span;
-    bool                          has_label_span;
-    bool                          has_layout_info;
 } parse_token_extras_t;
 
 typedef struct {
@@ -101,8 +84,6 @@ typedef struct {
     uint32_t value_offset;
     uint32_t source             : 24;
     uint32_t origin             : 1;
-    uint32_t no_trivia          : 1;
-    uint32_t layout_mismatch    : 1;
     uint32_t ignore_if_no_match : 1;
     uint32_t value_from_source  : 1;
     uint32_t holds_source       : 1;
@@ -127,8 +108,6 @@ typedef struct parse_parser_t parse_parser_t;
 typedef int64_t (*parse_tokenizer_fn)(parse_parser_t *, void **);
 
 void parse_trivia_free(parse_trivia_t *t);
-size_t parse_trivia_region_count(const parse_trivia_t *trivia);
-bool parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id);
 
 parse_token_info_t *parse_token_new(void);
 void parse_token_free(parse_token_info_t *token);
@@ -203,31 +182,6 @@ parse_token_set_origin(parse_token_info_t *token, parse_token_origin_t origin)
 }
 
 static inline bool
-parse_token_no_trivia(const parse_token_info_t *token)
-{
-    return token->fields.no_trivia;
-}
-
-static inline void
-parse_token_set_no_trivia(parse_token_info_t *token, bool value)
-{
-    token->fields.no_trivia = value;
-}
-
-
-static inline bool
-parse_token_layout_mismatch(const parse_token_info_t *token)
-{
-    return token->fields.layout_mismatch;
-}
-
-static inline void
-parse_token_set_layout_mismatch(parse_token_info_t *token, bool value)
-{
-    token->fields.layout_mismatch = value;
-}
-
-static inline bool
 parse_token_ignore_if_no_match(const parse_token_info_t *token)
 {
     return token->fields.ignore_if_no_match;
@@ -262,17 +216,6 @@ void parse_token_set_position(parse_token_info_t *token, uint32_t line,
 
 void parse_token_copy_location(parse_token_info_t *token,
                                const parse_token_info_t *from);
-
-static inline core_option_t(core_string_t)
-parse_token_literal_type(const parse_token_info_t *token)
-{
-    return token->extras ? token->extras->literal_type
-                         : core_option_none(core_string_t);
-}
-
-void parse_token_set_literal_type(parse_token_info_t *token,
-                                  core_option_t(core_string_t) value,
-                                  bool owned);
 
 static inline core_option_t(core_string_t)
 parse_token_postfix_modifier(const parse_token_info_t *token)
@@ -317,31 +260,3 @@ void parse_token_set_content_span(parse_token_info_t *token, size_t start,
                                   size_t end);
 
 void parse_token_clear_content_span(parse_token_info_t *token);
-
-static inline bool
-parse_token_label_span(const parse_token_info_t *token, size_t *start,
-                       size_t *end)
-{
-    if (!token->extras || !token->extras->has_label_span) return false;
-    if (start) *start = token->extras->label_start_byte;
-    if (end) *end = token->extras->label_end_byte;
-    return true;
-}
-
-void parse_token_set_label_span(parse_token_info_t *token, size_t start,
-                                size_t end);
-
-void parse_token_clear_label_span(parse_token_info_t *token);
-
-static inline bool
-parse_token_layout(const parse_token_info_t *token, uint32_t *depth,
-                   uint32_t *column)
-{
-    if (!token->extras || !token->extras->has_layout_info) return false;
-    if (depth) *depth = token->extras->layout_depth;
-    if (column) *column = token->extras->layout_column;
-    return true;
-}
-
-void parse_token_set_layout(parse_token_info_t *token, uint32_t depth,
-                            uint32_t column);

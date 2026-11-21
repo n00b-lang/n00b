@@ -24,8 +24,7 @@ static void
 test_namespaced_symbol_bindings(void)
 {
     parse_symtab_t *symbols = parse_symtab_new();
-    parse_symtab_push_scope(symbols, CORE_STRING_STATIC(""),
-                            CORE_STRING_STATIC("module"));
+    parse_symtab_push_scope_all(symbols, CORE_STRING_STATIC("module"));
     parse_sym_entry_t *symbol = parse_symtab_add(symbols,
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("value"),
         PARSE_SYM_VARIABLE, nullptr);
@@ -55,8 +54,7 @@ test_symbol_binding_origins(void)
     parse_sym_entry_t *source = parse_symtab_add(symbols,
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("item"),
         PARSE_SYM_VARIABLE, nullptr);
-    parse_symtab_push_scope(symbols, CORE_STRING_STATIC(""),
-                            CORE_STRING_STATIC("branch"));
+    parse_symtab_push_scope_all(symbols, CORE_STRING_STATIC("branch"));
     parse_sym_entry_t *shadow = parse_symtab_add(symbols,
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("item"),
         PARSE_SYM_VARIABLE, nullptr);

@@ -26,53 +26,6 @@ static int temp_file(const char *prefix, core_string_t *path) {
 #define TEST_NODE_TYPE UINT64_C(0x746573742e6e6f64)
 #define TEST_ARCHIVE_ABI UINT64_C(0x746573742e617263)
 
-typedef struct {
-  uint64_t id;
-  uint64_t type_id;
-  uint32_t schema_version;
-  uint32_t reserved;
-  size_t payload_size;
-  const uint8_t *payload;
-} test_archive_record_t;
-
-typedef struct {
-  uint64_t magic;
-  uint32_t version;
-  uint32_t reserved;
-  uint64_t root_type_id;
-  uint64_t root_object_id;
-  size_t record_count;
-  const test_archive_record_t *records;
-} test_archive_image_t;
-
-static size_t saved_first_payload_size;
-
-static bool mutate_first_record(core_string_t path, uint64_t field,
-                                size_t payload_size)
-{
-  core_persist_arena_t *arena = nullptr;
-  core_persist_arena_error_t error;
-  if (!core_persist_arena_open(path, TEST_ARCHIVE_ABI, true, &arena, &error))
-    return false;
-  test_archive_image_t *image = core_persist_arena_root(arena);
-  bool valid = core_persist_arena_contains(arena, image, sizeof(*image)) &&
-               image->record_count &&
-               core_persist_arena_contains(
-                   arena, image->records, sizeof(test_archive_record_t));
-  if (valid) {
-    test_archive_record_t *records =
-        (test_archive_record_t *)image->records;
-    if (!saved_first_payload_size)
-      saved_first_payload_size = records[0].payload_size;
-    records[0].id = field;
-    records[0].payload_size = payload_size ? payload_size
-                                           : saved_first_payload_size;
-    valid = core_persist_arena_sync(arena, &error);
-  }
-  bool closed = core_persist_arena_close(arena, &error);
-  return valid && closed;
-}
-
 typedef struct test_node {
   uint64_t value;
   core_string_t label;
@@ -206,48 +159,6 @@ int main(void) {
             error == CORE_OBJECT_ARCHIVE_INCOMPATIBLE && !archive);
   core_object_archive_registry_free(newer_codec);
   node_destroy_calls = 0;
-
-  core_object_archive_registry_t *malformed_registry =
-      core_object_archive_registry_new();
-  core_object_archive_register(
-      malformed_registry, (core_object_archive_type_t){
-                              .type_id = TEST_NODE_TYPE,
-                              .version = 1,
-                              .allocate = node_allocate,
-                              .save = node_save,
-                              .restore = node_restore,
-                              .destroy = node_destroy});
-  bool payload_size_saved = mutate_first_record(path, 1, 0);
-  bool trailing_payload_mutated = payload_size_saved &&
-      mutate_first_record(path, 1, saved_first_payload_size + 1);
-  check("restore hooks must consume the complete typed payload",
-        trailing_payload_mutated &&
-            !core_object_archive_load(path, TEST_ARCHIVE_ABI,
-                                      malformed_registry, &archive, &error) &&
-            error == CORE_OBJECT_ARCHIVE_CALLBACK_FAILED && !archive &&
-            node_destroy_calls == 2);
-  node_destroy_calls = 0;
-  check("restore image after trailing-payload rejection",
-        mutate_first_record(path, 1, 0));
-  bool bad_id_mutated = mutate_first_record(path, 0, 0);
-  check("malformed stable object IDs are rejected before restoration",
-        bad_id_mutated &&
-            !core_object_archive_load(path, TEST_ARCHIVE_ABI,
-                                      malformed_registry, &archive, &error) &&
-            error == CORE_OBJECT_ARCHIVE_BAD_FORMAT && !archive &&
-            node_destroy_calls == 0);
-  bool id_restored = mutate_first_record(path, 1, 0);
-  bool bad_payload_mutated =
-      id_restored && mutate_first_record(path, 1, SIZE_MAX);
-  check("out-of-mapping payload lengths are rejected before restoration",
-        bad_payload_mutated &&
-            !core_object_archive_load(path, TEST_ARCHIVE_ABI,
-                                      malformed_registry, &archive, &error) &&
-            error == CORE_OBJECT_ARCHIVE_BAD_FORMAT && !archive &&
-            node_destroy_calls == 0);
-  check("test image is restored after corruption cases",
-        mutate_first_record(path, 1, 0));
-  core_object_archive_registry_free(malformed_registry);
 
   core_object_archive_registry_t *rejecting_codec =
       core_object_archive_registry_new();

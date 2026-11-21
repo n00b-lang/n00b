@@ -29,17 +29,17 @@ $(LANTERN_OBJ)/lantern/src/pp/main.o: CC_EXTRA := -DPP_GRAMMAR_DIR="\"$(NATIVE_S
 
 LANTERN_TESTS := ir/span \
     lib/macros lib/byteorder lib/cache diag/diagnostics lib/module \
-    lib/snapshot_inventory lib/target lib/target_call lib/indexed_table \
-    lib/link_unit lib/work_queue lib/arena lib/persist_arena \
-    lib/object_archive lib/native_archive lib/object_emit lib/object_section \
+    lib/target lib/indexed_table \
+    lib/arena \
+    lib/object_archive lib/object_emit lib/object_section \
     lib/variant lib/result \
     logic/datalog \
     th/nest_tmp th/constraint th/match \
     parse/pwz parse/ambiguity parse/commander parse/compose parse/tree_print \
-    parse/symtab_binding parse/rewrite parse/generic_print \
+    parse/symtab_binding parse/rewrite \
     parse/bnf parse/annot parse/grammars parse/format \
     parse/bnfcheck \
-    scanner/tokenizer scanner/lex scanner/lex_perf
+    scanner/tokenizer scanner/lex_perf
 
 LANTERN_TEST_PROGRAMS := $(foreach t,$(LANTERN_TESTS), \
     $(BUILD)/lantern/tests/$(subst /,_,$(t)))

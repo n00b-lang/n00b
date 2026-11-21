@@ -163,7 +163,7 @@ bool core_persist_arena_create(core_string_t path, size_t capacity,
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
   }
 
-  void *mapping = core_os_map(fd, mapping_size, true, false, nullptr);
+  void *mapping = core_os_map(fd, mapping_size, true, false);
   if (!mapping) {
     close(fd);
     unlink(cpath);
@@ -204,9 +204,9 @@ static bool read_header(int fd, core_persist_arena_header_t *header) {
   return true;
 }
 
-static bool open_arena(core_string_t path, uint64_t abi_tag, bool writable,
-                       bool relocated, core_persist_arena_t **out,
-                       core_persist_arena_error_t *error) {
+bool core_persist_arena_open_relocated(
+    core_string_t path, uint64_t abi_tag, bool writable,
+    core_persist_arena_t **out, core_persist_arena_error_t *error) {
   if (out)
     *out = nullptr;
   if (!path.data || !path.u8_bytes || !out)
@@ -249,36 +249,17 @@ static bool open_arena(core_string_t path, uint64_t abi_tag, bool writable,
     return fail(error, CORE_PERSIST_ARENA_BAD_FORMAT);
   }
 
-  void *requested = relocated ? nullptr : (void *)(uintptr_t)header.mapping_base;
-  void *mapping = core_os_map(fd, (size_t)header.mapping_size, writable,
-                              relocated, requested);
+  void *mapping = core_os_map(fd, (size_t)header.mapping_size, writable, true);
   if (!mapping) {
-    close(fd);
-    return fail(error, CORE_PERSIST_ARENA_ADDRESS_UNAVAILABLE);
-  }
-  if (!relocated && mapping != requested) {
-    core_os_unmap(mapping, (size_t)header.mapping_size);
     close(fd);
     return fail(error, CORE_PERSIST_ARENA_ADDRESS_UNAVAILABLE);
   }
 
   core_persist_arena_t *arena = wrap_mapping(
-      fd, mapping, (size_t)header.mapping_size, writable, relocated, mapping);
+      fd, mapping, (size_t)header.mapping_size, writable, true, mapping);
   *out = arena;
   set_error(error, CORE_PERSIST_ARENA_OK);
   return true;
-}
-
-bool core_persist_arena_open(core_string_t path, uint64_t abi_tag,
-                             bool writable, core_persist_arena_t **out,
-                             core_persist_arena_error_t *error) {
-  return open_arena(path, abi_tag, writable, false, out, error);
-}
-
-bool core_persist_arena_open_relocated(
-    core_string_t path, uint64_t abi_tag, bool writable,
-    core_persist_arena_t **out, core_persist_arena_error_t *error) {
-  return open_arena(path, abi_tag, writable, true, out, error);
 }
 
 void *core_persist_arena_alloc(core_persist_arena_t *arena, size_t size,
@@ -418,14 +399,6 @@ bool core_persist_arena_rebase_pointer(const core_persist_arena_t *arena,
     return false;
   *out = (char *)arena->mapping + (size_t)(saved - arena->saved_base);
   return true;
-}
-
-void *core_persist_arena_base(const core_persist_arena_t *arena) {
-  return arena ? arena->mapping : nullptr;
-}
-
-size_t core_persist_arena_used(const core_persist_arena_t *arena) {
-  return arena ? (size_t)arena->header->used : 0;
 }
 
 bool core_persist_arena_sync(core_persist_arena_t *arena,

@@ -19,12 +19,6 @@ scan_unicode_profile_version(void)
     return ucd_version();
 }
 
-core_string_t
-scan_lex_unicode_version(void)
-{
-    return scan_unicode_profile_version();
-}
-
 __attribute__((format(printf, 2, 3))) static void
 set_error(core_string_t *error, const char *fmt, ...)
 {

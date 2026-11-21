@@ -299,17 +299,6 @@ parse_symtab_visit_name_across_namespaces(
 }
 
 void
-parse_symtab_push_scope(parse_symtab_t *st, core_string_t ns_name,
-                      core_string_t scope_name)
-{
-    parse_namespace_t *ns = parse_symtab_ns(st, ns_name);
-
-    if (ns) {
-        push_scope_in(st, ns, scope_name);
-    }
-}
-
-void
 parse_symtab_pop_scope(parse_symtab_t *st, core_string_t ns_name)
 {
     parse_namespace_t *ns = find_ns(st, ns_name);

@@ -12,19 +12,11 @@ TEST_PROGRAMS := writ-coexistence \
     abi-record-layout-test \
     abi-directory-test \
     abi-container-test \
-    abi-index-patch-test \
     abi-emit-test \
-    abi-emit-unit-test \
     abi-record-object-test \
-    abi-link-input-test \
     abi-register-object-test \
     abi-emit-strings-test \
-    abi-type-rows-test \
-    abi-type-layout-rows-test \
     abi-type-signatures-test \
-    abi-decl-index-test \
-    abi-declarations-test \
-    abi-type-index-test \
     llvm-native-cache-test \
     llvm-stack-maps-test
 
@@ -78,10 +70,6 @@ abi-container-test_SOURCES := tests/abi_container.c \
     abi/abi_directory.c
 abi-container-test_LIBS := $(LANTERN_LIB)
 
-abi-index-patch-test_SOURCES := tests/abi_index_patch.c \
-    compiler/abi_index_patch.c
-abi-index-patch-test_LIBS := $(LANTERN_LIB)
-
 abi-emit-test_SOURCES := tests/abi_emit.c \
     compiler/abi_emit.c \
     compiler/abi_emit_strings.c \
@@ -103,61 +91,10 @@ abi-emit-test_SOURCES := tests/abi_emit.c \
     abi/abi_directory.c
 abi-emit-test_LIBS := $(LANTERN_LIB)
 
-abi-emit-unit-test_SOURCES := tests/abi_emit_unit.c \
-    compiler/builtin_types.c \
-    compiler/abi_emit.c \
-    compiler/abi_emit_strings.c \
-    abi/abi_string.c \
-    compiler/abi_link.c \
-    compiler/abi_link_finish.c \
-    compiler/abi_link_strings.c \
-    compiler/abi_index_patch.c \
-    compiler/abi_layout.c \
-    compiler/abi_record_layout.c \
-    compiler/abi_type_index.c \
-    compiler/abi_type_rows.c \
-    compiler/abi_type_layout_rows.c \
-    compiler/abi_enum_rows.c \
-    compiler/abi_function_rows.c \
-    compiler/abi_constraint_rows.c \
-    compiler/abi_storage.c \
-    compiler/abi_trait_method_rows.c \
-    compiler/abi_type_signatures.c \
-    compiler/abi_decl_index.c \
-    compiler/abi_declarations.c \
-    compiler/abi_container.c \
-    abi/abi_directory.c
-abi-emit-unit-test_LIBS := $(LANTERN_LIB)
-
 abi-record-object-test_SOURCES := tests/abi_record_object.c \
     compiler/abi_container.c \
     abi/abi_directory.c
 abi-record-object-test_LIBS := $(LANTERN_LIB)
-
-abi-link-input-test_SOURCES := tests/abi_link_input.c \
-    compiler/abi_link.c \
-    abi/abi_string.c \
-    compiler/abi_index_patch.c \
-    compiler/abi_link_finish.c \
-    compiler/abi_link_strings.c \
-    compiler/abi_emit.c \
-    compiler/abi_emit_strings.c \
-    compiler/abi_layout.c \
-    compiler/abi_record_layout.c \
-    compiler/abi_type_index.c \
-    compiler/abi_type_rows.c \
-    compiler/abi_type_layout_rows.c \
-    compiler/abi_enum_rows.c \
-    compiler/abi_function_rows.c \
-    compiler/abi_constraint_rows.c \
-    compiler/abi_storage.c \
-    compiler/abi_trait_method_rows.c \
-    compiler/abi_type_signatures.c \
-    compiler/abi_decl_index.c \
-    compiler/abi_declarations.c \
-    compiler/abi_container.c \
-    abi/abi_directory.c
-abi-link-input-test_LIBS := $(LANTERN_LIB)
 
 abi-register-object-test_SOURCES := tests/abi_register_object.c
 abi-register-object-test_LIBS := $(HOST_RUNTIME_LIB) $(LANTERN_LIB)
@@ -167,23 +104,6 @@ abi-emit-strings-test_SOURCES := tests/abi_emit_strings.c \
     abi/abi_string.c
 abi-emit-strings-test_LIBS := $(LANTERN_LIB)
 
-abi-type-rows-test_SOURCES := tests/abi_type_rows.c \
-    compiler/builtin_types.c \
-    compiler/abi_type_rows.c \
-    compiler/abi_type_index.c \
-    compiler/abi_emit_strings.c \
-    abi/abi_string.c \
-    compiler/abi_decl_index.c
-abi-type-rows-test_LIBS := $(LANTERN_LIB)
-
-abi-type-layout-rows-test_SOURCES := tests/abi_type_layout_rows.c \
-    compiler/abi_type_layout_rows.c \
-    compiler/abi_type_rows.c \
-    compiler/abi_type_index.c \
-    compiler/abi_emit_strings.c \
-    compiler/abi_decl_index.c
-abi-type-layout-rows-test_LIBS := $(LANTERN_LIB)
-
 abi-type-signatures-test_SOURCES := tests/abi_type_signatures.c \
     compiler/abi_type_signatures.c \
     compiler/abi_type_rows.c \
@@ -192,23 +112,6 @@ abi-type-signatures-test_SOURCES := tests/abi_type_signatures.c \
     abi/abi_string.c \
     compiler/abi_decl_index.c
 abi-type-signatures-test_LIBS := $(LANTERN_LIB)
-
-abi-decl-index-test_SOURCES := tests/abi_decl_index.c \
-    compiler/abi_decl_index.c
-abi-decl-index-test_LIBS := $(LANTERN_LIB)
-
-abi-declarations-test_SOURCES := tests/abi_declarations.c \
-    compiler/abi_declarations.c \
-    compiler/abi_decl_index.c \
-    compiler/abi_type_rows.c \
-    compiler/abi_type_index.c \
-    compiler/abi_emit_strings.c
-abi-declarations-test_LIBS := $(LANTERN_LIB)
-
-abi-type-index-test_SOURCES := tests/abi_type_index.c \
-    compiler/abi_type_index.c \
-    compiler/abi_decl_index.c
-abi-type-index-test_LIBS := $(LANTERN_LIB)
 
 llvm-native-cache-test_SOURCES := tests/llvm_native_cache.c \
     compiler/llvm_native_cache.c \

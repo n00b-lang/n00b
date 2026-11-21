@@ -3,44 +3,6 @@
 #include "scanner/scanner.h"
 #include "parse/grammar.h"
 
-typedef struct {
-    core_string_t spelling;
-    core_string_t token;
-    core_string_t modifier;
-} scan_lex_literal_input_t;
-
-typedef struct {
-    bool          accepted;
-    bool          cacheable;
-    core_string_t borrowed_value;
-    core_string_t borrowed_token;
-    core_string_t borrowed_type;
-    core_string_t borrowed_diagnostic;
-    size_t        diagnostic_start;
-    size_t        diagnostic_end;
-} scan_lex_literal_borrowed_result_t;
-
-typedef scan_lex_literal_borrowed_result_t
-(*scan_lex_literal_hook_fn)(const scan_lex_literal_input_t *input);
-
-typedef struct {
-    bool          accepted;
-    core_string_t value;
-    core_string_t token;
-    core_string_t type;
-    scan_problem_t problem;
-    size_t        diagnostic_start;
-    size_t        diagnostic_end;
-} scan_lex_literal_result_t;
-
-typedef struct {
-    core_string_t        token;
-    core_string_t        hook;
-    core_string_t        modifier;
-    const core_string_t *outputs;
-    const core_string_t *types;
-} scan_lex_literal_hook_t;
-
 typedef enum : uint8_t {
     SCAN_LEX_LINE = 0,
     SCAN_LEX_BLOCK,
@@ -230,7 +192,6 @@ typedef enum : uint8_t {
     SCAN_LEX_DECL_DIRECTIVE,
     SCAN_LEX_DECL_OPERATOR,
     SCAN_LEX_DECL_SOFT_KEYWORD,
-    SCAN_LEX_DECL_LITERAL_HOOK,
     SCAN_LEX_DECL_RECOVERY,
 } scan_lex_decl_kind_t;
 
@@ -239,17 +200,6 @@ typedef struct {
     core_string_t        spelling;
     core_string_t        origin;
 } scan_lex_declaration_t;
-
-typedef enum : uint8_t {
-    SCAN_LEX_ISSUE_UNUSED_OUTPUT,
-    SCAN_LEX_ISSUE_SHADOWED_TERMINAL,
-} scan_lex_issue_kind_t;
-
-typedef struct {
-    scan_lex_issue_kind_t kind;
-    core_string_t         token;
-    core_string_t         origin;
-} scan_lex_issue_t;
 
 typedef enum : uint8_t {
     SCAN_LEX_LAYOUT_NONE    = 0,
@@ -311,7 +261,6 @@ typedef struct {
     const scan_lex_heredoc_t *heredocs;
     const scan_lex_embed_t   *embeds;
     const scan_lex_fence_t   *fences;
-    const scan_lex_literal_hook_t *literal_hooks;
     const scan_lex_recovery_t *recoveries;
     const scan_lex_declaration_t *declarations;
     const core_string_t      *operators;
@@ -361,12 +310,6 @@ extern scan_lex_t *scan_lex_compile(const scan_lex_spec_t *spec,
                                   parse_grammar_t        *g);
 extern void       scan_lex_free(scan_lex_t *lex);
 extern scan_lex_session_t *scan_lex_session_new(const scan_lex_t *program);
-extern void       *scan_lex_session_clone(const void *session);
-extern bool        scan_lex_session_equal(const void *left,
-                                          const void *right);
-extern void        scan_lex_session_shift(void *session, size_t edit_start,
-                                          size_t old_end,
-                                          ptrdiff_t byte_delta);
 extern void        scan_lex_session_free(void *session);
 
 extern bool scan_lex_scan(parse_scanner_t *s);
@@ -375,28 +318,13 @@ extern bool scan_lex_checks_bidi(const scan_lex_t *program);
 extern void scan_lex_check_span(parse_scanner_t *s, size_t start, size_t end,
                                 int32_t tid);
 extern void scan_lex_reset_state(parse_scanner_t *s);
-extern void scan_lex_compact_state(parse_scanner_t *s, size_t removed_bytes);
 
-extern size_t scan_lex_issue_count(const scan_lex_t *lex);
-extern bool scan_lex_issue(const scan_lex_t *lex, size_t index,
-                           scan_lex_issue_t *out);
-extern core_string_t scan_lex_unicode_version(void);
-
-extern bool                  scan_lex_register(const scan_lex_spec_t *spec);
 extern const scan_lex_spec_t *scan_lex_for(core_string_t name);
 
 extern void                  scan_lex_spec_free(const scan_lex_spec_t *spec);
 extern core_string_t         scan_lex_build_error(void);
 extern core_string_t         scan_lex_compile_error(void);
 extern void                  scan_lex_compile_error_reset(void);
-
-extern bool scan_lex_literal_hook_register_pure(core_string_t name,
-                                                scan_lex_literal_hook_fn fn);
-extern bool scan_lex_literal_hook_exists(core_string_t name);
-extern bool scan_lex_literal_hook_call(core_string_t name,
-                                       const scan_lex_literal_input_t *input,
-                                       scan_lex_literal_result_t *result);
-extern void scan_lex_literal_result_free(scan_lex_literal_result_t *result);
 
 extern bool scan_grammar_set_lex(parse_grammar_t *g, const scan_lex_spec_t *spec);
 extern const scan_lex_spec_t *scan_grammar_lex(parse_grammar_t *g);
