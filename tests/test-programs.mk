@@ -225,7 +225,8 @@ llvm-backend-test_SOURCES := tests/llvm_backend.c \
     runtime/runtime_native_roots.c \
     compiler/compiler_native_roots.c \
     compiler/compiler_axioms.c \
-    compiler/compiler_system.c
+    compiler/compiler_system.c \
+    compiler/static_branches.c
 llvm-backend-test_LIBS = $(VERSION_OBJECT) $(LANTERN_LIB)
 llvm-backend-test_LLVM := yes
 
@@ -254,6 +255,7 @@ llvm-frame-roots-test_SOURCES := tests/llvm_frame_roots.c \
     runtime/runtime_native_roots.c \
     compiler/compiler_native_roots.c \
     compiler/compiler_axioms.c \
-    compiler/compiler_system.c
+    compiler/compiler_system.c \
+    compiler/static_branches.c
 llvm-frame-roots-test_LIBS = $(VERSION_OBJECT) $(LANTERN_LIB)
 llvm-frame-roots-test_LLVM := yes

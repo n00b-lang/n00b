@@ -6,8 +6,8 @@
 #include "lib/alloc.h"
 #include "th/environment.h"
 
-static th_type *
-test_source_type(th_ctx *types, ir_value_t *value)
+th_type *
+n00bb_type_test_source(th_ctx *types, ir_value_t *value)
 {
     for (size_t depth = 0; value && depth < 8; depth++) {
         if (th_is_closed(types, value->type)) return value->type;
@@ -36,7 +36,7 @@ n00bb_static_type_test(const ir_instr_t *test)
         || test->operands[1].kind != IR_OPD_TYPE
         || !test->operands[0].value || !test->block) return -1;
     th_ctx *types = ir_module_types(test->block->owner->owner);
-    th_type *source = test_source_type(types, test->operands[0].value);
+    th_type *source = n00bb_type_test_source(types, test->operands[0].value);
     th_type *pattern = test->operands[1].type;
     th_type *resolved = source ? th_resolve(source) : nullptr;
     if (!resolved || !pattern || !th_is_closed(types, resolved)
