@@ -134,10 +134,9 @@ main(void)
     th_arg named_args[] = {
         {.kind = TH_ARG_TYPE, .type = string},
         {.kind = TH_ARG_UINT, .u = 7},
-        {.kind = TH_ARG_SINT, .s = -3},
         {.kind = TH_ARG_STR, .str = S("fmt")},
     };
-    th_type *named = th_apply(types, S("example.Dict"), named_args, 4);
+    th_type *named = th_apply(types, S("example.Dict"), named_args, 3);
     uint32_t named_index = 0;
     assert(named && n00bb_abi_type_index_add(handles, named,
                                               &named_index));
@@ -197,7 +196,7 @@ main(void)
         && handle_rows.rows[bits3_index].components.count == 0);
     const n00b_abi_type_v1 *named_row = &handle_rows.rows[named_index];
     assert(named_row->kind == N00B_ABI_TYPE_NAMED
-        && !named_row->layout_index && named_row->named_arguments.count == 4
+        && !named_row->layout_index && named_row->named_arguments.count == 3
         && named_row->components.count == 1
         && components.indexes[named_row->components.first - 3]
             == string_component_index);
@@ -210,10 +209,7 @@ main(void)
         && args[1].kind == N00B_ABI_TYPE_ARG_UINT
         && args[1].scalar_bits == 7
         && args[2].ordinal == 2
-        && args[2].kind == N00B_ABI_TYPE_ARG_SINT
-        && (int64_t)args[2].scalar_bits == -3
-        && args[3].ordinal == 3
-        && args[3].kind == N00B_ABI_TYPE_ARG_STRING);
+        && args[2].kind == N00B_ABI_TYPE_ARG_STRING);
     const n00b_abi_type_v1 *record_row =
         &handle_rows.rows[generic_record_index];
     assert(record_row->named_arguments.count == 1

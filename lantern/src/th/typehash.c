@@ -700,10 +700,6 @@ static bool enc_plan(th_enc *e, eframe *f)
                 u8(&s->pre, 1);
                 u64(&s->pre, a->u);
                 break;
-            case TH_ARG_SINT:
-                u8(&s->pre, 2);
-                u64(&s->pre, (uint64_t)a->s);
-                break;
             case TH_ARG_STR:
                 u8(&s->pre, 3);
                 str(&s->pre, a->str);

@@ -63,11 +63,6 @@ static bool same_args(const th_type *a, const th_type *b)
                 return false;
             }
             break;
-        case TH_ARG_SINT:
-            if (x->s != y->s) {
-                return false;
-            }
-            break;
         case TH_ARG_STR:
             if (!core_string_eq(x->str, y->str)) {
                 return false;

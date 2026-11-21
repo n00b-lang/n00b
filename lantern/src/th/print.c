@@ -136,9 +136,6 @@ static void emit_arg_scalar(core_buffer_t *b, const th_arg *a)
     case TH_ARG_UINT:
         core_buffer_printf(b, "%" PRIu64, a->u);
         break;
-    case TH_ARG_SINT:
-        core_buffer_printf(b, "%" PRId64, a->s);
-        break;
     case TH_ARG_STR:
         core_buffer_puts(b, "\"");
         core_buffer_append_string(b, a->str);

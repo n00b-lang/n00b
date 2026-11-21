@@ -268,10 +268,6 @@ n00bb_abi_type_identity_rows_build(
                     value.kind = N00B_ABI_TYPE_ARG_UINT;
                     value.scalar_bits = arg->u;
                     break;
-                case TH_ARG_SINT:
-                    value.kind = N00B_ABI_TYPE_ARG_SINT;
-                    value.scalar_bits = (uint64_t)arg->s;
-                    break;
                 case TH_ARG_STR:
                     value.kind = N00B_ABI_TYPE_ARG_STRING;
                     valid = arg->str.data && n00bb_abi_name_pool_encode(names,
