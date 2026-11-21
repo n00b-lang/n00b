@@ -586,8 +586,10 @@ n00bb_abi_link_semantic_rows(
                                             &name)) continue;
             th_type *type = core_dict_get(&interned,
                 (void *)(uintptr_t)row->typehash, nullptr);
-            if (!type) type = ir_type_from_text(ctx, core_string_borrow(
-                (const char *)name.bytes, name.length));
+            core_string_t error = {0};
+            if (!type) type = ir_typelang_parse(ctx, core_string_borrow(
+                (const char *)name.bytes, name.length), &error);
+            core_free(error.data);
             if (type && th_hash(ctx, type) == row->typehash)
                 valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
                                      type);

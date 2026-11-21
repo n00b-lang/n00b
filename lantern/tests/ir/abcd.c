@@ -341,6 +341,51 @@ static void test_decoded_summaries_keep_heap_types(void)
     ir_ctx_free(ctx);
 }
 
+static void test_summary_types_keep_keyword_field_names(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = ir_module_new(ctx, S("m"), &ir_profile_bce, S("test"));
+    th_ctx *types = ir_ctx_types(ctx);
+    th_type *i32 = ir_type_parse(m, S("i32"));
+    th_member members[] = {
+        {S("set"), i32}, {S("t"), i32}, {S("in"), i32},
+    };
+    th_type *record = th_record(types, members, 3);
+    th_type *place = th_ind(types, 0, record);
+    th_param parameter = {.mode = TH_IN, .type = th_ind(types, 0, place)};
+    ir_func_t *f = ir_func_add(m, S("f"), th_func(types, ir_type_parse(m,
+        S("void")), &parameter, 1, nullptr, nullptr, 0), IR_LINK_EXTERNAL);
+    ir_value_t *pp = ir_param_add(f, S("pp"), parameter.type);
+    ir_block_t *entry = ir_block_add(f, S("entry"));
+    ir_instr_t *p = ir_instr_add(entry, IR_OP_LOAD);
+    ir_instr_t *v = ir_instr_add(entry, IR_OP_LOAD);
+    ir_instr_t *store = ir_instr_add(entry, IR_OP_STORE);
+    check("the keyword-field function builds",
+          pp && p && v && store && ir_instr_add(entry, IR_OP_RETURN)
+              && ir_instr_set_dest(p, S("p"), place)
+              && ir_instr_operand_value(p, pp)
+              && ir_instr_set_dest(v, S("v"), record)
+              && ir_instr_operand_value(v, p->dest)
+              && ir_instr_operand_value(store, p->dest)
+              && ir_instr_operand_value(store, v->dest));
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
+    ir_summaries_t *summaries = ir_summaries_compute(&f, 1, nullptr);
+    ir_summary_t *summary = ir_summary_of(summaries, f);
+    core_buffer_t encoded = {0};
+    check("the keyword-field summary encodes",
+          ir_summary_encode(summary, &encoded));
+    ir_summary_t *decoded = ir_summary_decode(summaries, f,
+        (const uint8_t *)encoded.data, encoded.byte_len, nullptr);
+    th_type *heap = heap_type(f, summary);
+    th_type *kept = heap_type(f, decoded);
+    check("a heap place whose fields are named set, t and in round-trips",
+          heap && kept && th_hash(types, kept) == th_hash(types, heap)
+              && th_hash(types, heap) == th_hash(types, record));
+    core_buffer_release(&encoded);
+    ir_summaries_free(summaries);
+    ir_ctx_free(ctx);
+}
+
 static void test_named_effects_survive_encoding(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -414,6 +459,7 @@ int main(void)
     test_monotone_loop_checks_move_before_the_loop();
     test_trap_summaries_leave_out_proven_checks();
     test_decoded_summaries_keep_heap_types();
+    test_summary_types_keep_keyword_field_names();
     test_named_effects_survive_encoding();
     return report("IR ABCD");
 }
