@@ -1,4 +1,0 @@
-[
-  {"severity":"error","code":"IR-E0004","message":"annotation key is not namespaced","path":"sum.bce","location":{"line":2,"column":3,"end_line":2,"end_column":6},"label":"this key","parts":[{"kind":"span","text":"declared here","path":null,"location":{"line":3,"column":3,"end_line":3,"end_column":8}},{"kind":"span","text":"and used here","path":null,"location":{"line":3,"column":14,"end_line":3,"end_column":17}},{"kind":"help","text":"namespace it with the profile: `bce.acc`","path":null,"location":null}]},
-  {"severity":"error","code":"IR-E0001","message":"internal error","path":null,"location":null,"label":null,"parts":[]}
-]

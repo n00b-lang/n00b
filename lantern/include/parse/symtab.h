@@ -126,8 +126,6 @@ struct parse_symtab_t {
     core_dict_t       *nominal_types;
 };
 
-typedef bool (*parse_symtab_scope_visitor_fn)(parse_scope_t *scope,
-                                             void *context);
 typedef bool (*parse_symtab_symbol_visitor_fn)(parse_sym_entry_t *symbol,
                                                void *context);
 
@@ -137,9 +135,6 @@ void parse_symtab_set_owner_unit(parse_symtab_t *st,
                                  core_translation_unit_t *unit);
 
 parse_namespace_t *parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name);
-bool parse_symtab_visit_namespace_scopes(
-    parse_symtab_t *st, core_string_t ns_name,
-    parse_symtab_scope_visitor_fn visitor, void *context);
 bool parse_symtab_visit_name_across_namespaces(
     parse_symtab_t *st, parse_scope_t *scope, core_string_t name,
     parse_symtab_symbol_visitor_fn visitor, void *context);

@@ -80,56 +80,11 @@ test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope(void)
 }
 
 static bool
-visit_type_namespace_scope(parse_scope_t *scope, void *context)
-{
-    size_t *count = context;
-    if (!scope->ns
-        || !core_string_eq(scope->ns->ns_name, S("type"))) return false;
-    (*count)++;
-    return true;
-}
-
-static bool
-stop_namespace_scope_visit(parse_scope_t *scope, void *context)
-{
-    (void)scope;
-    (*(size_t *)context)++;
-    return false;
-}
-
-static bool
 count_namespace_symbol(parse_sym_entry_t *symbol, void *context)
 {
     (void)symbol;
     (*(size_t *)context)++;
     return true;
-}
-
-static void
-test_symbol_namespace_scope_iteration(void)
-{
-    parse_symtab_t *st = parse_symtab_new();
-    parse_symtab_push_scope_all(st, S("module"));
-    parse_symtab_push_scope_all(st, S("function"));
-    parse_symtab_pop_scope_all(st);
-
-    parse_symtab_ns(st, S("type"));
-    size_t count = 0;
-    bool all_type_scopes = parse_symtab_visit_namespace_scopes(
-        st, S("type"), visit_type_namespace_scope, &count);
-
-    size_t stopped_count = 0;
-    bool stopped = parse_symtab_visit_namespace_scopes(
-        st, S("type"), stop_namespace_scope_visit, &stopped_count);
-
-    check("namespace scope visitor covers only mirrored namespace scopes",
-          all_type_scopes && count == 3);
-    check("namespace scope visitor reports early termination",
-          !stopped && stopped_count == 1);
-    check("namespace scope visitor rejects an unknown namespace",
-          !parse_symtab_visit_namespace_scopes(st, S("missing"),
-              visit_type_namespace_scope, &count));
-    parse_symtab_free(st);
 }
 
 static void
@@ -1451,7 +1406,6 @@ main(void)
     test_a_declaration_walk_is_reentered_by_the_full_walk(g);
     test_symtab_storage_facts();
     test_symbol_namespaces_share_lexical_scopes();
-    test_symbol_namespace_scope_iteration();
     test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope();
     test_a_deep_tree_does_not_overflow_the_stack(g);
 

@@ -11,7 +11,6 @@ void            parse_grammar_finalize(parse_grammar_t *g);
 
 size_t parse_grammar_undefined(const parse_grammar_t *g, core_string_t *out,
                              size_t max);
-bool   parse_grammar_report_undefined(const parse_grammar_t *g, FILE *out);
 
 parse_nonterm_t *parse_nonterm(parse_grammar_t *g, core_string_t name);
 parse_nonterm_t *parse_find_nonterm(parse_grammar_t *g, core_string_t name);

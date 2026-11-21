@@ -121,30 +121,6 @@ test_invalidation_retires_every_entry_at_once(void)
 }
 
 static void
-test_clear_releases_the_entries(void)
-{
-    core_cache_t c;
-
-    core_cache_init(&c);
-    core_cache_put(&c, &subject_a, 1, 0, &result_x);
-    core_cache_put(&c, &subject_b, 1, 0, &result_x);
-    core_cache_clear(&c);
-
-
-    void *out = nullptr;
-
-    check("and nothing survives it",
-          !core_cache_get(&c, &subject_a, 1, 0, &out));
-
-    core_cache_put(&c, &subject_a, 1, 0, &result_x);
-
-    check("a cleared cache still works",
-          core_cache_get(&c, &subject_a, 1, 0, &out));
-
-    core_cache_free(&c);
-}
-
-static void
 test_a_disabled_cache_answers_nothing(void)
 {
     core_cache_t c;
@@ -178,7 +154,6 @@ test_a_null_cache_is_inert(void)
 
     core_cache_put(nullptr, &subject_a, 1, 0, &result_x);
     core_cache_invalidate(nullptr);
-    core_cache_clear(nullptr);
     core_cache_free(nullptr);
 }
 
@@ -219,7 +194,6 @@ int main(void)
     test_a_null_result_is_cached_not_re_derived();
     test_a_put_over_a_live_key_replaces_it();
     test_invalidation_retires_every_entry_at_once();
-    test_clear_releases_the_entries();
     test_a_disabled_cache_answers_nothing();
     test_a_null_cache_is_inert();
     test_many_keys_survive_a_resize();

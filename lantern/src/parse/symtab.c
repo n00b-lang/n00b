@@ -280,22 +280,6 @@ parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name)
 }
 
 bool
-parse_symtab_visit_namespace_scopes(parse_symtab_t *st,
-                                    core_string_t ns_name,
-                                    parse_symtab_scope_visitor_fn visitor,
-                                    void *context)
-{
-    parse_namespace_t *ns = find_ns(st, ns_name);
-    if (!ns || !visitor) return false;
-
-    for (parse_scope_t *scope = st->all_scopes; scope;
-         scope = scope->all_next) {
-        if (scope->ns == ns && !visitor(scope, context)) return false;
-    }
-    return true;
-}
-
-bool
 parse_symtab_visit_name_across_namespaces(
     parse_symtab_t *st, parse_scope_t *scope, core_string_t name,
     parse_symtab_symbol_visitor_fn visitor, void *context)

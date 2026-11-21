@@ -35,7 +35,6 @@ const core_indexed_entry_t *core_indexed_table_intern(
 core_index_remap_t *core_index_remap_new(size_t local_count,
                                          uint32_t max_final_index);
 void core_index_remap_free(core_index_remap_t *remap);
-size_t core_index_remap_len(const core_index_remap_t *remap);
 bool core_index_remap_set(core_index_remap_t *remap, uint32_t local_index,
                           uint32_t final_index);
 bool core_index_remap_get(const core_index_remap_t *remap,

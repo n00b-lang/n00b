@@ -1214,33 +1214,6 @@ parse_grammar_undefined(const parse_grammar_t *g, core_string_t *out, size_t max
     return found;
 }
 
-bool
-parse_grammar_report_undefined(const parse_grammar_t *g, FILE *out)
-{
-    size_t n = parse_grammar_undefined(g, nullptr, 0);
-
-    if (!n) {
-        return true;
-    }
-
-    fprintf(out,
-            "grammar: %zu nonterminal(s) are referenced but never defined:\n",
-            n);
-
-    for (size_t i = 0; i < core_list_len(g->nt_list); i++) {
-        const parse_nonterm_t *nt = g->nt_list.data[i];
-
-        if (nt_is_undefined(nt)) {
-            fprintf(out,
-                    "     <%.*s>\n",
-                    (int)nt->name.u8_bytes,
-                    nt->name.data);
-        }
-    }
-
-    return false;
-}
-
 void
 parse_grammar_prepare_contextual(parse_grammar_t *g,
                                  const core_string_t *spellings,

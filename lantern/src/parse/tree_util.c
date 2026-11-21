@@ -138,14 +138,6 @@ parse_tree_find_flat_child_by_nt_name(parse_grammar_t *g,
 }
 
 parse_tree_t *
-parse_tree_get_nth_nt_child(parse_tree_t *node, int32_t n)
-{
-    if (n < 0) return nullptr;
-    size_t remaining = (size_t)n;
-    return find_child_by_nt_id(node, -1, &remaining, true);
-}
-
-parse_tree_t *
 parse_tree_resolve_child_ref(parse_grammar_t *g, parse_tree_t *parent,
                            parse_child_ref_t ref)
 {

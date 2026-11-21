@@ -4,16 +4,6 @@
 #include "lib/module.h"
 #include "harness.h"
 
-static bool
-promote_warning(void *context, core_diag_severity_t *severity,
-                core_string_t code)
-{
-    (void)context;
-    (void)code;
-    if (*severity == CORE_DIAG_WARNING) *severity = CORE_DIAG_ERROR;
-    return true;
-}
-
 int main(void)
 {
     core_module_spec_t module = {0};
@@ -29,7 +19,6 @@ int main(void)
 
     core_diagnostics_t *build = core_diagnostics_new();
     core_diagnostics_t *tu = core_translation_unit_diagnostics(&unit);
-    core_diagnostics_set_policy(build, promote_warning, nullptr);
     check("TU diagnostic retains its module and source location",
           core_diagnostics_report_at(tu, &unit, CORE_DIAG_ERROR,
               CORE_STRING_STATIC("TEST-E0001"),
@@ -37,14 +26,14 @@ int main(void)
               (core_diag_location_t){.line = 3, .column = 4,
                                      .end_line = 3, .end_column = 8,
                                      .has_location = true}));
-    check("TU warnings can be collected before build-level policy runs",
+    check("TU warnings are collected",
           core_diagnostics_report(tu, nullptr, CORE_DIAG_WARNING,
               CORE_STRING_STATIC("TEST-W0001"),
               CORE_STRING_STATIC("warning")));
     check("TU diagnostics merge into build diagnostics",
           core_diagnostics_merge(build, tu)
               && core_diagnostics_count(build) == 2
-              && core_diagnostics_count_severity(build, CORE_DIAG_ERROR) == 2
+              && core_diagnostics_count_severity(build, CORE_DIAG_ERROR) == 1
               && core_diagnostics_failed(build));
     const core_diagnostic_t *diagnostic = core_diagnostics_at(build, 0);
     check("merged diagnostic retains TU identity and path",

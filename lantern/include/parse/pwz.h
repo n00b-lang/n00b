@@ -62,9 +62,6 @@ parse_tree_array_t parse_pwz_get_trees(parse_pwz_parser_t *p);
 
 parse_forest_t parse_pwz_get_forest(parse_pwz_parser_t *p);
 
-parse_forest_t parse_pwz_parse_grammar(parse_grammar_t      *g,
-                                       parse_nt_id_t         start,
-                                       parse_token_stream_t *ts);
 parse_forest_t parse_pwz_parse_grammar_at(parse_grammar_t *g,
                                           parse_nt_id_t start,
                                           parse_token_stream_t *ts,

@@ -16,8 +16,6 @@ typedef void (*core_module_user_data_free_fn)(void *data);
 
 typedef struct {
     core_string_t identifier;
-    void *user_data;
-    core_module_user_data_free_fn user_data_free;
 } core_module_spec_t;
 
 typedef struct {
@@ -71,8 +69,6 @@ bool core_module_spec_init(core_module_spec_t *spec, core_string_t identifier);
 void core_module_spec_release(core_module_spec_t *spec);
 bool core_module_spec_eq(const core_module_spec_t *a,
                          const core_module_spec_t *b);
-void core_module_spec_set_user_data(core_module_spec_t *spec, void *data,
-                                    core_module_user_data_free_fn free_fn);
 
 bool core_source_file_init(core_source_file_t *file, core_string_t path,
                            core_string_t contents);
@@ -110,9 +106,6 @@ uint64_t core_translation_unit_import_revision(
 bool core_translation_unit_finalize_imports(core_translation_unit_t *unit);
 bool core_translation_unit_imports_finalized(
     const core_translation_unit_t *unit);
-bool core_translation_unit_visit_sccs(core_translation_unit_t *root,
-                                      core_translation_unit_scc_fn callback,
-                                      void *context);
 bool core_translation_units_visit_sccs(
     core_translation_unit_t *const *roots, size_t root_count,
     core_translation_unit_scc_fn callback, void *context);

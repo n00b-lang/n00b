@@ -661,12 +661,6 @@ parse_tree_walk_stop(parse_tree_walk_t *w)
 }
 
 bool
-parse_tree_walk_stopped(parse_tree_walk_t *w)
-{
-    return w && w->stopped;
-}
-
-bool
 parse_tree_walk_failed(parse_tree_walk_t *w)
 {
     return w && w->failed;

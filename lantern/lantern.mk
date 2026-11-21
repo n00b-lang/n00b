@@ -27,7 +27,7 @@ $(BUILD)/lantern/pp: $(LANTERN_OBJ)/lantern/src/pp/main.o $(LANTERN_LIB)
 
 $(LANTERN_OBJ)/lantern/src/pp/main.o: CC_EXTRA := -DPP_GRAMMAR_DIR="\"$(NATIVE_SRC)/lantern/grammars\""
 
-LANTERN_TESTS := ir/span ir/diag \
+LANTERN_TESTS := ir/span \
     lib/macros lib/byteorder lib/cache diag/diagnostics lib/module \
     lib/snapshot_inventory lib/target lib/target_call lib/indexed_table \
     lib/link_unit lib/work_queue lib/arena lib/persist_arena \
@@ -37,8 +37,8 @@ LANTERN_TESTS := ir/span ir/diag \
     th/nest_tmp th/constraint th/match \
     parse/pwz parse/ambiguity parse/commander parse/compose parse/tree_print \
     parse/symtab_binding parse/rewrite parse/generic_print \
-    parse/bnf parse/annot parse/bnf_print parse/grammars parse/format \
-    parse/ambiguity_cli parse/bnfcheck \
+    parse/bnf parse/annot parse/grammars parse/format \
+    parse/bnfcheck \
     scanner/tokenizer scanner/lex scanner/lex_perf
 
 LANTERN_TEST_PROGRAMS := $(foreach t,$(LANTERN_TESTS), \

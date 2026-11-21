@@ -112,6 +112,5 @@ void parse_walk_reduce_leaf_in(parse_tree_walk_t *w, int32_t unit,
 void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root);
 
 void parse_tree_walk_stop(parse_tree_walk_t *w);
-bool parse_tree_walk_stopped(parse_tree_walk_t *w);
 bool parse_tree_walk_failed(parse_tree_walk_t *w);
 parse_tree_t *parse_tree_walk_take_detached(parse_tree_walk_t *w);
