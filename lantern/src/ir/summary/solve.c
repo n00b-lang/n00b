@@ -644,6 +644,8 @@ strongconnect(tarjan_t *t, ir_func_t *root)
                 core_dict_remove(&t->on_stack, member);
                 core_list_push(members, member);
             } while (member != f);
+            qsort(members.data, members.len, sizeof(*members.data),
+                  compare_targets);
             solve_component(t->summaries, members.data, members.len);
             core_list_free(members);
         }
