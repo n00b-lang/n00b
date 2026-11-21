@@ -5,8 +5,10 @@
 #include "lib/dict.h"
 
 struct th_type_writer {
+    th_ctx                    *ctx;
     core_list_t(th_type_ptr_t) nodes;
     core_dict_t                index;
+    core_dict_t                closed;
     core_dict_t                var_indices;
     core_dict_t                var_origins;
 };
@@ -31,12 +33,14 @@ dense_id(core_dict_t *map, uint64_t value)
 }
 
 th_type_writer_t *
-th_type_writer_new(void)
+th_type_writer_new(th_ctx *ctx)
 {
     th_type_writer_t *writer = core_alloc(th_type_writer_t);
     if (!writer) return nullptr;
+    writer->ctx = ctx;
     writer->nodes = core_list_new(th_type_ptr_t);
     core_dict_init(&writer->index, nullptr, nullptr);
+    core_dict_init(&writer->closed, nullptr, nullptr);
     core_dict_init(&writer->var_indices, nullptr, nullptr);
     core_dict_init(&writer->var_origins, nullptr, nullptr);
     return writer;
@@ -48,6 +52,7 @@ th_type_writer_free(th_type_writer_t *writer)
     if (!writer) return;
     core_list_free(writer->nodes);
     core_dict_free(&writer->index);
+    core_dict_free(&writer->closed);
     core_dict_free(&writer->var_indices);
     core_dict_free(&writer->var_origins);
     core_free(writer);
@@ -61,10 +66,17 @@ writer_node(th_type_writer_t *writer, const th_type *type)
     bool found = false;
     void *slot = core_dict_get(&writer->index, (void *)type, &found);
     if (found) return (uint32_t)(uintptr_t)slot;
-    core_list_push(writer->nodes, (th_type *)type);
-    uint32_t index = (uint32_t)writer->nodes.len;
-    core_dict_put(&writer->index, (void *)type, (void *)(uintptr_t)index);
-    return index;
+    uint64_t hash = writer->ctx && th_is_closed(writer->ctx, (th_type *)type)
+        ? th_hash(writer->ctx, (th_type *)type) : 0;
+    slot = hash ? core_dict_get(&writer->closed, (void *)(uintptr_t)hash,
+                                &found) : nullptr;
+    if (!found) {
+        core_list_push(writer->nodes, (th_type *)type);
+        slot = (void *)(uintptr_t)writer->nodes.len;
+        if (hash) core_dict_put(&writer->closed, (void *)(uintptr_t)hash, slot);
+    }
+    core_dict_put(&writer->index, (void *)type, slot);
+    return (uint32_t)(uintptr_t)slot;
 }
 
 static void

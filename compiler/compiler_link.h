@@ -234,6 +234,7 @@ void n00bb_check_clobbered_import(parse_grammar_t *grammar,
 core_string_t n00bb_describe_candidates(parse_grammar_t *grammar,
     n00bb_tu_state_t *state,
     const core_list_t(parse_sym_entry_ptr_t) *symbols);
+int n00bb_compare_symbol_names(const void *left, const void *right);
 bool n00bb_function_has_overloads(n00bb_tu_state_t *state,
     parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
 core_list_t(parse_sym_entry_ptr_t) n00bb_call_candidates(

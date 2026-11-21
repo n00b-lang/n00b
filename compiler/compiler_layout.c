@@ -490,8 +490,8 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     return valid;
 }
 
-static int
-compare_symbol_names(const void *left, const void *right)
+int
+n00bb_compare_symbol_names(const void *left, const void *right)
 {
     return core_string_cmp((*(parse_sym_entry_t *const *)left)->name,
                            (*(parse_sym_entry_t *const *)right)->name);
@@ -523,7 +523,7 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
         }
         if (requested.len > 1)
             qsort(requested.data, requested.len, sizeof(*requested.data),
-                  compare_symbol_names);
+                  n00bb_compare_symbol_names);
         for (size_t s = 0; ok && s < requested.len; s++)
             for (size_t d = 0; ok && d < analysis->units.len; d++) {
                 core_translation_unit_t *importer = analysis->units.data[d];

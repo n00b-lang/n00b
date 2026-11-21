@@ -556,7 +556,9 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
     if (!out || (count && !modules)) return false;
     core_buffer_t body = {0};
     writer_t w = {
-        .out = &body, .types = th_type_writer_new(), .modules = modules,
+        .out = &body,
+        .types = th_type_writer_new(count ? modules[0]->ctx->types : nullptr),
+        .modules = modules,
         .module_count = count, .references = references,
     };
     if (!w.types) return false;
