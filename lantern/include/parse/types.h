@@ -20,10 +20,6 @@ typedef struct parse_sym_entry_t    parse_sym_entry_t;
 typedef enum {
     PARSE_QUERY_RULE_ANNOT,
     PARSE_QUERY_GRAMMAR_ANNOT,
-    PARSE_QUERY_CHILD_BY_NT_NAME,
-    PARSE_QUERY_NTH_NT_CHILD,
-    PARSE_QUERY_FIRST_TERMINAL,
-    PARSE_QUERY_CHILD_REF,
 } parse_query_t;
 
 typedef enum {

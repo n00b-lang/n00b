@@ -1615,8 +1615,7 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                                 void *state)
 {
     (void)state;
-    bool is_ref = core_string_eq(visit->annot->op_kind,
-                                 CORE_STRING_STATIC("ref"));
+    bool is_ref = core_string_eq(visit->annot->tag, CORE_STRING_STATIC("ref"));
     if (is_ref) {
         if (entering) {
             parse_tree_t *operand = nullptr;
@@ -1710,13 +1709,13 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
         }
         return true;
     }
-    if (!core_string_eq(visit->annot->op_kind,
+    if (!core_string_eq(visit->annot->tag,
                         CORE_STRING_STATIC("unwrap_result"))) {
         if (!entering) return true;
         lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
             lower_span_for_tree(context, visit->node),
             N00B_TEXT_NOT_SUPPORTED_YET_THE_OPERATOR,
-            N00BB_ARGS(ARG_TEXT(visit->annot->op_kind)));
+            N00BB_ARGS(ARG_TEXT(visit->annot->tag)));
         return false;
     }
     if (entering) return true;

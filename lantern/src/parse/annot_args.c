@@ -1,4 +1,3 @@
-#include "parse/annot_args.h"
 #include "parse/pwz.h"
 #include "parse/tree_util.h"
 #include "parse/tree_visit.h"
@@ -6,8 +5,6 @@
 #include "private/parse/grammar.h"
 #include "lib/alloc.h"
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define AA_MAGIC 0x41413031u
@@ -16,7 +13,6 @@ typedef enum : uint8_t {
     AA_REF,
     AA_TAG,
     AA_INT,
-    AA_PRED,
     AA_LEAF,
     AA_ARGS,
 } aa_tag;
@@ -25,84 +21,28 @@ typedef struct aa_node *aa_node_ptr_t;
 core_list_decl(aa_node_ptr_t);
 
 typedef struct aa_node {
-    uint32_t          magic;
-    aa_tag            tag;
-    parse_child_ref_t   ref;
-    core_string_t      str;
-    int32_t           i;
-    parse_tree_t *tree;
+    uint32_t      magic;
+    aa_tag        tag;
+    core_string_t str;
+    int32_t       i;
     core_list_t(aa_node_ptr_t) items;
-    size_t            n;
-    bool              owns_str;
 } aa_node;
 
 typedef struct {
-    bool                     failed;
-    core_string_t            region;
     core_list_t(aa_node_ptr_t) nodes;
 } aa_ctx;
-
-static void
-leaf_span(parse_tree_t *n, size_t *lo, size_t *hi)
-{
-    if (!n) {
-        return;
-    }
-
-    if (core_tree_is_leaf(n)) {
-        parse_token_info_t *t = parse_node_token(n);
-
-        if (t) {
-            if (parse_token_start_byte(t) < *lo) {
-                *lo = parse_token_start_byte(t);
-            }
-
-            if (parse_token_end_byte(t) > *hi) {
-                *hi = parse_token_end_byte(t);
-            }
-        }
-
-        return;
-    }
-
-    size_t nc = core_tree_num_children(n);
-
-    for (size_t i = 0; i < nc; i++) {
-        leaf_span(core_tree_child(n, i), lo, hi);
-    }
-}
-
-static core_string_t
-dup(core_string_t s)
-{
-    return s.data ? core_string_from_raw(s.data, (int64_t)s.u8_bytes) : s;
-}
-
 
 static aa_node *
 aa_new(parse_reduce_t *r, aa_tag tag)
 {
     aa_node *n = core_alloc(aa_node);
+    aa_ctx  *c = r->thunk;
 
     n->magic = AA_MAGIC;
     n->tag   = tag;
-
-    aa_ctx *c = r ? r->thunk : nullptr;
-    if (c) {
-        core_list_push(c->nodes, n);
-    }
+    core_list_push(c->nodes, n);
 
     return n;
-}
-
-static void
-aa_append(aa_node *n, aa_node *item)
-{
-    if (!n->items.data) {
-        n->items = core_list_new(aa_node_ptr_t);
-    }
-    core_list_push(n->items, item);
-    n->n++;
 }
 
 static aa_node *
@@ -111,23 +51,14 @@ as_aa(void *v)
     aa_node *n = v;
 
     return (n && !parse_reduce_as_list(v) && n->magic == AA_MAGIC) ? n
-                                                                 : nullptr;
+                                                                   : nullptr;
 }
 
-static aa_node *
-kid(parse_reduce_t *r, size_t i)
+static int32_t
+leaf_int(aa_node *leaf)
 {
-    return i < r->n_kids ? as_aa(r->kids[i]) : nullptr;
-}
-
-static void
-fail(parse_reduce_t *r)
-{
-    aa_ctx *c = r->thunk;
-
-    if (c) {
-        c->failed = true;
-    }
+    return leaf && leaf->str.data ? (int32_t)core_string_strtoll(leaf->str, 10)
+                                  : 0;
 }
 
 static void *
@@ -135,7 +66,6 @@ r_leaf(parse_reduce_t *r)
 {
     aa_node *n = aa_new(r, AA_LEAF);
 
-    n->i   = (int32_t)parse_tree_leaf_tid(r->node);
     n->str = parse_tree_leaf_text(r->node);
 
     return n;
@@ -144,20 +74,9 @@ r_leaf(parse_reduce_t *r)
 static void *
 r_ref(parse_reduce_t *r)
 {
-    aa_node *n    = aa_new(r, AA_REF);
-    aa_node *what = kid(r, 1);
+    aa_node *n = aa_new(r, AA_REF);
 
-    n->ref = PARSE_CHILD_NONE;
-
-    if (!what || !what->str.data) {
-        fail(r);
-    }
-    else if (what->i == PARSE_TOK_INTEGER) {
-        n->ref = PARSE_CHILD_IX((int32_t)core_string_strtoll(what->str, 10));
-    }
-    else {
-        n->ref = PARSE_CHILD_NT(dup(what->str));
-    }
+    n->i = leaf_int(r->n_kids > 1 ? as_aa(r->kids[1]) : nullptr);
 
     return n;
 }
@@ -166,7 +85,7 @@ static void *
 r_tag(parse_reduce_t *r)
 {
     aa_node *n  = aa_new(r, AA_TAG);
-    aa_node *lf = kid(r, 0);
+    aa_node *lf = r->n_kids ? as_aa(r->kids[0]) : nullptr;
 
     n->str = lf ? lf->str : (core_string_t){0};
 
@@ -176,120 +95,76 @@ r_tag(parse_reduce_t *r)
 static void *
 r_int(parse_reduce_t *r)
 {
-    aa_node *n  = aa_new(r, AA_INT);
-    aa_node *lf = kid(r, 0);
+    aa_node *n = aa_new(r, AA_INT);
 
-    n->i = lf && lf->str.data ? (int32_t)core_string_strtoll(lf->str, 10) : 0;
-
-    return n;
-}
-
-static void *
-r_pred(parse_reduce_t *r)
-{
-    aa_ctx  *c  = r->thunk;
-    aa_node *n  = aa_new(r, AA_PRED);
-    size_t   lo = (size_t)-1;
-    size_t   hi = 0;
-
-    leaf_span(r->node, &lo, &hi);
-
-    if (lo < hi && c && c->region.data && hi <= c->region.u8_bytes) {
-        n->str = core_string_from_raw(c->region.data + lo, (int64_t)(hi - lo));
-        n->owns_str = true;
-    }
-    else {
-        fail(r);
-    }
-
-    return n;
-}
-
-static void *
-r_args(parse_reduce_t *r)
-{
-    aa_node *n = aa_new(r, AA_ARGS);
-
-    for (size_t i = 0; i < r->n_kids; i++) {
-        aa_node *k = as_aa(r->kids[i]);
-
-        if (!k || k->tag == AA_LEAF) {
-            continue;
-        }
-
-        if (!n->items.data) {
-            n->items = core_list_new(aa_node_ptr_t);
-        }
-        core_list_push(n->items, k);
-        n->n++;
-    }
+    n->i = leaf_int(r->n_kids ? as_aa(r->kids[0]) : nullptr);
 
     return n;
 }
 
 static void
-list_args_append(parse_reduce_list_t *list, aa_node *args)
+append_arg(aa_node *args, void *v)
 {
-    if (!list || !args) return;
-    for (size_t i = 0; i < list->n; i++) {
-        aa_node *item = as_aa(list->v[i]);
-        if (item && item->tag != AA_LEAF) aa_append(args, item);
+    aa_node *item = as_aa(v);
+
+    if (item) {
+        if (item->tag != AA_LEAF) core_list_push(args->items, item);
+        return;
     }
+
+    parse_reduce_list_t *list = parse_reduce_as_list(v);
+    for (size_t i = 0; list && i < list->n; i++) append_arg(args, list->v[i]);
 }
 
 static void *
-r_list_args(parse_reduce_t *r)
+r_args(parse_reduce_t *r)
 {
     aa_node *args = aa_new(r, AA_ARGS);
-    for (size_t i = 0; i < r->n_kids; i++) {
-        aa_node *item = as_aa(r->kids[i]);
-        if (item && item->tag != AA_LEAF) aa_append(args, item);
-        else list_args_append(parse_reduce_as_list(r->kids[i]), args);
-    }
+
+    args->items = core_list_new(aa_node_ptr_t);
+    for (size_t i = 0; i < r->n_kids; i++) append_arg(args, r->kids[i]);
+
     return args;
 }
 
 static struct {
     parse_annot_kind_t kind;
-    core_string_t     nt;
+    core_string_t      nt;
 } const SIGS[] = {
-    {PARSE_ANNOT_SCOPE_OPEN, CORE_STRING_STATIC("a-scope")},
-    {PARSE_ANNOT_DECLARES,   CORE_STRING_STATIC("a-declares")},
-    {PARSE_ANNOT_TYPE,       CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_ASSIGNS,    CORE_STRING_STATIC("a-assigns")},
-    {PARSE_ANNOT_BRANCH,     CORE_STRING_STATIC("a-branch")},
-    {PARSE_ANNOT_LOOP,       CORE_STRING_STATIC("a-pair")},
-    {PARSE_ANNOT_SWITCH,     CORE_STRING_STATIC("a-pair")},
-    {PARSE_ANNOT_CALL,       CORE_STRING_STATIC("a-pair")},
-    {PARSE_ANNOT_FIELD,      CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_JUMP,       CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_TOKENIZER,  CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_VISIBILITY, CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_OPERATOR,   CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_DISAMBIG,   CORE_STRING_STATIC("a-disambig")},
-    {PARSE_ANNOT_NOTRIVIA,   CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_EXPOSES,    CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_VARREF,     CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_INDENT,     CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_TRIVIA_INDENT, CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_GROUP,      CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_ALIGN,      CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_CONCAT,     CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_SPACE,      CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_NOSPACE,    CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_ADJACENT,   CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_NEWLINE,    CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_SOFTLINE,   CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_HARDLINE,   CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_BLANKLINE,  CORE_STRING_STATIC("a-ref")},
-    {PARSE_ANNOT_NAMESPACE,  CORE_STRING_STATIC("a-namespace")},
-    {PARSE_ANNOT_DIRECTION,  CORE_STRING_STATIC("a-direction")},
-    {PARSE_ANNOT_PASS_BY,    CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_LEXER,      CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_SCOPE_OPEN,        CORE_STRING_STATIC("a-scope")},
+    {PARSE_ANNOT_DECLARES,          CORE_STRING_STATIC("a-declares")},
+    {PARSE_ANNOT_TYPE,              CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_ASSIGNS,           CORE_STRING_STATIC("a-assigns")},
+    {PARSE_ANNOT_BRANCH,            CORE_STRING_STATIC("a-branch")},
+    {PARSE_ANNOT_LOOP,              CORE_STRING_STATIC("a-pair")},
+    {PARSE_ANNOT_SWITCH,            CORE_STRING_STATIC("a-pair")},
+    {PARSE_ANNOT_CALL,              CORE_STRING_STATIC("a-pair")},
+    {PARSE_ANNOT_FIELD,             CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_JUMP,              CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_TOKENIZER,         CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_VISIBILITY,        CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_OPERATOR,          CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_DISAMBIG,          CORE_STRING_STATIC("a-disambig")},
+    {PARSE_ANNOT_EXPOSES,           CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_VARREF,            CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_INDENT,            CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_TRIVIA_INDENT,     CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_GROUP,             CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_ALIGN,             CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_SPACE,             CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_NOSPACE,           CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_ADJACENT,          CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_NEWLINE,           CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_HARDLINE,          CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_BLANKLINE,         CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_NAMESPACE,         CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_DIRECTION,         CORE_STRING_STATIC("a-direction")},
+    {PARSE_ANNOT_PASS_BY,           CORE_STRING_STATIC("a-tag")},
+    {PARSE_ANNOT_LEXER,             CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_DECLARATION_POINT, CORE_STRING_STATIC("a-tag")},
-    {PARSE_ANNOT_STATEMENT_END, CORE_STRING_STATIC("a-tags")},
-    {PARSE_ANNOT_CONTINUE_AFTER, CORE_STRING_STATIC("a-tags")},
-    {PARSE_ANNOT_DISCARDS, CORE_STRING_STATIC("a-ref")},
+    {PARSE_ANNOT_STATEMENT_END,     CORE_STRING_STATIC("a-tags")},
+    {PARSE_ANNOT_CONTINUE_AFTER,    CORE_STRING_STATIC("a-tags")},
+    {PARSE_ANNOT_DISCARDS,          CORE_STRING_STATIC("a-ref")},
 };
 
 core_string_t
@@ -307,219 +182,75 @@ parse_annot_arg_grammar(parse_annot_kind_t kind)
 static void
 install(parse_tree_walk_t *w, aa_ctx *c)
 {
-#define REG(name, fn) parse_walk_reduce_nt(w, (name), fn, c)
-
     parse_walk_reduce_leaf_in(w,
-                            parse_nt_unit(parse_annot_grammar(),
-                                    CORE_STRING_STATIC("a-ref")),
-                            r_leaf,
-                            c);
-
-    REG(CORE_STRING_STATIC("ref"), r_ref);
-    REG(CORE_STRING_STATIC("tag"), r_tag);
-    REG(CORE_STRING_STATIC("name"), r_tag);
-    REG(CORE_STRING_STATIC("pred"), r_pred);
-    REG(CORE_STRING_STATIC("pred-call"), r_pred);
-
-    REG(CORE_STRING_STATIC("num"), r_int);
+                              parse_nt_unit(parse_annot_grammar(),
+                                            CORE_STRING_STATIC("a-ref")),
+                              r_leaf, c);
+    parse_walk_reduce_nt(w, CORE_STRING_STATIC("ref"), r_ref, c);
+    parse_walk_reduce_nt(w, CORE_STRING_STATIC("tag"), r_tag, c);
+    parse_walk_reduce_nt(w, CORE_STRING_STATIC("name"), r_tag, c);
+    parse_walk_reduce_nt(w, CORE_STRING_STATIC("num"), r_int, c);
 
     for (size_t i = 0; i < sizeof(SIGS) / sizeof(SIGS[0]); i++) {
-        REG(SIGS[i].nt, r_args);
+        parse_walk_reduce_nt(w, SIGS[i].nt, r_args, c);
     }
-    REG(CORE_STRING_STATIC("a-tags"), r_list_args);
-
-#undef REG
-}
-
-static parse_child_ref_t
-arg_ref(aa_node *args, size_t i)
-{
-    aa_node *a = i < args->n ? args->items.data[i] : nullptr;
-
-    if (!a || a->tag != AA_REF) {
-        return PARSE_CHILD_NONE;
-    }
-    parse_child_ref_t result = a->ref;
-    result.name = dup(a->ref.name);
-    return result;
-}
-
-static core_string_t
-arg_tag(aa_node *args, size_t i)
-{
-    aa_node *a = i < args->n ? args->items.data[i] : nullptr;
-
-    return a && (a->tag == AA_TAG || a->tag == AA_PRED) ? dup(a->str)
-                                                        : (core_string_t){0};
-}
-
-static int32_t
-arg_int(aa_node *args, size_t i, int32_t dflt)
-{
-    aa_node *a = i < args->n ? args->items.data[i] : nullptr;
-
-    return a && a->tag == AA_INT ? a->i : dflt;
-}
-
-static bool
-arg_is(aa_node *args, size_t i, aa_tag tag)
-{
-    return i < args->n && args->items.data[i]->tag == tag;
-}
-
-static void
-free_args(aa_ctx *c)
-{
-    if (!c) {
-        return;
-    }
-
-    for (size_t i = 0; i < c->nodes.len; i++) {
-        aa_node *n = c->nodes.data[i];
-        if (n->owns_str) {
-            core_free(n->str.data);
-        }
-        if (n->tag == AA_REF) {
-            core_free(n->ref.name.data);
-        }
-        core_free(n);
-    }
-    core_list_free(c->nodes);
 }
 
 static bool
 decode(parse_annotation_t *a, aa_node *args)
 {
-    switch (a->kind) {
-    case PARSE_ANNOT_SCOPE_OPEN:
-        a->scope_tag = arg_tag(args, 0);
-        a->name_ref  = arg_ref(args, 1);
-        break;
+    int32_t *refs[] = {&a->name_ref, &a->type_ref, &a->value_ref};
+    size_t   n_refs = 0;
+    bool     listed = a->kind == PARSE_ANNOT_STATEMENT_END
+                   || a->kind == PARSE_ANNOT_CONTINUE_AFTER;
 
-    case PARSE_ANNOT_DECLARES:
-        a->name_ref = arg_ref(args, 0);
-        a->sym_kind = arg_tag(args, 1);
-        break;
+    if (a->kind == PARSE_ANNOT_ASSIGNS) refs[1] = &a->value_ref;
+    if (listed) a->tags = core_list_new(core_string_t);
+    a->cost = 1;
 
-    case PARSE_ANNOT_ASSIGNS:
-        a->name_ref  = arg_ref(args, 0);
-        a->value_ref = arg_ref(args, 1);
-        break;
+    for (size_t i = 0; i < args->items.len; i++) {
+        aa_node *item = args->items.data[i];
 
-    case PARSE_ANNOT_BRANCH:
-        a->name_ref  = arg_ref(args, 0);
-        a->type_ref  = arg_ref(args, 1);
-        a->value_ref = arg_ref(args, 2);
-        break;
-
-    case PARSE_ANNOT_SWITCH:
-    case PARSE_ANNOT_LOOP:
-    case PARSE_ANNOT_CALL:
-        a->name_ref = arg_ref(args, 0);
-        a->type_ref = arg_ref(args, 1);
-        break;
-
-    case PARSE_ANNOT_JUMP:
-    case PARSE_ANNOT_TOKENIZER:
-    case PARSE_ANNOT_LEXER:
-        a->scope_tag = arg_tag(args, 0);
-        break;
-
-    case PARSE_ANNOT_DECLARATION_POINT:
-        a->scope_tag = arg_tag(args, 0);
-        if (!core_string_eq(a->scope_tag, CORE_STRING_STATIC("declarator"))
-            && !core_string_eq(a->scope_tag,
-                               CORE_STRING_STATIC("after_initializer")))
-            return false;
-        break;
-
-    case PARSE_ANNOT_STATEMENT_END:
-    case PARSE_ANNOT_CONTINUE_AFTER:
-        if (!args->n) return false;
-        a->tags = core_list_new(core_string_t);
-        for (size_t i = 0; i < args->n; i++) {
-            if (!arg_is(args, i, AA_TAG)) return false;
-            core_list_push(a->tags, arg_tag(args, i));
+        switch (item->tag) {
+        case AA_REF:
+            *refs[n_refs++] = item->i;
+            break;
+        case AA_TAG:
+            if (listed) core_list_push(a->tags, core_string_dup(item->str));
+            else a->tag = core_string_dup(item->str);
+            break;
+        case AA_INT:
+            if (item->i > 0) a->cost = item->i;
+            break;
+        default:
+            break;
         }
-        break;
-
-    case PARSE_ANNOT_VISIBILITY:
-        a->visibility_spec = arg_tag(args, 0);
-        break;
-
-    case PARSE_ANNOT_OPERATOR:
-        a->op_kind = arg_tag(args, 0);
-        break;
-
-    case PARSE_ANNOT_DISAMBIG:
-        a->disambig_predicate = arg_tag(args, 0);
-        a->disambig_cost      = arg_int(args, 1, 1);
-
-        if (a->disambig_cost <= 0) {
-            a->disambig_cost = 1;
-        }
-        break;
-
-    case PARSE_ANNOT_NOTRIVIA:
-        a->notrivia_ref = arg_ref(args, 0);
-        break;
-
-    case PARSE_ANNOT_DISCARDS:
-        a->value_ref = arg_ref(args, 0);
-        if (!parse_child_ref_is_set(a->value_ref)) return false;
-        break;
-
-    case PARSE_ANNOT_ADJACENT:
-        a->scope_tag = arg_tag(args, 0);
-        if (!core_string_eq(a->scope_tag, CORE_STRING_STATIC("prefix"))) {
-            return false;
-        }
-        break;
-
-    case PARSE_ANNOT_NAMESPACE:
-        a->ns_name = arg_tag(args, 0);
-        break;
-
-    case PARSE_ANNOT_DIRECTION:
-        a->name_ref = arg_ref(args, 0);
-        a->direction = arg_tag(args, 1);
-        break;
-
-    case PARSE_ANNOT_PASS_BY:
-        a->pass_by = arg_tag(args, 0);
-        break;
-
-    default:
-        a->name_ref = arg_ref(args, 0);
-        break;
     }
 
-    return true;
+    switch (a->kind) {
+    case PARSE_ANNOT_DECLARATION_POINT:
+        return core_string_eq(a->tag, CORE_STRING_STATIC("declarator"))
+            || core_string_eq(a->tag, CORE_STRING_STATIC("after_initializer"));
+    case PARSE_ANNOT_ADJACENT:
+        return core_string_eq(a->tag, CORE_STRING_STATIC("prefix"));
+    default:
+        return true;
+    }
 }
 
 bool
 parse_annot_parse_args(parse_annotation_t *a, core_string_t text)
 {
     core_string_t nt_name = a ? parse_annot_arg_grammar(a->kind)
-                             : (core_string_t){0};
-
-    if (!nt_name.data) {
-        return false;
-    }
-
-    parse_grammar_t *g = parse_annot_grammar();
-
-    if (!g) {
-        return false;
-    }
-
-    parse_nonterm_t *start = parse_find_nonterm(g, nt_name);
+                              : (core_string_t){0};
+    parse_grammar_t *g     = nt_name.data ? parse_annot_grammar() : nullptr;
+    parse_nonterm_t *start = g ? parse_find_nonterm(g, nt_name) : nullptr;
 
     if (!start || !core_list_len(g->rules)) {
         return false;
     }
 
-    core_buffer_t       *buf = nullptr;
+    core_buffer_t        *buf = nullptr;
     parse_scanner_t      *sc  = nullptr;
     parse_token_stream_t *ts  = parse_annot_lex(text, &buf, &sc);
 
@@ -527,16 +258,12 @@ parse_annot_parse_args(parse_annotation_t *a, core_string_t text)
         return false;
     }
 
-    parse_pwz_parser_t *p
-        = parse_pwz_new_for_start(g, parse_nonterm_id(start));
-    bool              ok = false;
+    parse_pwz_parser_t *p  = parse_pwz_new_for_start(g, parse_nonterm_id(start));
+    bool                ok = false;
 
     if (parse_pwz_parse(p, ts)) {
-        aa_ctx             c  = {
-            .region = text,
-            .nodes = core_list_new(aa_node_ptr_t),
-        };
-        parse_tree_walk_t   *w  = parse_tree_walk_new(g, &c);
+        aa_ctx             c = {.nodes = core_list_new(aa_node_ptr_t)};
+        parse_tree_walk_t *w = parse_tree_walk_new(g, &c);
 
         install(w, &c);
 
@@ -544,15 +271,19 @@ parse_annot_parse_args(parse_annotation_t *a, core_string_t text)
 
         parse_tree_walk_free(w);
 
-        if (!c.failed && args && args->tag == AA_ARGS) {
+        if (args && args->tag == AA_ARGS) {
             ok = decode(a, args);
 
             if (ok) {
-                a->args_text = dup(text);
+                a->args_text = core_string_dup(text);
             }
         }
 
-        free_args(&c);
+        for (size_t i = 0; i < c.nodes.len; i++) {
+            core_list_free(c.nodes.data[i]->items);
+            core_free(c.nodes.data[i]);
+        }
+        core_list_free(c.nodes);
     }
 
     parse_pwz_free(p);

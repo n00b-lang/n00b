@@ -977,8 +977,8 @@ module_member_is_call(parse_grammar_t *grammar, parse_tree_t *node)
         const parse_annotation_t *call = rule
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL) : nullptr;
         if (!call) continue;
-        parse_tree_t *callee = parse_tree_resolve_child_ref(
-            grammar, at, call->name_ref);
+        parse_tree_t *callee = parse_tree_resolve_child_ref(at,
+                                                            call->name_ref);
         return callee && node_is_within(node, callee);
     }
     return false;
@@ -1816,8 +1816,7 @@ node_is_whole_callee(parse_grammar_t *grammar, parse_tree_t *node)
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
             : nullptr;
         if (call)
-            return parse_tree_resolve_child_ref(grammar, parent,
-                                                call->name_ref) == at;
+            return parse_tree_resolve_child_ref(parent, call->name_ref) == at;
         if (!parent || core_tree_num_children(parent) != 1) return false;
     }
     return false;
@@ -4631,8 +4630,8 @@ n00bb_call_operator_node(parse_grammar_t *grammar, parse_tree_t *node)
     parse_annotation_t *operator = rule
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR) : nullptr;
     return operator
-        && (core_string_eq(operator->op_kind, CORE_STRING_STATIC("ref"))
-            || core_string_eq(operator->op_kind,
+        && (core_string_eq(operator->tag, CORE_STRING_STATIC("ref"))
+            || core_string_eq(operator->tag,
                               CORE_STRING_STATIC("unwrap_result")));
 }
 
@@ -4645,7 +4644,7 @@ classify_operator(parse_grammar_t *grammar, core_translation_unit_t *unit,
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR) : nullptr;
     if (!operator) return;
     parse_node_facts_t *facts = nullptr;
-    if (core_string_eq(operator->op_kind, CORE_STRING_STATIC("ref"))) {
+    if (core_string_eq(operator->tag, CORE_STRING_STATIC("ref"))) {
         parse_tree_t *operand = nullptr;
         for (size_t i = 0; !operand && i < core_tree_num_children(node); i++)
             if (!core_tree_is_leaf(core_tree_child(node, i)))
@@ -4657,7 +4656,7 @@ classify_operator(parse_grammar_t *grammar, core_translation_unit_t *unit,
         facts->call_callee = operand;
         mark_names_called(operand);
     }
-    else if (core_string_eq(operator->op_kind,
+    else if (core_string_eq(operator->tag,
                             CORE_STRING_STATIC("unwrap_result"))) {
         parse_tree_t *operand = core_tree_num_children(node)
             ? core_tree_child(node, 0) : nullptr;

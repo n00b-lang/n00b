@@ -306,16 +306,13 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
 {
     (void)state;
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("sym-decl"))) {
-        parse_tree_t *target = parse_tree_resolve_child_ref(
-            visit->grammar, visit->node, visit->annot->name_ref);
         parse_tree_t *source = parse_tree_resolve_child_ref(
-            visit->grammar, visit->node, visit->annot->value_ref);
+            visit->node, visit->annot->value_ref);
         parse_sym_entry_t *declared = parse_tree_sym(visit->node);
         th_type *expected = declared ? declared->type : nullptr;
         if (!n00bb_materialize_assignment_source(context, visit, source,
                                                  expected, entering))
             return false;
-        (void)target;
         ir_shape_t *shape = declared ? parse_sym_binding(declared,
             CORE_STRING_STATIC("ir.array-shape")) : nullptr;
         ir_shape_storage_t storage;
@@ -337,9 +334,9 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
     if (!entering && ir_lower_emit_suppressed(context, visit->node))
         return true;
     parse_tree_t *target = parse_tree_resolve_child_ref(
-        visit->grammar, visit->node, visit->annot->name_ref);
+        visit->node, visit->annot->name_ref);
     parse_tree_t *source = parse_tree_resolve_child_ref(
-        visit->grammar, visit->node, visit->annot->value_ref);
+        visit->node, visit->annot->value_ref);
     if (!compound && parse_tree_discards_value(visit->node))
         return !entering || ir_lower_handle_assignment(context, visit->node);
     if (compound) {
@@ -473,16 +470,6 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     if (operand_count != 2 || !operands || !operands[0] || !operands[1])
         return lower_internal(context, span,
             "compound assignment has no captured target or right operand");
-    parse_annotation_t *assigns = visit->rule
-        ? parse_rule_find_annot(visit->grammar, visit->rule,
-                                PARSE_ANNOT_ASSIGNS) : nullptr;
-    if (!assigns && visit->nt)
-        assigns = parse_nt_find_direct_annot(visit->nt,
-                                             PARSE_ANNOT_ASSIGNS);
-    parse_tree_t *target = assigns
-        ? parse_tree_resolve_child_ref(visit->grammar, visit->node,
-                                       assigns->name_ref) : nullptr;
-    (void)target;
     n00bb_lower_context_t *lower = context->user;
     th_type *target_type = operands[0]->type;
     const n00bb_binary_operator_t *operator = n00bb_binary_operator_assigned(

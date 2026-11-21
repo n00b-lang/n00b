@@ -1,5 +1,4 @@
 #include "private/parse/annot_grammar.h"
-#include "parse/annot_args.h"
 #include "parse/bnf.h"
 #include "private/parse/grammar.h"
 #include "scanner/scan_builtins.h"

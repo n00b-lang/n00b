@@ -348,7 +348,7 @@ test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
     check("a file-level annotation is retained on the grammar", tok != nullptr);
 
     if (tok) {
-        check("and keeps its argument", core_string_eq(tok->scope_tag, S("toy")));
+        check("and keeps its argument", core_string_eq(tok->tag, S("toy")));
     }
 
     parse_nonterm_t *prog = nullptr;
@@ -371,7 +371,7 @@ test_annotations_are_retained_on_the_grammar(parse_grammar_t *g)
 
     if (a) {
         check("with the tag it was written with",
-              core_string_eq(a->scope_tag, S("module")));
+              core_string_eq(a->tag, S("module")));
     }
 }
 
@@ -723,81 +723,6 @@ nt_named_s(parse_grammar_t *g, core_string_t name)
 #define nt_named(g, name) nt_named_s((g), S(name))
 
 static void
-test_annotation_arguments_only_need_balanced_parens(void)
-{
-    core_string_t src
-        = S("<top> @declares($1,\"var\") @disambig(pred(a, b, c()), 4) "
-            "::= <n> <t>\n"
-            "<n> ::= __LOWER\n"
-            "<t> ::= __UPPER\n");
-
-    parse_grammar_t *g = parse_grammar_new();
-
-    check("an annotation argument may nest balanced parentheses",
-          parse_bnf_load(src, S("top"), g));
-
-    parse_nonterm_t *top = nt_named(g, "top");
-
-    check("the annotated non-terminal is there", top != nullptr);
-
-    if (top) {
-        parse_annotation_t *d
-            = find_unique_rule_annot(g, top, PARSE_ANNOT_DECLARES);
-
-        check("@declares reads its name reference and kind",
-              d != nullptr && d->name_ref.kind == PARSE_ROLE_BY_INDEX
-                  && d->name_ref.index == 1
-                  && core_string_eq(d->sym_kind, S("var")));
-
-        check("the annotation that nests parentheses survives the load",
-              find_unique_rule_annot(g, top, PARSE_ANNOT_DISAMBIG) != nullptr);
-    }
-
-    parse_grammar_free(g);
-
-    core_string_t by_name
-        = S("<top> @assigns($1, $t) ::= <n> <t>\n"
-            "<n> ::= __LOWER\n"
-            "<t> ::= __UPPER\n");
-
-    parse_grammar_t *g2 = parse_grammar_new();
-
-    check("a reference may name a non-terminal instead of an index",
-          parse_bnf_load(by_name, S("top"), g2));
-
-    parse_nonterm_t    *t2 = nt_named(g2, "top");
-    parse_annotation_t *l  = t2 ? find_unique_rule_annot(g2, t2, PARSE_ANNOT_ASSIGNS)
-                              : nullptr;
-
-    check("and $name carries the name, not an index",
-          l != nullptr && l->name_ref.kind == PARSE_ROLE_BY_INDEX
-              && l->name_ref.index == 1
-              && l->value_ref.kind == PARSE_ROLE_BY_NAME
-              && core_string_eq(l->value_ref.name, S("t")));
-
-    parse_annotation_t *copy = l ? parse_annot_clone(l) : nullptr;
-
-    check("a clone owns its own copy of a named reference",
-          copy && copy->value_ref.name.data != l->value_ref.name.data
-              && core_string_eq(copy->value_ref.name, S("t")));
-
-    parse_annot_free(copy);
-
-    parse_grammar_free(g2);
-
-    core_string_t unbalanced
-        = S("<top> @disambig(pred(a) ::= <n>\n"
-            "<n> ::= __LOWER\n");
-
-    parse_grammar_t *bad = parse_grammar_new();
-
-    check("an unbalanced argument region is not a grammar",
-          !parse_bnf_load(unbalanced, S("top"), bad));
-
-    parse_grammar_free(bad);
-}
-
-static void
 test_annotation_arguments_carry_integers(void)
 {
     core_string_t src
@@ -816,8 +741,8 @@ test_annotation_arguments_carry_integers(void)
                               : nullptr;
 
     check("@disambig reads its predicate and its cost",
-          d != nullptr && core_string_eq(d->disambig_predicate, S("pred"))
-              && d->disambig_cost == 3);
+          d != nullptr && core_string_eq(d->tag, S("pred"))
+              && d->cost == 3);
 
     parse_grammar_free(g);
 
@@ -1385,7 +1310,6 @@ main(void)
         return 1;
     }
 
-    test_annotation_arguments_only_need_balanced_parens();
     test_annotation_arguments_carry_integers();
     test_direct_nonterminal_annotation_lookup();
     test_annotation_argument_lists_are_growable();

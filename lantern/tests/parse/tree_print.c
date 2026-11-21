@@ -87,41 +87,6 @@ static parse_grammar_t *load(core_string_t text, core_string_t start)
     return g;
 }
 
-#define CALLS                                                                \
-    S("<call> @group @nospace($1) @indent($2) @softline($2) @softline($3) ::=" \
-      " %IDENTIFIER %\"(\" <args>? %\")\"\n"                                 \
-      "<args> @newline @nospace($1) ::= <arg> (%\",\" <arg>)*\n"             \
-      "<arg>  ::= %IDENTIFIER\n")
-
-static void test_a_group_stays_flat_while_it_fits(void)
-{
-    parse_grammar_t *g = load(CALLS, S("call"));
-
-    if (!g) {
-        return;
-    }
-
-    parse_token_info_t *toks[] = {
-        tk(PARSE_TOK_IDENTIFIER, "f", 0),
-        tk('(', "(", 1),
-        tk(PARSE_TOK_IDENTIFIER, "alpha", 2),
-        tk(',', ",", 3),
-        tk(PARSE_TOK_IDENTIFIER, "beta", 4),
-        tk(',', ",", 5),
-        tk(PARSE_TOK_IDENTIFIER, "gamma", 6),
-        tk(')', ")", 7),
-    };
-
-    same(S("a call that fits stays on one line"),
-         lay_out(g, S("call"), toks, 8, 80), S("f(alpha, beta, gamma)"));
-
-    same(S("the same call breaks when it does not fit"),
-         lay_out(g, S("call"), toks, 8, 12),
-         S("f(\n  alpha,\n  beta,\n  gamma\n)"));
-
-    parse_grammar_free(g);
-}
-
 #define ALIGNED                                                       \
     S("<pair> @nospace($1) @align($2) ::= %IDENTIFIER %\":\" <call>\n" \
       "<call> @group @nospace($1) @newline($2) @newline($3) ::="      \
@@ -188,7 +153,6 @@ static void test_blank_lines_and_indentation_come_from_the_grammar(void)
 
 int main(void)
 {
-    test_a_group_stays_flat_while_it_fits();
     test_align_hangs_under_the_column_it_names();
     test_blank_lines_and_indentation_come_from_the_grammar();
 

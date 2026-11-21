@@ -1,7 +1,11 @@
 #pragma once
 
+#include "parse/annotation.h"
 #include "parse/grammar.h"
 #include "scanner/token_stream.h"
+
+bool          parse_annot_parse_args(parse_annotation_t *a, core_string_t text);
+core_string_t parse_annot_arg_grammar(parse_annot_kind_t kind);
 
 parse_grammar_t      *parse_annot_grammar(void);
 bool                parse_annot_building(void);

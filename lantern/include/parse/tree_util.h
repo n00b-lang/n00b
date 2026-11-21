@@ -3,7 +3,6 @@
 #include "parse/types.h"
 #include "parse/tree.h"
 #include "parse/grammar.h"
-#include "parse/annotation.h"
 
 typedef bool (*parse_leaf_fn)(parse_tree_t *leaf, void *arg);
 
@@ -19,9 +18,8 @@ parse_tree_t *parse_tree_find_flat_child_by_nt_name(parse_grammar_t *g,
                                                     parse_tree_t *parent,
                                                     core_string_t name);
 
-parse_tree_t *parse_tree_resolve_child_ref(parse_grammar_t    *g,
-                                             parse_tree_t *parent,
-                                             parse_child_ref_t   ref);
+parse_tree_t *parse_tree_resolve_child_ref(parse_tree_t *parent,
+                                           int32_t       index);
 
 parse_nonterm_t *parse_tree_nonterm(parse_grammar_t *g, parse_tree_t *n);
 core_string_t parse_tree_nt_name(parse_grammar_t *g, parse_tree_t *n);

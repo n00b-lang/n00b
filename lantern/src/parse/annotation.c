@@ -21,11 +21,10 @@ parse_annot_new(parse_annot_kind_t kind)
 
     memset(a, 0, sizeof(*a));
 
-    a->kind            = kind;
-    a->name_ref        = PARSE_CHILD_NONE;
-    a->type_ref        = PARSE_CHILD_NONE;
-    a->value_ref       = PARSE_CHILD_NONE;
-    a->notrivia_ref    = PARSE_CHILD_NONE;
+    a->kind      = kind;
+    a->name_ref  = -1;
+    a->type_ref  = -1;
+    a->value_ref = -1;
 
     return a;
 }
@@ -41,27 +40,15 @@ parse_annot_clone(const parse_annotation_t *a)
 
     *c = *a;
 
-    c->args_text          = core_string_dup(a->args_text);
-    c->source_origin      = core_string_dup(a->source_origin);
-    c->scope_tag          = core_string_dup(a->scope_tag);
-    c->visibility_spec    = core_string_dup(a->visibility_spec);
-    c->op_kind            = core_string_dup(a->op_kind);
-    c->sym_kind           = core_string_dup(a->sym_kind);
-    c->disambig_predicate = core_string_dup(a->disambig_predicate);
-
-    c->ns_name              = core_string_dup(a->ns_name);
-    c->direction            = core_string_dup(a->direction);
+    c->args_text     = core_string_dup(a->args_text);
+    c->source_origin = core_string_dup(a->source_origin);
+    c->tag           = core_string_dup(a->tag);
 
     if (core_list_len(a->tags) > 0) {
         c->tags = core_list_new(core_string_t);
         for (size_t i = 0; i < core_list_len(a->tags); i++)
             core_list_push(c->tags, core_string_dup(a->tags.data[i]));
     }
-
-    c->name_ref.name        = core_string_dup(a->name_ref.name);
-    c->type_ref.name        = core_string_dup(a->type_ref.name);
-    c->value_ref.name       = core_string_dup(a->value_ref.name);
-    c->notrivia_ref.name    = core_string_dup(a->notrivia_ref.name);
 
     return c;
 }
@@ -73,25 +60,9 @@ parse_annot_free(parse_annotation_t *a)
         return;
     }
 
-    core_string_t owned[] = {
-        a->args_text,
-        a->source_origin,
-        a->ns_name,
-        a->direction,
-        a->scope_tag,
-        a->visibility_spec,
-        a->op_kind,
-        a->sym_kind,
-        a->disambig_predicate,
-        a->name_ref.name,
-        a->type_ref.name,
-        a->value_ref.name,
-        a->notrivia_ref.name,
-    };
-
-    for (size_t i = 0; i < sizeof(owned) / sizeof(owned[0]); i++) {
-        core_free(owned[i].data);
-    }
+    core_free(a->args_text.data);
+    core_free(a->source_origin.data);
+    core_free(a->tag.data);
 
     for (size_t i = 0; i < core_list_len(a->tags); i++)
         core_free(a->tags.data[i].data);
@@ -155,50 +126,42 @@ parse_grammar_annot_at(const parse_grammar_t *g, size_t i)
     return g->annotations.data[i];
 }
 
-parse_annotation_t *
-parse_grammar_find_annot(parse_grammar_t *g, parse_annot_kind_t kind)
+static parse_annotation_t *
+first_of_kind(const core_list_t(parse_annotation_ptr_t) *list,
+              parse_annot_kind_t kind)
 {
+    for (size_t i = 0; list && i < list->len; i++) {
+        if (list->data[i] && list->data[i]->kind == kind) return list->data[i];
+    }
+    return nullptr;
+}
+
+static parse_annotation_t *
+find_cached(parse_grammar_t *g, const void *owner, parse_query_t query,
+            const core_list_t(parse_annotation_ptr_t) *list,
+            parse_annot_kind_t kind)
+{
+    if (!g || !owner) return nullptr;
+
     void *hit = nullptr;
+    pthread_mutex_lock(&g->annot_cache_lock);
+    bool found = core_cache_get(&g->annot_cache, (void *)owner, query,
+                                (uint64_t)kind, &hit);
+    pthread_mutex_unlock(&g->annot_cache_lock);
+    if (found) return hit;
 
-    if (g) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        bool found = core_cache_get(&g->annot_cache, g,
-                                    PARSE_QUERY_GRAMMAR_ANNOT,
-                                    (uint64_t)kind, &hit);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-        if (found) {
-            return (parse_annotation_t *)hit;
-        }
-    }
-
-    size_t              n   = parse_grammar_annot_count(g);
-    parse_annotation_t *out = nullptr;
-
-    for (size_t i = 0; i < n && !out; i++) {
-        parse_annotation_t *a = parse_grammar_annot_at(g, i);
-
-        if (a->kind == kind) {
-            out = a;
-        }
-    }
-
-    if (g) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        core_cache_put(&g->annot_cache, g, PARSE_QUERY_GRAMMAR_ANNOT,
-                       (uint64_t)kind, out);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-    }
-
+    parse_annotation_t *out = first_of_kind(list, kind);
+    pthread_mutex_lock(&g->annot_cache_lock);
+    core_cache_put(&g->annot_cache, (void *)owner, query, (uint64_t)kind, out);
+    pthread_mutex_unlock(&g->annot_cache_lock);
     return out;
 }
 
-bool
-parse_grammar_declares_after_initializer(parse_grammar_t *g)
+parse_annotation_t *
+parse_grammar_find_annot(parse_grammar_t *g, parse_annot_kind_t kind)
 {
-    parse_annotation_t *point = parse_grammar_find_annot(
-        g, PARSE_ANNOT_DECLARATION_POINT);
-    return point && core_string_eq(point->scope_tag,
-                                   CORE_STRING_STATIC("after_initializer"));
+    return find_cached(g, g, PARSE_QUERY_GRAMMAR_ANNOT,
+                       g ? &g->annotations : nullptr, kind);
 }
 
 size_t
@@ -237,46 +200,14 @@ parse_annotation_t *
 parse_rule_find_annot(parse_grammar_t *g, const parse_rule_t *rule,
                     parse_annot_kind_t kind)
 {
-    void *hit = nullptr;
-
-    if (g && rule) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        bool found = core_cache_get(&g->annot_cache, (void *)rule,
-                                    PARSE_QUERY_RULE_ANNOT,
-                                    (uint64_t)kind, &hit);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-        if (found) {
-            return (parse_annotation_t *)hit;
-        }
-    }
-
-    parse_annotation_t *out = nullptr;
-
-    for (size_t i = 0; rule && !out && i < parse_rule_annot_count(rule); i++) {
-        parse_annotation_t *a = parse_rule_annot_at(rule, i);
-
-        if (a->kind == kind) {
-            out = a;
-        }
-    }
-
-    if (g && rule) {
-        pthread_mutex_lock(&g->annot_cache_lock);
-        core_cache_put(&g->annot_cache, (void *)rule, PARSE_QUERY_RULE_ANNOT,
-                       (uint64_t)kind, out);
-        pthread_mutex_unlock(&g->annot_cache_lock);
-    }
-
-    return out;
+    if (!g && rule) return first_of_kind(&rule->annotations, kind);
+    return find_cached(g, rule, PARSE_QUERY_RULE_ANNOT,
+                       rule ? &rule->annotations : nullptr, kind);
 }
 
 parse_annotation_t *
 parse_nt_find_direct_annot(const parse_nonterm_t *nt, parse_annot_kind_t kind)
 {
-    for (size_t i = 0; i < parse_nt_annot_count(nt); i++) {
-        parse_annotation_t *annotation = parse_nt_annot_at(nt, i);
-        if (annotation && annotation->kind == kind) return annotation;
-    }
-    return nullptr;
+    return first_of_kind(nt ? &nt->annotations : nullptr, kind);
 }
 

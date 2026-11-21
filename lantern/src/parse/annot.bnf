@@ -1,4 +1,4 @@
-<ref> ::= %"$" %INTEGER | %"$" %IDENTIFIER
+<ref> ::= %"$" %INTEGER
 
 <tag> ::= %STRING
 
@@ -23,17 +23,6 @@
 
 <a-tags> ::= <tag> (%"," <tag>)*
 
-<a-disambig> ::= <pred> | <pred> %"," <num>
-
-<a-namespace> ::= <tag>
+<a-disambig> ::= <name> | <name> %"," <num>
 
 <a-direction> ::= <ref> %"," <tag>
-
-<pred> ::= %IDENTIFIER | <pred-call>
-
-<pred-call> ::= %IDENTIFIER %"(" %")"
-              | %IDENTIFIER %"(" <pred-args> %")"
-
-<pred-args> ::= <pred-arg> | <pred-arg> %"," <pred-args>
-
-<pred-arg> ::= <ref> | <num> | <tag> | <name> | <pred-call>
