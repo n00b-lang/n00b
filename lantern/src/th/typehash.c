@@ -1045,13 +1045,6 @@ th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n)
     return ar;
 }
 
-static th_type **norm_children_sum(th_norm *s, th_type *t, size_t *out)
-{
-    *out = t->sum.n;
-
-    return th_sort_arms(s->ctx, t->sum.arms, t->sum.n);
-}
-
 static int cmp_length_first(core_string_t x, core_string_t y)
 {
     if (x.u8_bytes != y.u8_bytes) {
@@ -1086,7 +1079,7 @@ typedef struct {
 core_option_decl(th_nframe);
 core_list_decl(th_nframe);
 
-static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
+th_type **th_children(th_ctx *ctx, th_type *t, size_t *out)
 {
     th_type **kids = nullptr;
     size_t    n    = 0;
@@ -1094,18 +1087,6 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
     *out = 0;
 
     switch (t->kind) {
-    case TH_VAR:
-        if (core_dict_contains(&s->seen, t)) {
-            return nullptr;
-        }
-
-        t->var.index     = core_dict_len(&s->seen);
-        t->var.has_index = true;
-
-        core_dict_put(&s->seen, t, t);
-
-        return nullptr;
-
     case TH_NAMED:
         kids = core_alloc_array(th_type *, t->named.nargs);
 
@@ -1188,7 +1169,9 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
         break;
 
     case TH_SUM:
-        return norm_children_sum(s, t, out);
+        *out = t->sum.n;
+
+        return th_sort_arms(ctx, t->sum.arms, t->sum.n);
 
     default:
         return nullptr;
@@ -1197,6 +1180,24 @@ static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
     *out = n;
 
     return kids;
+}
+
+static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
+{
+    if (t->kind != TH_VAR) {
+        return th_children(s->ctx, t, out);
+    }
+
+    *out = 0;
+
+    if (!core_dict_contains(&s->seen, t)) {
+        t->var.index     = core_dict_len(&s->seen);
+        t->var.has_index = true;
+
+        core_dict_put(&s->seen, t, t);
+    }
+
+    return nullptr;
 }
 
 static void norm_walk(th_norm *s, th_type *root)
@@ -1592,16 +1593,7 @@ th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)
 {
     th_type *t = node(ctx, TH_RECORD);
 
-    t->record.n = n;
-
-    if (n) {
-        t->record.members = th_alloc(ctx, n * sizeof(th_member));
-
-        for (size_t i = 0; i < n; i++) {
-            t->record.members[i].name = th_strdup(ctx, m[i].name);
-            t->record.members[i].type = m[i].type;
-        }
-    }
+    th_record_fill(ctx, t, m, n);
 
     return t;
 }

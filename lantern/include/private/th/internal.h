@@ -253,6 +253,7 @@ int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);
 void th_erase_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
 th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n);
+th_type **th_children(th_ctx *ctx, th_type *t, size_t *out);
 void th_full_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
 void th_env_release_contents(th_env *env);
 

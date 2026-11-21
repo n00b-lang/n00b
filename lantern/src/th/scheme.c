@@ -24,115 +24,20 @@ core_list_decl(th_occ_ptr_t);
 static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                              size_t *out)
 {
-    th_type **kids = nullptr;
-    size_t    n    = 0;
+    if (t->kind != TH_VAR) {
+        return th_children(ctx, t, out);
+    }
+
+    bool found;
 
     *out = 0;
+    core_dict_get(acc, t, &found);
 
-    switch (t->kind) {
-    case TH_VAR: {
-        bool found;
-
-        core_dict_get(acc, t, &found);
-
-        if (!found) {
-            core_dict_put(acc, t, core_dict_len(acc) + 1);
-        }
-        break;
+    if (!found) {
+        core_dict_put(acc, t, core_dict_len(acc) + 1);
     }
 
-    case TH_NAMED:
-        kids = core_alloc_array(th_type *, t->named.nargs);
-
-        for (size_t i = 0; i < t->named.nargs; i++) {
-            if (t->named.args[i].kind == TH_ARG_TYPE) {
-                kids[n++] = t->named.args[i].type;
-            }
-        }
-        break;
-
-    case TH_INDIRECTION:
-        kids      = core_alloc_array(th_type *, 1);
-        kids[n++] = t->ind.referent;
-        break;
-
-    case TH_SEQUENCE:
-        kids      = core_alloc_array(th_type *, 1);
-        kids[n++] = t->seq.elem;
-        break;
-
-    case TH_RECORD: {
-        size_t     rn = t->record.n;
-        th_member *m  = core_alloc_array(th_member, rn);
-
-        memcpy(m, t->record.members, rn * sizeof(th_member));
-        qsort(m, rn, sizeof(th_member), th_cmp_member);
-
-        kids = core_alloc_array(th_type *, rn);
-
-        for (size_t i = 0; i < rn; i++) {
-            kids[n++] = m[i].type;
-        }
-        core_free(m);
-        break;
-    }
-
-    case TH_TRAIT:
-        kids = core_alloc_array(th_type *,
-            t->trait.n + 2 * t->trait.nr);
-        for (size_t i = 0; i < t->trait.n; i++)
-            kids[n++] = t->trait.methods[i].type;
-        for (size_t i = 0; i < t->trait.nr; i++) {
-            kids[n++] = t->trait.requirements[i].subject;
-            if (t->trait.requirements[i].target)
-                kids[n++] = t->trait.requirements[i].target;
-        }
-        break;
-
-    case TH_FUNCTION: {
-        kids      = core_alloc_array(th_type *, t->fn.np + t->fn.nkw + 3);
-        kids[n++] = t->fn.ret;
-
-        for (size_t i = 0; i < t->fn.np; i++) {
-            kids[n++] = t->fn.params[i].type;
-        }
-
-        if (t->fn.rest) {
-            kids[n++] = t->fn.rest->type;
-        }
-
-        if (t->fn.nkw) {
-            th_kwparam *k = core_alloc_array(th_kwparam, t->fn.nkw);
-
-            memcpy(k, t->fn.kw, t->fn.nkw * sizeof(th_kwparam));
-            qsort(k, t->fn.nkw, sizeof(th_kwparam), th_cmp_kw);
-
-            for (size_t i = 0; i < t->fn.nkw; i++) {
-                kids[n++] = k[i].type;
-            }
-            core_free(k);
-        }
-        if (t->fn.error) kids[n++] = t->fn.error;
-        break;
-    }
-
-    case TH_BINDER:
-        kids      = core_alloc_array(th_type *, 1);
-        kids[n++] = t->binder.body;
-        break;
-
-    case TH_SUM:
-        *out = t->sum.n;
-
-        return th_sort_arms(ctx, t->sum.arms, t->sum.n);
-
-    default:
-        return nullptr;
-    }
-
-    *out = n;
-
-    return kids;
+    return nullptr;
 }
 
 static void fv_walk(th_ctx *ctx, th_type *root, core_dict_t *acc,

@@ -1053,21 +1053,16 @@ bool ir_instr_set_binding_initialization(ir_instr_t *instruction,
     if (!instruction || !instruction->block
         || !instruction->block->owner
         || !instruction->block->owner->owner) return false;
-    ir_ctx_t *ctx = instruction->block->owner->owner->ctx;
-    return ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.binding_initialization"),
-               .kind = IR_ANNOT_BOOL,
-               .b = initializes,
-           });
+    return ir_annot_set_bool(instruction->block->owner->owner->ctx,
+                             &instruction->annots,
+                             CORE_STRING_STATIC("ir.binding_initialization"),
+                             initializes);
 }
 
 bool ir_instr_is_binding_initialization(const ir_instr_t *instruction)
 {
-    if (!instruction) return false;
-    ir_annot_t *initializes = ir_annot_get(
-        (ir_annots_t *)&instruction->annots, CORE_STRING_STATIC("ir.binding_initialization"));
-    return initializes && initializes->kind == IR_ANNOT_BOOL
-        && initializes->b;
+    return instruction && ir_annot_bool(
+        &instruction->annots, CORE_STRING_STATIC("ir.binding_initialization"));
 }
 
 bool ir_instr_set_fresh(ir_instr_t *instruction)
@@ -1076,12 +1071,9 @@ bool ir_instr_set_fresh(ir_instr_t *instruction)
                          && instruction->op != IR_OP_ALLOC)
         || !instruction->block || !instruction->block->owner
         || !instruction->block->owner->owner) return false;
-    ir_ctx_t *ctx = instruction->block->owner->owner->ctx;
-    return ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
-               .key = CORE_STRING_STATIC("ir.fresh"),
-               .kind = IR_ANNOT_BOOL,
-               .b = true,
-           });
+    return ir_annot_set_bool(instruction->block->owner->owner->ctx,
+                             &instruction->annots,
+                             CORE_STRING_STATIC("ir.fresh"), true);
 }
 
 static const core_string_t effect_prefix = CORE_STRING_STATIC("ir.effect.");
@@ -1117,9 +1109,7 @@ bool ir_instr_is_fresh(const ir_instr_t *instruction)
 {
     if (!instruction || (instruction->op != IR_OP_COPY
                          && instruction->op != IR_OP_ALLOC)) return false;
-    ir_annot_t *fresh = ir_annot_get(
-        (ir_annots_t *)&instruction->annots, CORE_STRING_STATIC("ir.fresh"));
-    return fresh && fresh->kind == IR_ANNOT_BOOL && fresh->b;
+    return ir_annot_bool(&instruction->annots, CORE_STRING_STATIC("ir.fresh"));
 }
 
 bool ir_instr_allocates_storage(const ir_instr_t *instruction)

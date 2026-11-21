@@ -35,7 +35,9 @@ bool core_object_emit_macho(const core_target_desc_t *target,
             sections[i].size > UINT32_MAX) return false;
     }
 
-    uint32_t *rel_counts = core_alloc_array(uint32_t, section_count);
+    uint32_t *rel_counts = core_object_rel_counts(relocations,
+                                                  relocation_count,
+                                                  section_count);
     uint32_t *rel_written = core_alloc_array(uint32_t, section_count);
     size_t *section_addresses = core_alloc_array(size_t, section_count);
     size_t *section_file_offsets = core_alloc_array(size_t, section_count);
@@ -45,8 +47,6 @@ bool core_object_emit_macho(const core_target_desc_t *target,
     uint8_t *image = NULL;
     bool success = false;
     size_t local_count = 0, external_count = 0;
-    for (size_t i = 0; i < relocation_count; i++)
-        rel_counts[relocations[i].section_index - 1]++;
     for (size_t i = 0; i < symbol_count; i++) {
         if (!symbols[i].exported) local_count++;
         else if (symbols[i].section_index) external_count++;

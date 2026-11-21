@@ -188,36 +188,13 @@ restart:
         core_option_t(core_string_t) id   = scan_identifier(s);
 
         if (core_option_is_set(id)) {
-            core_string_t text = core_option_get(id);
-            int64_t      kw   = name ? PARSE_TOK_OTHER
-                                     : scan_terminal_id(s, text);
-
-            scan_emit_owned(s, kw != PARSE_TOK_OTHER ? (int32_t)kw
-                                                       : PARSE_TOK_IDENTIFIER,
-                            id);
+            scan_emit_word(s, id, name);
 
             return true;
         }
     }
 
-    core_codepoint_t next = scan_peek(s, 1);
-    char            two[3] = {(char)c, (char)next, 0};
-
-    if (next > 0 && next < 128 && !isspace((int)next)) {
-        int64_t op = scan_terminal_id(s, core_string_borrow(two, 2));
-
-        if (op != PARSE_TOK_OTHER && op > 0xFF) {
-            scan_advance_n(s, 2);
-            scan_emit_marked(s, (int32_t)op);
-
-            return true;
-        }
-    }
-
-    scan_advance(s);
-    scan_emit_marked(s, (int32_t)c);
-
-    return true;
+    return scan_emit_operator(s, c, false);
 }
 
 static void learn_ir_tids(parse_grammar_t *g)

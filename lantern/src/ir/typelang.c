@@ -114,36 +114,13 @@ static bool tl_scan(parse_scanner_t *s)
         core_option_t(core_string_t) id = scan_identifier(s);
 
         if (core_option_is_set(id)) {
-            int64_t kw = name ? PARSE_TOK_OTHER
-                              : scan_terminal_id(s, core_option_get(id));
-
-            scan_emit_owned(
-                s, kw != PARSE_TOK_OTHER ? (int32_t)kw : PARSE_TOK_IDENTIFIER,
-                id);
+            scan_emit_word(s, id, name);
 
             return true;
         }
     }
 
-    core_codepoint_t next = scan_peek(s, 1);
-
-    if (next > 0 && next < 128 && !isspace((int)next)) {
-        char two[3] = {(char)c, (char)next, 0};
-
-        int64_t op = scan_terminal_id(s, core_string_borrow(two, 2));
-
-        if (op != PARSE_TOK_OTHER && op > 0xFF) {
-            scan_advance_n(s, 2);
-            scan_emit_marked(s, (int32_t)op);
-
-            return true;
-        }
-    }
-
-    scan_advance(s);
-    scan_emit_marked(s, (int32_t)c);
-
-    return true;
+    return scan_emit_operator(s, c, false);
 }
 
 typedef enum {
@@ -776,38 +753,27 @@ static void *r_field(parse_reduce_t *r)
     return n;
 }
 
-static size_t collect(parse_reduce_t *r, tl_kind want, tl_node **out,
-                      size_t max)
+static parse_reduce_list_t *collect(parse_reduce_t *r, tl_kind want)
 {
-    size_t   n     = 0;
-    tl_node *first = kid(r, 0);
+    parse_reduce_list_t *rest  = parse_reduce_as_list(kid(r, 1));
+    tl_node            **got   = core_alloc_array(tl_node *,
+                                                  rest ? rest->n + 1 : 1);
+    size_t               n     = 0;
+    tl_node             *first = kid(r, 0);
 
-    if (first && first->kind == want && n < max) {
-        out[n++] = first;
+    if (first && first->kind == want) {
+        got[n++] = first;
     }
 
-    parse_reduce_list_t *rest = parse_reduce_as_list(kid(r, 1));
+    for (size_t i = 0; rest && i < rest->n; i++) {
+        tl_node *e = rest->v[i];
 
-    if (rest) {
-        for (size_t i = 0; i < rest->n && n < max; i++) {
-            tl_node *e = rest->v[i];
-
-            if (e && e->kind == want) {
-                out[n++] = e;
-            }
+        if (e && e->kind == want) {
+            got[n++] = e;
         }
     }
 
-    return n;
-}
-
-static void *r_field_list(parse_reduce_t *r)
-{
-    parse_reduce_list_t *source = parse_reduce_as_list(kid(r, 1));
-    size_t               n      = source ? source->n : 0;
-    tl_node            **got    = core_alloc_array(tl_node *, n + 1);
-    n                           = collect(r, TL_MEMBER, got, n + 1);
-    parse_reduce_list_t *list   = parse_reduce_list_new(n);
+    parse_reduce_list_t *list = parse_reduce_list_new(n);
 
     for (size_t i = 0; i < n; i++) {
         list->v[i] = got[i];
@@ -815,6 +781,11 @@ static void *r_field_list(parse_reduce_t *r)
     core_free(got);
 
     return list;
+}
+
+static void *r_field_list(parse_reduce_t *r)
+{
+    return collect(r, TL_MEMBER);
 }
 
 static void *r_field_body(parse_reduce_t *r)
@@ -844,18 +815,7 @@ static void *r_field_body(parse_reduce_t *r)
 
 static void *r_tuple_args(parse_reduce_t *r)
 {
-    parse_reduce_list_t *source = parse_reduce_as_list(kid(r, 1));
-    size_t               n      = source ? source->n : 0;
-    tl_node            **got    = core_alloc_array(tl_node *, n + 1);
-    n                           = collect(r, TL_TYPE, got, n + 1);
-    parse_reduce_list_t *list   = parse_reduce_list_new(n);
-
-    for (size_t i = 0; i < n; i++) {
-        list->v[i] = got[i];
-    }
-    core_free(got);
-
-    return list;
+    return collect(r, TL_TYPE);
 }
 
 static void *r_tuple(parse_reduce_t *r)
@@ -978,18 +938,7 @@ static void *r_param(parse_reduce_t *r)
 
 static void *r_param_list(parse_reduce_t *r)
 {
-    parse_reduce_list_t *source = parse_reduce_as_list(kid(r, 1));
-    size_t               n      = source ? source->n : 0;
-    tl_node            **got    = core_alloc_array(tl_node *, n + 1);
-    n                           = collect(r, TL_PARAM, got, n + 1);
-    parse_reduce_list_t *list   = parse_reduce_list_new(n);
-
-    for (size_t i = 0; i < n; i++) {
-        list->v[i] = got[i];
-    }
-    core_free(got);
-
-    return list;
+    return collect(r, TL_PARAM);
 }
 
 static void *r_function(parse_reduce_t *r)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lib/alloc.h"
 #include "lib/object_emit.h"
 
 bool core_object_emit_elf(const core_target_desc_t *target,
@@ -29,6 +30,16 @@ bool core_object_emit_coff(const core_target_desc_t *target,
                            const core_object_emit_absolute64_t *relocations,
                            size_t relocation_count,
                            uint8_t **out_image, size_t *out_size);
+
+static inline uint32_t *
+core_object_rel_counts(const core_object_emit_absolute64_t *relocations,
+                       size_t relocation_count, size_t section_count)
+{
+    uint32_t *counts = core_alloc_array(uint32_t, section_count);
+    for (size_t i = 0; i < relocation_count; i++)
+        counts[relocations[i].section_index - 1]++;
+    return counts;
+}
 
 static inline bool core_object_size_add(size_t a, size_t b, size_t *out)
 {

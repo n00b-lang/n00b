@@ -74,7 +74,9 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         section_count > ELF_RESERVED_SECTION_START - ELF_USER_SECTION_BASE ||
         symbol_count >= UINT32_MAX - 1) return false;
 
-    uint32_t *rel_counts = core_alloc_array(uint32_t, section_count);
+    uint32_t *rel_counts = core_object_rel_counts(relocations,
+                                                  relocation_count,
+                                                  section_count);
     size_t *data_offsets = core_alloc_array(size_t, section_count);
     size_t *rel_offsets = core_alloc_array(size_t, section_count);
     uint32_t *rel_written = core_alloc_array(uint32_t, section_count);
@@ -84,9 +86,6 @@ bool core_object_emit_elf(const core_target_desc_t *target,
     uint32_t *symbol_map = core_alloc_array(uint32_t, symbol_count);
     uint8_t *image = NULL;
     bool success = false;
-
-    for (size_t i = 0; i < relocation_count; i++)
-        rel_counts[relocations[i].section_index - 1]++;
     size_t rel_section_count = 0, local_count = 1;
     for (size_t i = 0; i < section_count; i++)
         rel_section_count += rel_counts[i] != 0;

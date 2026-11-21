@@ -283,59 +283,43 @@ bool ir_mutability_from_name(core_string_t s, ir_mutability_t *out)
 bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
                              bool is_initializer)
 {
-    if (!ctx || !function) return false;
-    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.initializer"),
-        .kind = IR_ANNOT_BOOL,
-        .b = is_initializer,
-    });
+    return function && ir_annot_set_bool(ctx, &function->annots,
+                                         CORE_STRING_STATIC("ir.initializer"),
+                                         is_initializer);
 }
 
 bool ir_func_is_initializer(const ir_func_t *function)
 {
-    if (!function) return false;
-    ir_annot_t *initializer = ir_annot_get(
-        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.initializer"));
-    return initializer && initializer->kind == IR_ANNOT_BOOL
-        && initializer->b;
+    return function && ir_annot_bool(&function->annots,
+                                     CORE_STRING_STATIC("ir.initializer"));
 }
 
 bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
                                bool enabled)
 {
-    if (!ctx || !function) return false;
-    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.always_inline"),
-        .kind = IR_ANNOT_BOOL,
-        .b = enabled,
-    });
+    return function && ir_annot_set_bool(ctx, &function->annots,
+                                         CORE_STRING_STATIC("ir.always_inline"),
+                                         enabled);
 }
 
 bool ir_func_is_always_inline(const ir_func_t *function)
 {
-    if (!function) return false;
-    ir_annot_t *inline_attr = ir_annot_get(
-        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.always_inline"));
-    return inline_attr && inline_attr->kind == IR_ANNOT_BOOL
-        && inline_attr->b;
+    return function && ir_annot_bool(&function->annots,
+                                     CORE_STRING_STATIC("ir.always_inline"));
 }
 
 bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value)
 {
     ir_annots_t *annots = value ? ir_value_annots(value) : nullptr;
-    return ctx && annots && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.external_writable_storage"), .kind = IR_ANNOT_BOOL,
-        .b = true,
-    });
+    return ir_annot_set_bool(
+        ctx, annots, CORE_STRING_STATIC("ir.external_writable_storage"), true);
 }
 
 bool ir_value_has_external_writable_storage(const ir_value_t *value)
 {
-    ir_annots_t *annots = value ? ir_value_annots((ir_value_t *)value)
-                                : nullptr;
-    ir_annot_t *marker = annots
-        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.external_writable_storage")) : nullptr;
-    return marker && marker->kind == IR_ANNOT_BOOL && marker->b;
+    return value && ir_annot_bool(
+        ir_value_annots((ir_value_t *)value),
+        CORE_STRING_STATIC("ir.external_writable_storage"));
 }
 
 bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,

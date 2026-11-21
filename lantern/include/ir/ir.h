@@ -243,6 +243,9 @@ typedef struct {
 
 bool        ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a);
 ir_annot_t *ir_annot_get(ir_annots_t *m, core_string_t key);
+bool        ir_annot_set_bool(ir_ctx_t *ctx, ir_annots_t *m,
+                              core_string_t key, bool b);
+bool        ir_annot_bool(const ir_annots_t *m, core_string_t key);
 uint32_t    ir_annot_count(const ir_annots_t *m);
 ir_annot_t *ir_annot_at(ir_annots_t *m, uint32_t i);
 void        ir_annot_invalidate(ir_annots_t *m, ir_props_t lost);
