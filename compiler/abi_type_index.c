@@ -65,9 +65,7 @@ add_initializer_types(n00bb_abi_type_index_t *index,
     if (value->kind != IR_GLOBAL_INIT_SEQUENCE
         && value->kind != IR_GLOBAL_INIT_TUPLE
         && value->kind != IR_GLOBAL_INIT_RECORD
-        && value->kind != IR_GLOBAL_INIT_VARIANT
-        && value->kind != IR_GLOBAL_INIT_SET
-        && value->kind != IR_GLOBAL_INIT_DICTIONARY) return true;
+        && value->kind != IR_GLOBAL_INIT_VARIANT) return true;
     if (value->aggregate.count && !value->aggregate.items) return false;
     for (size_t i = 0; i < value->aggregate.count; i++)
         if (!add_initializer_types(index, &value->aggregate.items[i],

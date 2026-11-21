@@ -451,24 +451,6 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
         else core_buffer_puts(b, "?");
         core_buffer_puts(b, "}");
         break;
-    case IR_GLOBAL_INIT_SET:
-        core_buffer_puts(b, "set{");
-        for (size_t i = 0; i < value->aggregate.count; i++) {
-            if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, m, &value->aggregate.items[i]);
-        }
-        core_buffer_puts(b, "}");
-        break;
-    case IR_GLOBAL_INIT_DICTIONARY:
-        core_buffer_puts(b, "dict{");
-        for (size_t i = 0; i + 1 < value->aggregate.count; i += 2) {
-            if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, m, &value->aggregate.items[i]);
-            core_buffer_puts(b, " => ");
-            put_global_init_value(b, m, &value->aggregate.items[i + 1]);
-        }
-        core_buffer_puts(b, "}");
-        break;
     }
 }
 

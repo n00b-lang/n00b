@@ -90,8 +90,6 @@ static const th_builtin_type_t IR_CONSTRUCTORS[] = {
     {CORE_STRING_STATIC("any"), TH_BUILTIN_ANY, 0, nullptr},
     {CORE_STRING_STATIC("array"), TH_BUILTIN_ARRAY, 1, nullptr},
     {CORE_STRING_STATIC("list"), TH_BUILTIN_LIST, 1, nullptr},
-    {CORE_STRING_STATIC("set"), TH_BUILTIN_SET, 1, nullptr},
-    {CORE_STRING_STATIC("dict"), TH_BUILTIN_DICT, 2, nullptr},
 };
 
 void ir_profile_install_builtins(ir_ctx_t *ctx, const ir_profile_t *p)

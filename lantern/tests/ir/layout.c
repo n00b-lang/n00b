@@ -1000,20 +1000,14 @@ static void test_recursive_global_static_initializer(void)
     th_type *integer = th_name(types, S("i64"));
     th_type *string = th_name(types, S("string"));
     th_arg list_arg = {.kind = TH_ARG_TYPE, .type = integer};
-    th_arg dict_args[] = {
-        {.kind = TH_ARG_TYPE, .type = string},
-        {.kind = TH_ARG_TYPE, .type = th_name(types, S("bool"))},
-    };
     th_type *list_type = th_apply(types, S("list"), &list_arg, 1);
-    th_type *dict_type = th_apply(types, S("dict"), dict_args, 2);
     th_type *tuple_type = th_tuple(types,
         (th_type *[]){integer, string}, 2);
     th_type *record_type = th_record(types, (th_member[]){
         {.name = S("enabled"), .type = th_name(types, S("bool"))},
         {.name = S("pair"), .type = tuple_type},
         {.name = S("values"), .type = list_type},
-        {.name = S("labels"), .type = dict_type},
-    }, 4);
+    }, 3);
     ir_global_t *global = ir_global_add(module, S("config"), record_type);
     char pair_text[] = "ok";
     ir_global_init_value_t pair_items[] = {
@@ -1025,10 +1019,6 @@ static void test_recursive_global_static_initializer(void)
         {.kind = IR_GLOBAL_INIT_INT, .integer = ir_lit_of(1)},
         {.kind = IR_GLOBAL_INIT_INT, .integer = ir_lit_of(2)},
     };
-    ir_global_init_value_t dict_items[] = {
-        {.kind = IR_GLOBAL_INIT_STRING, .string = S("ready")},
-        {.kind = IR_GLOBAL_INIT_BOOL, .boolean = true},
-    };
     ir_global_init_value_t fields[] = {
         {.member = S("enabled"), .kind = IR_GLOBAL_INIT_BOOL,
          .boolean = true},
@@ -1036,19 +1026,16 @@ static void test_recursive_global_static_initializer(void)
          .aggregate = {.items = pair_items, .count = 2}},
         {.member = S("values"), .kind = IR_GLOBAL_INIT_SEQUENCE,
          .aggregate = {.items = list_items, .count = 2}},
-        {.member = S("labels"), .kind = IR_GLOBAL_INIT_DICTIONARY,
-         .aggregate = {.items = dict_items, .count = 2}},
     };
     ir_global_init_value_t initializer = {
         .kind = IR_GLOBAL_INIT_RECORD,
-        .aggregate = {.items = fields, .count = 4},
+        .aggregate = {.items = fields, .count = 3},
     };
     ir_global_t *list_global = ir_global_add(module, S("list_value"), list_type);
     th_type *fixed_array_type = ir_type_parse(module, S("array[i64; 2]"));
     ir_global_t *fixed_array_global = fixed_array_type
         ? ir_global_add(module, S("fixed_array"), fixed_array_type) : nullptr;
     ir_global_t *tuple_global = ir_global_add(module, S("tuple_value"), tuple_type);
-    ir_global_t *dict_global = ir_global_add(module, S("dict_value"), dict_type);
     bool list_set = list_global && ir_global_set_static_initializer(
             module, list_global,
             &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_SEQUENCE,
@@ -1057,10 +1044,6 @@ static void test_recursive_global_static_initializer(void)
             module, tuple_global,
             &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_TUPLE,
                 .aggregate = {.items = pair_items, .count = 2}});
-    bool dict_set = dict_global && ir_global_set_static_initializer(
-            module, dict_global,
-            &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_DICTIONARY,
-                .aggregate = {.items = dict_items, .count = 2}});
     check("sequence initializer node matches its type", list_set);
     check("fixed array initializer validates declared extent",
           fixed_array_global
@@ -1075,7 +1058,6 @@ static void test_recursive_global_static_initializer(void)
                   &(ir_global_init_value_t){.kind = IR_GLOBAL_INIT_SEQUENCE,
                       .aggregate = {.items = list_items, .count = 1}}));
     check("tuple initializer node matches its type", tuple_set);
-    check("dictionary initializer node matches its type", dict_set);
     th_type *option_type = th_option(ir_module_types(module),
                                      ir_type_parse(module, S("i64")));
     ir_global_t *present = option_type
@@ -1116,12 +1098,10 @@ static void test_recursive_global_static_initializer(void)
          .aggregate = {.items = pair_items, .count = 2}},
         {.member = S("values"), .kind = IR_GLOBAL_INIT_SEQUENCE,
          .aggregate = {.items = list_items, .count = 2}},
-        {.member = S("labels"), .kind = IR_GLOBAL_INIT_DICTIONARY,
-         .aggregate = {.items = dict_items, .count = 2}},
     };
     ir_global_init_value_t bad_initializer = {
         .kind = IR_GLOBAL_INIT_RECORD,
-        .aggregate = {.items = bad_fields, .count = 4},
+        .aggregate = {.items = bad_fields, .count = 3},
     };
     check("global static initializer rejects recursively mismatched types",
           bad && !ir_global_set_static_initializer(module, bad,

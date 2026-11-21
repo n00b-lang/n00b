@@ -702,11 +702,6 @@ static void test_recursive_global_initializers(void)
         "  global @pair: __ty.tuple[i64, string] = (7, \"seven\")\n"
         "  global @state: (values: list[i64], ready: bool) = "
         "{values = [4, 5], ready = true}\n"
-        "  global @flags: set[i64] = set{1, 2}\n"
-        "  global @empty_flags: set[i64] = set{}\n"
-        "  global @lookup: dict[string, i64] = "
-        "dict{\"one\" => 1, \"two\" => 2}\n"
-        "  global @empty_lookup: dict[string, i64] = dict{}\n"
         "  global @word: string = \"nil\"\n"
         "  global @truth_word: string = \"true\"\n"
         "  global @chosen_type: typespec = type(i64)\n"
@@ -731,13 +726,6 @@ static void test_recursive_global_initializers(void)
         ? ir_global_find(module, S("deferred")) : nullptr;
     ir_global_t *pair = module ? ir_global_find(module, S("pair")) : nullptr;
     ir_global_t *state = module ? ir_global_find(module, S("state")) : nullptr;
-    ir_global_t *flags = module ? ir_global_find(module, S("flags")) : nullptr;
-    ir_global_t *empty_flags = module
-        ? ir_global_find(module, S("empty_flags")) : nullptr;
-    ir_global_t *lookup = module ? ir_global_find(module, S("lookup"))
-                                 : nullptr;
-    ir_global_t *empty_lookup = module
-        ? ir_global_find(module, S("empty_lookup")) : nullptr;
     ir_global_t *word = module ? ir_global_find(module, S("word")) : nullptr;
     ir_global_t *truth_word = module
         ? ir_global_find(module, S("truth_word")) : nullptr;
@@ -813,22 +801,6 @@ static void test_recursive_global_initializers(void)
               && state->static_initializer->aggregate.items[1].kind
                   == IR_GLOBAL_INIT_BOOL
               && state->static_initializer->aggregate.items[1].boolean);
-    check("set and dictionary initializers retain their kinds",
-          flags && lookup && flags->has_static_initializer
-              && flags->static_initializer->kind == IR_GLOBAL_INIT_SET
-              && lookup->has_static_initializer
-              && lookup->static_initializer->kind
-                  == IR_GLOBAL_INIT_DICTIONARY
-              && lookup->static_initializer->aggregate.count == 4);
-    check("empty set and dictionary initializers are represented",
-          empty_flags && empty_lookup
-              && ir_global_static_initializer_valid(module, empty_flags)
-              && ir_global_static_initializer_valid(module, empty_lookup)
-              && empty_flags->static_initializer->kind == IR_GLOBAL_INIT_SET
-              && empty_flags->static_initializer->aggregate.count == 0
-              && empty_lookup->static_initializer->kind
-                  == IR_GLOBAL_INIT_DICTIONARY
-              && empty_lookup->static_initializer->aggregate.count == 0);
     check("variant initializer text retains selected arms",
           selected && small && selected->has_static_initializer
               && small->has_static_initializer

@@ -386,32 +386,6 @@ static bool global_init_value_matches(ir_module_t *module,
         return arm && global_init_value_matches(module, item, arm,
                                                  depth + 1);
     }
-    case IR_GLOBAL_INIT_SET: {
-        const th_type *element = th_builtin_item(types, type,
-                                                 TH_BUILTIN_SET, 0);
-        if (!element || (value->aggregate.count && !value->aggregate.items))
-            return false;
-        for (size_t i = 0; i < value->aggregate.count; i++)
-            if (value->aggregate.items[i].member.data
-                || !global_init_value_matches(module,
-                    &value->aggregate.items[i], element, depth + 1))
-                return false;
-        return true;
-    }
-    case IR_GLOBAL_INIT_DICTIONARY: {
-        const th_type *key = th_builtin_item(types, type, TH_BUILTIN_DICT, 0);
-        const th_type *element = key
-            ? th_builtin_item(types, type, TH_BUILTIN_DICT, 1) : nullptr;
-        size_t count = value->aggregate.count;
-        if (!key || !element || (count & 1u)
-            || (count && !value->aggregate.items)) return false;
-        for (size_t i = 0; i < count; i++)
-            if (value->aggregate.items[i].member.data
-                || !global_init_value_matches(module,
-                    &value->aggregate.items[i], i & 1u ? element : key,
-                    depth + 1)) return false;
-        return true;
-    }
     }
     return false;
 }
@@ -452,9 +426,7 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
-    case IR_GLOBAL_INIT_VARIANT:
-    case IR_GLOBAL_INIT_SET:
-    case IR_GLOBAL_INIT_DICTIONARY: {
+    case IR_GLOBAL_INIT_VARIANT: {
         size_t count = source->aggregate.count;
         if (count && !source->aggregate.items) return false;
         ir_global_init_value_t *items = count

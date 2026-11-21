@@ -313,10 +313,7 @@ ac4debc5ab13a45d	2	pending	lantern/src/ir/archive.c
 48f7e6ccad4c182d	2	pending	lantern/src/ir/build.c
 4d6f28185e595440	2	pending	lantern/src/ir/build.c
 5c7fe2c5e1355491	2	pending	lantern/src/ir/build.c
-60828468387d5ed6	2	pending	lantern/src/ir/build.c
 865de43749f45cab	2	pending	lantern/src/ir/build.c
-86bd85d0ab50c15e	2	pending	lantern/src/ir/build.c
-887c00c8c90945ae	2	pending	lantern/src/ir/build.c
 c6ede0699c848ff6	2	pending	lantern/src/ir/build.c
 e73c1234fdfef151	2	pending	lantern/src/ir/build.c
 047217608c4fd541	3	false-positive	lantern/src/ir/cli.c:363 command registration stubs that differ only in the callbacks they install
@@ -370,8 +367,6 @@ d3c18373b9258b7e	3	pending	lantern/src/ir/pdg_memory.c
 e1a1d81b8d9774a4	2	pending	lantern/src/ir/pdg_memory.c
 e2d1334f72dd920c	2	pending	lantern/src/ir/pdg_memory.c
 f36120f38ab8f944	2	pending	lantern/src/ir/pdg_memory.c
-20084e6dc468c5eb	2	pending	lantern/src/ir/print.c
-d777996f78ab1f97	2	pending	lantern/src/ir/print.c
 0f90fafa2d16fdf0	2	pending	lantern/src/ir/structure.c
 1ee591a0645a3e4b	2	pending	lantern/src/ir/structure.c
 31a8be0c39360d1f	2	pending	lantern/src/ir/structure.c

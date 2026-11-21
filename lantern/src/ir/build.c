@@ -1085,12 +1085,6 @@ static void *r_global_init_tuple(parse_reduce_t *r)
         CORE_STRING_STATIC("global-init-values"));
 }
 
-static void *r_global_init_set(parse_reduce_t *r)
-{
-    return global_init_aggregate(r, IR_GLOBAL_INIT_SET,
-        CORE_STRING_STATIC("global-init-values"));
-}
-
 static void *r_global_init_field(parse_reduce_t *r)
 {
     B       *b = r->thunk;
@@ -1124,30 +1118,6 @@ static void *r_global_init_variant(parse_reduce_t *r)
     value->uval = IR_GLOBAL_INIT_VARIANT;
     value->first = field;
     return value;
-}
-
-static void *r_global_init_pair(parse_reduce_t *r)
-{
-    B       *b = r->thunk;
-    ib_node *pair = nd(b, IB_INIT, cover(r));
-    pair->first = at(r, CORE_STRING_STATIC("global-init-value"));
-    pair->second = nth_named(r, CORE_STRING_STATIC("global-init-value"), 1);
-    return pair;
-}
-
-static void *r_global_init_pairs(parse_reduce_t *r)
-{
-    B       *b = r->thunk;
-    ib_node *n = nd(b, IB_OPERAND, cover(r));
-    n->first = at(r, CORE_STRING_STATIC("global-init-pair"));
-    n->l1 = tail_group(r);
-    return n;
-}
-
-static void *r_global_init_dictionary(parse_reduce_t *r)
-{
-    return global_init_aggregate(r, IR_GLOBAL_INIT_DICTIONARY,
-        CORE_STRING_STATIC("global-init-pairs"));
 }
 
 static void *r_global_init_phase_result(parse_reduce_t *r)
@@ -1265,8 +1235,7 @@ static bool build_global_init_value(B *b, ib_node *source,
         return true;
     }
     case IR_GLOBAL_INIT_SEQUENCE:
-    case IR_GLOBAL_INIT_TUPLE:
-    case IR_GLOBAL_INIT_SET: {
+    case IR_GLOBAL_INIT_TUPLE: {
         size_t count = global_init_item_count(source);
         ir_global_init_value_t *items = ir_alloc(b->ctx,
             count ? count * sizeof(*items) : 1);
@@ -1305,26 +1274,6 @@ static bool build_global_init_value(B *b, ib_node *source,
         item->member = field->member;
         value->aggregate.items = item;
         value->aggregate.count = 1;
-        return true;
-    }
-    case IR_GLOBAL_INIT_DICTIONARY: {
-        size_t pairs = global_init_item_count(source);
-        if (pairs > SIZE_MAX / 2) return false;
-        size_t count = pairs * 2;
-        ir_global_init_value_t *items = ir_alloc(b->ctx,
-            count ? count * sizeof(*items) : 1);
-        if (!items) return false;
-        for (size_t i = 0; i < pairs; i++) {
-            ib_node *pair = global_init_item_at(source, i);
-            if (!pair || !pair->first || !pair->second
-                || !build_global_init_value(b, pair->first, &items[i * 2],
-                                            depth + 1)
-                || !build_global_init_value(b, pair->second,
-                                            &items[i * 2 + 1], depth + 1))
-                return false;
-        }
-        value->aggregate.items = items;
-        value->aggregate.count = count;
         return true;
     }
     }
@@ -2769,8 +2718,6 @@ static bool resolve_static_initializer_symbols(B *b,
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
     case IR_GLOBAL_INIT_VARIANT:
-    case IR_GLOBAL_INIT_SET:
-    case IR_GLOBAL_INIT_DICTIONARY:
         if (value->aggregate.count && !value->aggregate.items) return false;
         for (size_t i = 0; i < value->aggregate.count; i++)
             if (!resolve_static_initializer_symbols(
@@ -2917,7 +2864,6 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, core_string_t text, int32_t file,
         r_global_init_sequence);
     reg(&b, w, CORE_STRING_STATIC("global-init-tuple"),
         r_global_init_tuple);
-    reg(&b, w, CORE_STRING_STATIC("global-init-set"), r_global_init_set);
     reg(&b, w, CORE_STRING_STATIC("global-init-field"), r_global_init_field);
     reg(&b, w, CORE_STRING_STATIC("global-init-fields"),
         r_global_init_fields);
@@ -2925,11 +2871,6 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, core_string_t text, int32_t file,
         r_global_init_record);
     reg(&b, w, CORE_STRING_STATIC("global-init-variant"),
         r_global_init_variant);
-    reg(&b, w, CORE_STRING_STATIC("global-init-pair"), r_global_init_pair);
-    reg(&b, w, CORE_STRING_STATIC("global-init-pairs"),
-        r_global_init_pairs);
-    reg(&b, w, CORE_STRING_STATIC("global-init-dictionary"),
-        r_global_init_dictionary);
     reg(&b, w, CORE_STRING_STATIC("global-init-phase-result"),
         r_global_init_phase_result);
     reg(&b, w, CORE_STRING_STATIC("global-init-type"), r_global_init_type);
