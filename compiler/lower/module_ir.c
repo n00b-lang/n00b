@@ -1582,11 +1582,16 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 bool polymorphic_contract = symbol->callable_contract
                     && !th_is_closed(state->types,
                                      symbol->callable_contract);
+                th_type *semantic = polymorphic_contract
+                    && !state->interface_module
+                    ? function_semantic_contract(grammar, unit, symbol)
+                    : nullptr;
+                if (semantic && th_hash(state->types, semantic)
+                        == th_hash(state->types, symbol->callable_contract))
+                    semantic = nullptr;
                 th_type *ir_callable_contract = th_func_collect_rest(
                     state->types,
-                    polymorphic_contract && !state->interface_module
-                        ? function_semantic_contract(grammar, unit, symbol)
-                        : symbol->callable_contract);
+                    semantic ? semantic : symbol->callable_contract);
                 if (new_function && function && polymorphic_contract
                     && (!ir_callable_contract
                         || !ir_func_set_callable_contract(
