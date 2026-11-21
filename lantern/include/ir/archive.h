@@ -10,13 +10,13 @@ typedef ir_module_t *(*ir_module_lookup_fn)(void *context, core_string_t name);
 typedef struct {
     const uint8_t *data;
     size_t length;
+    const th_type_reader_t *types;
 } ir_archive_input_t;
 
-bool ir_modules_save(ir_module_t *const *modules, size_t count,
-                     core_buffer_t *out);
 bool ir_modules_save_references(ir_module_t *const *modules, size_t count,
                                 core_buffer_t *out,
-                                core_buffer_t *references);
+                                core_buffer_t *references,
+                                th_type_writer_t *types);
 bool ir_modules_load(ir_ctx_t *ctx, const uint8_t *data, size_t length,
                      const ir_profile_t *const *profiles,
                      size_t profile_count, ir_module_lookup_fn lookup,

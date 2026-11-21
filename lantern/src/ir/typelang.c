@@ -1312,29 +1312,6 @@ th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
     return src.data ? run(ctx, src, nullptr, err) : nullptr;
 }
 
-th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
-{
-    if (!types || !spec.data) {
-        return nullptr;
-    }
-
-    th_type *known = th_text_type(types, spec);
-    if (known) {
-        return known;
-    }
-
-    core_string_t err = {};
-    th_type      *t   = run(types, spec, nullptr, &err);
-
-    core_free(err.data);
-
-    if (t && th_is_closed(types, t)) {
-        th_remember_text_type(types, spec, t);
-    }
-
-    return t;
-}
-
 th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
                                   size_t *consumed, core_string_t *err)
 {

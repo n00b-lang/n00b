@@ -273,6 +273,32 @@ lookup_text(void *context, uint32_t reference)
         ? table->texts[reference - 1] : (core_string_t){0};
 }
 
+static ir_summary_t *round_trip(ir_summaries_t *summaries, ir_func_t *f,
+                                const ir_summary_t *summary)
+{
+    text_table_t table = {0};
+    th_ctx *ctx = ir_module_types(f->owner);
+    ir_summary_texts_t texts = {
+        .intern = intern_text, .lookup = lookup_text, .context = &table,
+        .types = th_type_writer_new(ctx),
+    };
+    core_buffer_t encoded = {0};
+    core_buffer_t types = {0};
+    bool ok = ir_summary_encode_with(summary, &encoded, &texts)
+        && th_type_writer_finish(texts.types, &types);
+    th_type_reader_t *reader = ok ? th_type_reader_open(ctx,
+        (const uint8_t *)types.data, types.byte_len, nullptr) : nullptr;
+    texts.reader = reader;
+    ir_summary_t *decoded = reader ? ir_summary_decode_with(summaries, f,
+        (const uint8_t *)encoded.data, encoded.byte_len, nullptr, &texts)
+        : nullptr;
+    th_type_reader_free(reader);
+    th_type_writer_free(texts.types);
+    core_buffer_release(&types);
+    core_buffer_release(&encoded);
+    return decoded;
+}
+
 static th_type *heap_type(const ir_func_t *f, const ir_summary_t *summary)
 {
     th_type *type = nullptr;
@@ -308,35 +334,53 @@ static void test_decoded_summaries_keep_heap_types(void)
     ir_func_t *f = ir_func_at(m, 0);
     ir_summaries_t *summaries = ir_summaries_compute(&f, 1, nullptr);
     ir_summary_t *summary = ir_summary_of(summaries, f);
-    core_buffer_t encoded = {0};
-    check("the summary encodes", ir_summary_encode(summary, &encoded));
-    ir_summary_t *decoded = ir_summary_decode(summaries, f,
-        (const uint8_t *)encoded.data, encoded.byte_len, nullptr);
+    ir_summary_t *decoded = round_trip(summaries, f, summary);
     th_type *heap = heap_type(f, summary);
     th_type *kept = heap_type(f, decoded);
     th_ctx *types = ir_module_types(m);
     check("the summary writes a typed heap place", heap != nullptr);
     check("the decoded heap place keeps its type",
           kept && th_hash(types, kept) == th_hash(types, heap));
-    text_table_t table = {0};
-    ir_summary_texts_t texts = {
-        .intern = intern_text, .lookup = lookup_text, .context = &table,
+    ir_summaries_free(summaries);
+    ir_ctx_free(ctx);
+}
+
+static void test_summary_types_keep_keyword_field_names(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = ir_module_new(ctx, S("m"), &ir_profile_bce, S("test"));
+    th_ctx *types = ir_ctx_types(ctx);
+    th_type *i32 = ir_type_parse(m, S("i32"));
+    th_member members[] = {
+        {S("set"), i32}, {S("t"), i32}, {S("in"), i32},
     };
-    core_buffer_t referenced = {0};
-    check("the summary encodes with a text table",
-          ir_summary_encode_with(summary, &referenced, &texts)
-          && table.count > 0);
-    ir_summary_t *resolved = ir_summary_decode_with(summaries, f,
-        (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
-        &texts);
-    th_type *named = heap_type(f, resolved);
-    check("a table-encoded heap place keeps its type",
-          named && th_hash(types, named) == th_hash(types, heap));
-    check("table encodings need a table to decode",
-          !ir_summary_decode(summaries, f, (const uint8_t *)referenced.data,
-                             referenced.byte_len, nullptr));
-    core_buffer_release(&referenced);
-    core_buffer_release(&encoded);
+    th_type *record = th_record(types, members, 3);
+    th_type *place = th_ind(types, 0, record);
+    th_param parameter = {.mode = TH_IN, .type = th_ind(types, 0, place)};
+    ir_func_t *f = ir_func_add(m, S("f"), th_func(types, ir_type_parse(m,
+        S("void")), &parameter, 1, nullptr, nullptr, 0), IR_LINK_EXTERNAL);
+    ir_value_t *pp = ir_param_add(f, S("pp"), parameter.type);
+    ir_block_t *entry = ir_block_add(f, S("entry"));
+    ir_instr_t *p = ir_instr_add(entry, IR_OP_LOAD);
+    ir_instr_t *v = ir_instr_add(entry, IR_OP_LOAD);
+    ir_instr_t *store = ir_instr_add(entry, IR_OP_STORE);
+    check("the keyword-field function builds",
+          pp && p && v && store && ir_instr_add(entry, IR_OP_RETURN)
+              && ir_instr_set_dest(p, S("p"), place)
+              && ir_instr_operand_value(p, pp)
+              && ir_instr_set_dest(v, S("v"), record)
+              && ir_instr_operand_value(v, p->dest)
+              && ir_instr_operand_value(store, p->dest)
+              && ir_instr_operand_value(store, v->dest));
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
+    ir_summaries_t *summaries = ir_summaries_compute(&f, 1, nullptr);
+    ir_summary_t *summary = ir_summary_of(summaries, f);
+    ir_summary_t *decoded = round_trip(summaries, f, summary);
+    th_type *heap = heap_type(f, summary);
+    th_type *kept = heap_type(f, decoded);
+    check("a heap place whose fields are named set, t and in round-trips",
+          heap && kept && th_hash(types, kept) == th_hash(types, heap)
+              && th_hash(types, heap) == th_hash(types, record));
     ir_summaries_free(summaries);
     ir_ctx_free(ctx);
 }
@@ -369,39 +413,12 @@ static void test_named_effects_survive_encoding(void)
           && core_string_eq(ir_summary_effect_at(summary, 1), S("tainted")));
     check("an unnamed effect is refused",
           !ir_summary_add_effect(summary, (core_string_t){0}));
-    core_buffer_t encoded = {0};
-    check("named effects encode", ir_summary_encode(summary, &encoded));
-    ir_summary_t *decoded = ir_summary_decode(summaries, f,
-        (const uint8_t *)encoded.data, encoded.byte_len, nullptr);
+    ir_summary_t *decoded = round_trip(summaries, f, summary);
     check("named effects decode",
           decoded && ir_summary_effect_count(decoded) == 2
           && ir_summary_has_effect(decoded, S("audited"))
           && ir_summary_has_effect(decoded, S("tainted"))
           && !ir_summary_has_effect(decoded, S("logged")));
-    text_table_t table = {0};
-    ir_summary_texts_t texts = {
-        .intern = intern_text, .lookup = lookup_text, .context = &table,
-    };
-    core_buffer_t referenced = {0};
-    ir_summary_t *resolved = ir_summary_encode_with(summary, &referenced,
-                                                    &texts)
-        ? ir_summary_decode_with(summaries, f,
-              (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
-              &texts)
-        : nullptr;
-    check("named effects survive a text table",
-          resolved && ir_summary_has_effect(resolved, S("tainted")));
-    core_buffer_t first = {0};
-    core_buffer_t second = {0};
-    check("the identity encoding covers named effects",
-          ir_summary_encode_identity(summary, &first)
-          && ir_summary_encode_identity(decoded, &second)
-          && core_string_eq(core_buffer_string(&first),
-                            core_buffer_string(&second)));
-    core_buffer_release(&first);
-    core_buffer_release(&second);
-    core_buffer_release(&referenced);
-    core_buffer_release(&encoded);
     ir_summaries_free(summaries);
     ir_ctx_free(ctx);
 }
@@ -414,6 +431,7 @@ int main(void)
     test_monotone_loop_checks_move_before_the_loop();
     test_trap_summaries_leave_out_proven_checks();
     test_decoded_summaries_keep_heap_types();
+    test_summary_types_keep_keyword_field_names();
     test_named_effects_survive_encoding();
     return report("IR ABCD");
 }

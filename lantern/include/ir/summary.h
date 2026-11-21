@@ -201,12 +201,6 @@ typedef struct {
 } ir_summary_resolver_t;
 bool          ir_summary_encode(const ir_summary_t *summary,
                                 core_buffer_t *out);
-bool          ir_summary_encode_identity(const ir_summary_t *summary,
-                                         core_buffer_t *out);
-ir_summary_t *ir_summary_decode(ir_summaries_t *summaries,
-                                const ir_func_t *function,
-                                const uint8_t *data, size_t size,
-                                const ir_summary_resolver_t *resolver);
 typedef const ir_module_t *(*ir_summary_module_fn)(void *context,
                                                    core_string_t name);
 typedef bool (*ir_summary_body_fn)(void *context, const ir_func_t *function,
@@ -226,6 +220,8 @@ struct ir_summary_texts_t {
     uint32_t (*intern)(void *context, core_string_t text);
     core_string_t (*lookup)(void *context, uint32_t reference);
     void *context;
+    th_type_writer_t *types;
+    const th_type_reader_t *reader;
 };
 bool          ir_summary_encode_with(const ir_summary_t *summary,
                                      core_buffer_t *out,

@@ -656,6 +656,7 @@ typedef struct {
     entry_state_t state;
     entry_state_t load;
     th_env *interface;
+    th_type_reader_t *types;
 } cache_entry_t;
 core_list_decl(cache_entry_t);
 
@@ -677,6 +678,7 @@ typedef struct {
     core_list_t(core_string_t) names;
     core_buffer_t summaries[N00BB_PHASE_FINAL];
     bool captured[N00BB_PHASE_FINAL];
+    th_type_writer_t *types;
 } cache_snapshot_t;
 core_list_decl(cache_snapshot_t);
 
@@ -695,6 +697,7 @@ snapshot_release(cache_snapshot_t *snapshot)
     core_list_free(snapshot->modules);
     for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
         core_buffer_release(&snapshot->summaries[p]);
+    th_type_writer_free(snapshot->types);
 }
 
 static void
@@ -708,7 +711,7 @@ capture_snapshot(cache_snapshot_t *snapshot, n00bb_link_analysis_t *analysis,
         core_buffer_t encoded = {0};
         if (n00bb_encode_stored_summaries(analysis, summaries,
                                           snapshot->modules.data[m], phase,
-                                          &encoded)) {
+                                          snapshot->types, &encoded)) {
             put_text(out, snapshot->names.data[m]);
             put_bytes(out, encoded.data, encoded.byte_len);
         }
@@ -898,6 +901,7 @@ entry_release(cache_entry_t *entry)
     core_list_free(entry->references);
     sections_release(&entry->sections);
     if (entry->interface) th_env_free(entry->interface);
+    th_type_reader_free(entry->types);
 }
 
 static bool
@@ -1826,15 +1830,16 @@ n00bb_cache_unused_facts(const n00bb_cache_t *cache, core_string_t module,
 bool
 n00bb_cache_module_summaries(const n00bb_cache_t *cache, core_string_t module,
                              core_string_t kind, const uint8_t **data,
-                             size_t *length)
+                             size_t *length, const th_type_reader_t **types)
 {
     const cache_entry_t *entry = nullptr;
     const cache_member_t *member = loaded_member(cache, module, &entry);
     const cache_section_t *section = member
         ? phase_section(entry, kind, member->name) : nullptr;
-    if (!section) return false;
+    if (!section || !entry->types) return false;
     *data   = section->data;
     *length = section->length;
+    *types  = entry->types;
     return true;
 }
 
@@ -1907,11 +1912,18 @@ n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,
             || !entry_used(entry, used, context)) continue;
         const cache_section_t *ir = phase_section(entry,
             CORE_STRING_STATIC("ir"), (core_string_t){0});
-        if (!ir) {
+        const cache_section_t *types = phase_section(entry,
+            CORE_STRING_STATIC("types"), (core_string_t){0});
+        if (types && !entry->types)
+            entry->types = th_type_reader_open(ir_ctx_types(cache->ir_context),
+                                               types->data, types->length,
+                                               nullptr);
+        if (!ir || !entry->types) {
             core_free(inputs);
             return false;
         }
-        inputs[inputs_used++] = (ir_archive_input_t){ir->data, ir->length};
+        inputs[inputs_used++] = (ir_archive_input_t){ir->data, ir->length,
+                                                     entry->types};
         module_count += entry->members.len;
     }
     ir_module_t **modules = core_alloc_array(ir_module_t *,
@@ -2241,6 +2253,7 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
             .inlined = core_list_new(core_string_t),
             .modules = core_list_new(cache_module_ptr_t),
             .names   = core_list_new(core_string_t),
+            .types   = th_type_writer_new(ir_module_types(modules[0])),
         };
         for (size_t m = 0; m < scc->members.len; m++) {
             core_list_push(snapshot.modules, modules[m]);
@@ -2261,7 +2274,8 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
                     ->module.identifier));
         bool saved = snapshot.module.data
             && ir_modules_save_references(modules, scc->members.len,
-                                          &snapshot.ir, &snapshot.references);
+                                          &snapshot.ir, &snapshot.references,
+                                          snapshot.types);
         core_free(modules);
         if (saved) core_list_push(cache->snapshots, snapshot);
         else snapshot_release(&snapshot);
@@ -2544,6 +2558,12 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     phase_section_name(&name, CORE_STRING_STATIC("ir"));
     ok = ok && sections_set(&sections, core_buffer_string(&name), ir->data,
                             ir->byte_len);
+    core_buffer_t table = {0};
+    ok = ok && th_type_writer_finish(snapshot->types, &table);
+    phase_section_name(&name, CORE_STRING_STATIC("types"));
+    ok = ok && sections_set(&sections, core_buffer_string(&name),
+                            (const uint8_t *)table.data, table.byte_len);
+    core_buffer_release(&table);
     phase_section_name(&name, CORE_STRING_STATIC("interface"));
     ok = ok && sections_set(&sections, core_buffer_string(&name),
                             scc->interface, scc->interface_bytes);

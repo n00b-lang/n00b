@@ -543,21 +543,16 @@ w_function_details(writer_t *w, ir_func_t *function)
 }
 
 bool
-ir_modules_save(ir_module_t *const *modules, size_t count,
-                core_buffer_t *out)
-{
-    return ir_modules_save_references(modules, count, out, nullptr);
-}
-
-bool
 ir_modules_save_references(ir_module_t *const *modules, size_t count,
-                           core_buffer_t *out, core_buffer_t *references)
+                           core_buffer_t *out, core_buffer_t *references,
+                           th_type_writer_t *types)
 {
     if (!out || (count && !modules)) return false;
     core_buffer_t body = {0};
     writer_t w = {
         .out = &body,
-        .types = th_type_writer_new(count ? modules[0]->ctx->types : nullptr),
+        .types = types ? types : th_type_writer_new(count
+            ? modules[0]->ctx->types : nullptr),
         .modules = modules,
         .module_count = count, .references = references,
     };
@@ -627,9 +622,9 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
         w_annots(&w, &modules[m]->annots);
     }
     bool ok = !w.failed;
-    core_buffer_t types = {0};
-    if (ok) ok = th_type_writer_finish(w.types, &types);
-    th_type_writer_free(w.types);
+    core_buffer_t table = {0};
+    if (ok && !types) ok = th_type_writer_finish(w.types, &table);
+    if (!types) th_type_writer_free(w.types);
     if (ok) {
         uint8_t header[8];
         for (int i = 0; i < 4; i++)
@@ -637,10 +632,10 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
         for (int i = 0; i < 4; i++)
             header[4 + i] = (uint8_t)(IR_ARCHIVE_VERSION >> (8 * i));
         core_buffer_append(out, (const char *)header, 8);
-        core_buffer_append(out, types.data, types.byte_len);
+        core_buffer_append(out, table.data, table.byte_len);
         core_buffer_append(out, body.data, body.byte_len);
     }
-    core_buffer_release(&types);
+    core_buffer_release(&table);
     core_buffer_release(&body);
     return ok;
 }
@@ -653,7 +648,8 @@ struct reader {
     size_t                    length;
     size_t                    at;
     bool                      failed;
-    th_type_reader_t         *types;
+    const th_type_reader_t   *types;
+    th_type_reader_t         *owned;
     ir_module_t             **modules;
     size_t                    count;
     size_t                   *slot_counts;
@@ -1480,8 +1476,9 @@ reader_open(reader_t *r, ir_ctx_t *ctx, const ir_archive_input_t *input,
     if (magic != IR_ARCHIVE_MAGIC || version != IR_ARCHIVE_VERSION)
         return false;
     size_t consumed = 0;
-    r->types = th_type_reader_open(ir_ctx_types(ctx), data + 8, length - 8,
-                                   &consumed);
+    r->owned = input->types ? nullptr : th_type_reader_open(ir_ctx_types(ctx),
+        data + 8, length - 8, &consumed);
+    r->types = input->types ? input->types : r->owned;
     if (!r->types) return false;
     r->ctx = ctx;
     r->data = data;
@@ -1499,7 +1496,7 @@ reader_open(reader_t *r, ir_ctx_t *ctx, const ir_archive_input_t *input,
 static void
 reader_close(reader_t *r, size_t modules)
 {
-    if (r->types) th_type_reader_free(r->types);
+    th_type_reader_free(r->owned);
     for (size_t m = 0; r->slot_types && m < modules; m++)
         core_free(r->slot_types[m]);
     core_free(r->slot_types);

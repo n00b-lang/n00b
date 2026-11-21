@@ -1,7 +1,5 @@
 #include "internal.h"
 
-enum { SUMMARY_CODEC_VERSION = 1 };
-
 static const core_string_t callbacks_prefix =
     CORE_STRING_STATIC("ir.callbacks:");
 
@@ -58,8 +56,12 @@ typedef struct {
     bool           failed;
     const ir_summary_texts_t    *texts;
     const ir_summary_resolver_t *resolver;
-    th_ctx        *types;
 } summary_reader_t;
+
+typedef struct {
+    th_ctx           *ctx;
+    th_type_writer_t *writer;
+} type_sink_t;
 
 static void
 put_u8(core_buffer_t *out, uint8_t value)
@@ -73,6 +75,24 @@ put_u32(core_buffer_t *out, uint32_t value)
     uint8_t bytes[4];
     for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
     core_buffer_append(out, (const char *)bytes, 4);
+}
+
+static void
+put_u64(core_buffer_t *out, uint64_t value)
+{
+    put_u32(out, (uint32_t)value);
+    put_u32(out, (uint32_t)(value >> 32));
+}
+
+static void
+put_type(core_buffer_t *out, const type_sink_t *sink, th_type *type)
+{
+    if (sink && sink->writer)
+        put_u32(out, type ? th_type_writer_add(sink->writer,
+            th_is_closed(sink->ctx, type) ? type
+                : th_type_clone_fresh(sink->ctx, type)) : 0);
+    else
+        put_u64(out, type && sink && sink->ctx ? th_hash(sink->ctx, type) : 0);
 }
 
 static void
@@ -102,14 +122,13 @@ put_global(core_buffer_t *out, const ir_summary_texts_t *texts,
 
 
 static void
-put_path(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
-         const ir_spath_t *path)
+put_path(core_buffer_t *out, const ir_summary_texts_t *texts,
+         const type_sink_t *types, const ir_spath_t *path)
 {
     put_u8(out, path->root);
     put_u32(out, path->param);
     put_global(out, texts, named_root(path->root) ? path->global : nullptr);
-    put_text(out, texts, types && path->type
-        ? ir_types_text(types, path->type) : (core_string_t){0});
+    put_type(out, types, path->type);
     put_u8(out, path->flags);
     put_u8(out, path->output);
     put_u32(out, path->depth);
@@ -118,8 +137,8 @@ put_path(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
 }
 
 static void
-put_paths(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
-          const path_list_t *paths)
+put_paths(core_buffer_t *out, const ir_summary_texts_t *texts,
+          const type_sink_t *types, const path_list_t *paths)
 {
     put_u32(out, (uint32_t)paths->len);
     for (size_t i = 0; i < paths->len; i++)
@@ -175,9 +194,20 @@ dest_flows(const flow_dest_t *dest)
 }
 
 static void
-put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
-          const flow_table_t *flows)
+put_dest_bits(core_buffer_t *out, const flow_dest_t *dest,
+              const uint32_t *rank, size_t count)
 {
+    put_ranked_bits(out, &dest->data, rank, count);
+    put_ranked_bits(out, &dest->control, rank, count);
+    put_ranked_bits(out, &dest->alias, rank, count);
+    put_ranked_bits(out, &dest->copy, rank, count);
+}
+
+static void
+put_flows(core_buffer_t *out, const ir_summary_texts_t *texts,
+          const type_sink_t *types, const flow_table_t *flows)
+{
+    type_sink_t     key     = {types ? types->ctx : nullptr, nullptr};
     size_t          count   = flows->sources.len;
     encoded_item_t *sources = core_alloc_array(encoded_item_t, count + 1);
     uint32_t       *rank    = core_alloc_array(uint32_t, count + 1);
@@ -197,7 +227,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     for (size_t s = 0; s < count; s++) {
         if (!bit_has(&referenced, (uint32_t)s)) continue;
         sources[used].index = s;
-        put_path(&sources[used].bytes, texts, types, flows->sources.data[s]);
+        put_path(&sources[used].bytes, nullptr, &key, flows->sources.data[s]);
         used++;
     }
     if (used > 1)
@@ -205,8 +235,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     put_u32(out, (uint32_t)used);
     for (size_t k = 0; k < used; k++) {
         rank[sources[k].index] = (uint32_t)k;
-        core_buffer_append(out, sources[k].bytes.data,
-                           sources[k].bytes.byte_len);
+        put_path(out, texts, types, flows->sources.data[sources[k].index]);
     }
     encoded_item_t *dests = core_alloc_array(encoded_item_t,
                                              flows->dests.len + 1);
@@ -214,18 +243,17 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
     for (size_t d = 0; d < flows->dests.len; d++) {
         const flow_dest_t *dest = &flows->dests.data[d];
         if (!dest_flows(dest)) continue;
-        core_buffer_t *bytes = &dests[kept].bytes;
-        put_path(bytes, texts, types, dest->to);
-        put_ranked_bits(bytes, &dest->data, rank, count);
-        put_ranked_bits(bytes, &dest->control, rank, count);
-        put_ranked_bits(bytes, &dest->alias, rank, count);
-        put_ranked_bits(bytes, &dest->copy, rank, count);
+        put_path(&dests[kept].bytes, nullptr, &key, dest->to);
+        put_dest_bits(&dests[kept].bytes, dest, rank, count);
         dests[kept++].index = d;
     }
     if (kept > 1) qsort(dests, kept, sizeof(encoded_item_t), compare_encoded);
     put_u32(out, (uint32_t)kept);
-    for (size_t k = 0; k < kept; k++)
-        core_buffer_append(out, dests[k].bytes.data, dests[k].bytes.byte_len);
+    for (size_t k = 0; k < kept; k++) {
+        const flow_dest_t *dest = &flows->dests.data[dests[k].index];
+        put_path(out, texts, types, dest->to);
+        put_dest_bits(out, dest, rank, count);
+    }
     for (size_t k = 0; k < used; k++) core_buffer_release(&sources[k].bytes);
     for (size_t k = 0; k < kept; k++) core_buffer_release(&dests[k].bytes);
     core_list_free(referenced);
@@ -243,18 +271,17 @@ heap_order(const void *left, const void *right)
 
 static bool
 encode_summary(const ir_summary_t *summary, core_buffer_t *out,
-               const ir_summary_texts_t *texts, bool positions)
+               const ir_summary_texts_t *texts)
 {
     if (!summary || !out || (texts && !texts->intern)) return false;
-    th_ctx *types = summary->function && summary->function->owner
-        ? ir_module_types(summary->function->owner) : nullptr;
-    core_buffer_append(out, !positions ? "IRSI" : texts ? "IRSN" : "IRSM",
-                       4);
-    put_u8(out, SUMMARY_CODEC_VERSION);
+    type_sink_t sink = {summary->function && summary->function->owner
+        ? ir_module_types(summary->function->owner) : nullptr,
+        texts ? texts->types : nullptr};
+    const type_sink_t *types = &sink;
     put_u32(out, summary->flags);
     put_u8(out, summary->traps);
-    put_u32(out, positions ? (uint32_t)summary->trap_sites.len : 0);
-    for (size_t i = 0; positions && i < summary->trap_sites.len; i++) {
+    put_u32(out, (uint32_t)summary->trap_sites.len);
+    for (size_t i = 0; i < summary->trap_sites.len; i++) {
         const ir_strap_site_t *site = &summary->trap_sites.data[i];
         put_u8(out, site->kind);
         put_u32(out, site->line);
@@ -275,8 +302,8 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
                           | summary->returns_external << 1));
     put_flows(out, texts, types, &summary->flows[IR_SFLOW_RESULTS]);
     put_flows(out, texts, types, &summary->flows[IR_SFLOW_STORES]);
-    put_u32(out, positions ? (uint32_t)summary->witnesses.len : 0);
-    for (size_t i = 0; positions && i < summary->witnesses.len; i++) {
+    put_u32(out, (uint32_t)summary->witnesses.len);
+    for (size_t i = 0; i < summary->witnesses.len; i++) {
         const ir_switness_t *witness = &summary->witnesses.data[i];
         put_u32(out, witness->flag);
         put_text(out, texts, witness->module);
@@ -293,13 +320,12 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
     for (size_t i = 0; i < heap_count; i++) {
         const ir_sheap_t *heap = &heaps[i];
         put_u32(out, heap->origin);
-        put_text(out, texts, types && heap->type
-            ? ir_types_text(types, heap->type) : (core_string_t){0});
+        put_type(out, types, heap->type);
         put_u8(out, heap->elements);
-        put_text(out, texts, positions ? heap->module : (core_string_t){0});
-        put_text(out, texts, positions ? heap->name : (core_string_t){0});
-        put_u32(out, positions ? heap->line : 0);
-        put_u32(out, positions ? heap->column : 0);
+        put_text(out, texts, heap->module);
+        put_text(out, texts, heap->name);
+        put_u32(out, heap->line);
+        put_u32(out, heap->column);
     }
     core_free(heaps);
     return true;
@@ -309,8 +335,9 @@ static uint64_t
 points_to_content(const ir_summary_t *summary)
 {
     if (summary->stored) return summary->stable;
-    th_ctx *types = summary->function && summary->function->owner
-        ? ir_module_types(summary->function->owner) : nullptr;
+    type_sink_t sink = {summary->function && summary->function->owner
+        ? ir_module_types(summary->function->owner) : nullptr, nullptr};
+    const type_sink_t *types = &sink;
     core_buffer_t out = {0};
     put_u32(&out, summary->flags
         & (IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN | IR_SUMMARY_MAY_FAIL
@@ -324,8 +351,7 @@ points_to_content(const ir_summary_t *summary)
     for (size_t i = 0; i < summary->heaps.len; i++) {
         const ir_sheap_t *heap = &summary->heaps.data[i];
         put_u32(&out, heap->origin);
-        put_text(&out, nullptr, types && heap->type
-            ? ir_types_text(types, heap->type) : (core_string_t){0});
+        put_type(&out, types, heap->type);
         put_u8(&out, heap->elements);
         put_text(&out, nullptr, heap->module);
         put_text(&out, nullptr, heap->name);
@@ -341,20 +367,14 @@ points_to_content(const ir_summary_t *summary)
 bool
 ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
 {
-    return encode_summary(summary, out, nullptr, true);
-}
-
-bool
-ir_summary_encode_identity(const ir_summary_t *summary, core_buffer_t *out)
-{
-    return encode_summary(summary, out, nullptr, false);
+    return encode_summary(summary, out, nullptr);
 }
 
 bool
 ir_summary_encode_with(const ir_summary_t *summary, core_buffer_t *out,
                        const ir_summary_texts_t *texts)
 {
-    return texts && encode_summary(summary, out, texts, true);
+    return texts && encode_summary(summary, out, texts);
 }
 
 static uint8_t
@@ -375,25 +395,23 @@ get_u32(summary_reader_t *r)
     return value;
 }
 
+static th_type *
+get_type(summary_reader_t *r)
+{
+    uint32_t index = get_u32(r);
+    th_type *type = index ? th_type_reader_get(r->texts->reader, index)
+                          : nullptr;
+    if (index && !type) r->failed = true;
+    return type;
+}
+
 static core_string_t
 get_text(summary_reader_t *r)
 {
-    if (r->texts) {
-        uint32_t reference = get_u32(r);
-        return reference && !r->failed
-            ? r->texts->lookup(r->texts->context, reference)
-            : (core_string_t){0};
-    }
-    uint32_t length = get_u32(r);
-    if (r->failed || length > r->size - r->at) {
-        r->failed = true;
-        return (core_string_t){0};
-    }
-    core_string_t text = length
-        ? core_string_borrow((const char *)r->data + r->at, length)
+    uint32_t reference = get_u32(r);
+    return reference && !r->failed
+        ? r->texts->lookup(r->texts->context, reference)
         : (core_string_t){0};
-    r->at += length;
-    return text;
 }
 
 static const ir_global_t *
@@ -413,9 +431,7 @@ get_path(summary_reader_t *r)
     ir_spath_t path = {.root = (ir_splace_kind_t)get_u8(r)};
     path.param  = get_u32(r);
     path.global = get_global(r);
-    core_string_t type = get_text(r);
-    if (r->types && type.u8_bytes)
-        path.type = ir_type_from_text(r->types, type);
+    path.type   = get_type(r);
     path.flags  = get_u8(r);
     path.output = get_u8(r);
     uint32_t depth = get_u32(r);
@@ -526,13 +542,7 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
 {
     summary_reader_t r = {.data = data, .size = size, .texts = texts,
                           .resolver = resolver};
-    if (!data || size < 5 || (texts && !texts->lookup)
-        || memcmp(data, texts ? "IRSN" : "IRSM", 4)
-        || data[4] != SUMMARY_CODEC_VERSION) return nullptr;
-    r.at = 5;
-    th_ctx *types = function && function->owner
-        ? ir_module_types(function->owner) : nullptr;
-    r.types = types;
+    if (!data || !texts || !texts->lookup) return nullptr;
     ir_summary_t *summary = ir_summary_new(nullptr, function);
     summary->flags      = get_u32(&r);
     summary->traps      = get_u8(&r) & IR_STRAP_ALL;
@@ -566,10 +576,8 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
     }
     uint32_t heaps = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < heaps; i++) {
-        ir_sheap_t    heap = {.origin = get_u32(&r)};
-        core_string_t type = get_text(&r);
-        if (r.types && type.u8_bytes)
-            heap.type = ir_type_from_text(r.types, type);
+        ir_sheap_t heap = {.origin = get_u32(&r)};
+        heap.type     = get_type(&r);
         heap.elements = get_u8(&r) != 0;
         heap.module   = get_owned_text(&r, function);
         heap.name   = get_owned_text(&r, function);
@@ -586,21 +594,10 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
 }
 
 ir_summary_t *
-ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
-                  const uint8_t *data, size_t size,
-                  const ir_summary_resolver_t *resolver)
-{
-    return decode_summary(summaries, function, data, size, resolver,
-                          nullptr);
-}
-
-ir_summary_t *
 ir_summary_decode_with(ir_summaries_t *summaries, const ir_func_t *function,
                        const uint8_t *data, size_t size,
                        const ir_summary_resolver_t *resolver,
                        const ir_summary_texts_t *texts)
 {
-    return texts ? decode_summary(summaries, function, data, size, resolver,
-                                  texts)
-                 : nullptr;
+    return decode_summary(summaries, function, data, size, resolver, texts);
 }
