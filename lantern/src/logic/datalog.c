@@ -142,15 +142,6 @@ bool core_datalog_rule_builder_add_literal(
   return true;
 }
 
-bool core_datalog_rule_builder_add_builtin(core_datalog_rule_builder_t *builder,
-                                           core_datalog_builtin_t builtin) {
-  if (!builder)
-    return false;
-  core_list_push(builder->body,
-                 core_variant_make_2(core_datalog_goal_t, builtin));
-  return true;
-}
-
 core_datalog_rule_t
 core_datalog_rule_builder_finish(core_datalog_rule_builder_t *builder) {
   if (!builder || !builder->has_head)
@@ -1002,13 +993,6 @@ core_datalog_expr_t *core_datalog_expr_binary(core_datalog_expr_kind_t kind,
   core_datalog_expr_t *expression = core_alloc(core_datalog_expr_t);
   *expression = (core_datalog_expr_t){
       .kind = kind, .value.binary = {.left = left, .right = right}};
-  return expression;
-}
-
-core_datalog_expr_t *core_datalog_expr_negate(core_datalog_expr_t *operand) {
-  core_datalog_expr_t *expression = core_alloc(core_datalog_expr_t);
-  *expression = (core_datalog_expr_t){.kind = CORE_DATALOG_EXPR_NEGATE,
-                                      .value.operand = operand};
   return expression;
 }
 

@@ -162,39 +162,6 @@ scan_string_single(parse_scanner_t *s)
     return scan_quoted_string(s, '\'');
 }
 
-core_option_t(core_string_t)
-scan_string_raw(parse_scanner_t *s, core_string_t quote)
-{
-    size_t qlen = quote.u8_bytes;
-
-    if (s->cursor + qlen > s->input.u8_bytes
-        || memcmp(s->input.data + s->cursor, quote.data, qlen) != 0) {
-        return core_option_none(core_string_t);
-    }
-
-    scan_mark(s);
-    scan_advance_bytes(s, qlen);
-
-    size_t content_start = s->cursor;
-
-    while (s->cursor + qlen <= s->input.u8_bytes) {
-        if (memcmp(s->input.data + s->cursor, quote.data, qlen) == 0) {
-            size_t  content_end = s->cursor;
-            size_t  len         = content_end - content_start;
-
-            core_string_t str = core_string_from_raw(
-                s->input.data + content_start, (int64_t)len);
-
-            scan_advance_bytes(s, qlen);
-            return core_option_set(core_string_t, str);
-        }
-
-        scan_advance(s);
-    }
-
-    return core_option_none(core_string_t);
-}
-
 static bool
 is_hex(core_codepoint_t cp)
 {

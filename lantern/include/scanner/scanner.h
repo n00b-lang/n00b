@@ -173,8 +173,6 @@ extern scan_problem_t scan_problem_copy(scan_problem_t problem);
 
 extern bool scan_scanner_set_recovery(parse_scanner_t *s, bool enable);
 
-extern bool scan_scanner_recovery_enabled(const parse_scanner_t *s);
-
 extern scan_status_t scan_status(const parse_scanner_t *s);
 
 extern bool scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out);
@@ -218,15 +216,7 @@ extern void scan_advance_bytes(parse_scanner_t *s, size_t n);
 
 extern size_t scan_match_str(parse_scanner_t *s, core_string_t lit);
 
-extern size_t scan_match_if(parse_scanner_t *s, scan_cp_predicate_fn pred);
-
-extern size_t scan_match_class(parse_scanner_t *s, parse_char_class_t cc);
-
-extern size_t scan_match_cp(parse_scanner_t *s, core_codepoint_t cp);
-
 extern int32_t scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred);
-
-extern int32_t scan_skip_class(parse_scanner_t *s, parse_char_class_t cc);
 
 extern void scan_mark(parse_scanner_t *s);
 
@@ -241,9 +231,6 @@ extern void scan_emit_owned(parse_scanner_t *s, int32_t tid,
                             core_option_t(core_string_t) value);
 
 extern void scan_emit_marked(parse_scanner_t *s, int32_t tid);
-
-extern void scan_add_leading_trivia(parse_scanner_t *s,
-                                          core_string_t text);
 
 extern void scan_add_leading_trivia_kind(parse_scanner_t     *s,
                                              core_string_t       text,
@@ -262,9 +249,6 @@ extern scan_trivia_attach_t scan_trivia_attach(const parse_scanner_t *s);
 extern parse_trivia_t *scan_add_trivia(parse_scanner_t    *s,
                                        core_string_t       text,
                                        parse_trivia_kind_t kind);
-
-extern void scan_add_trailing_trivia(parse_scanner_t *s,
-                                           core_string_t text);
 
 extern int32_t scan_skip_whitespace(parse_scanner_t *s);
 

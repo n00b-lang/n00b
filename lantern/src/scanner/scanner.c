@@ -400,12 +400,6 @@ scan_scanner_set_recovery(parse_scanner_t *s, bool enable)
     return true;
 }
 
-bool
-scan_scanner_recovery_enabled(const parse_scanner_t *s)
-{
-    return s && s->recovery_enabled;
-}
-
 scan_status_t
 scan_status(const parse_scanner_t *s)
 {
@@ -761,90 +755,6 @@ scan_match_str(parse_scanner_t *s, core_string_t lit)
     return len;
 }
 
-size_t
-scan_match_if(parse_scanner_t *s, scan_cp_predicate_fn pred)
-{
-    if (s->cursor >= s->input.u8_bytes) {
-        return 0;
-    }
-
-    int              cp_len;
-    core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-    if (!pred(cp, nullptr)) {
-        return 0;
-    }
-
-    s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
-
-    if (core_codepoint_is_line_terminator(cp)) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
-
-    return (size_t)cp_len;
-}
-
-size_t
-scan_match_class(parse_scanner_t *s, parse_char_class_t cc)
-{
-    if (s->cursor >= s->input.u8_bytes) {
-        return 0;
-    }
-
-    int              cp_len;
-    core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-    if (!cc_match(cc, cp)) {
-        return 0;
-    }
-
-    s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
-
-    if (core_codepoint_is_line_terminator(cp)) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
-
-    return (size_t)cp_len;
-}
-
-size_t
-scan_match_cp(parse_scanner_t *s, core_codepoint_t target)
-{
-    if (s->cursor >= s->input.u8_bytes) {
-        return 0;
-    }
-
-    int              cp_len;
-    core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-    if (cp != target) {
-        return 0;
-    }
-
-    s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
-
-    if (core_codepoint_is_line_terminator(cp)) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
-
-    return (size_t)cp_len;
-}
-
 int32_t
 scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred)
 {
@@ -855,36 +765,6 @@ scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred)
         core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
         if (!pred(cp, nullptr)) {
-            break;
-        }
-
-        s->cursor += (size_t)cp_len;
-        s->work_bytes += (size_t)cp_len;
-
-        if (core_codepoint_is_line_terminator(cp)) {
-            s->line++;
-            s->column = 1;
-        }
-        else {
-            s->column++;
-        }
-
-        count++;
-    }
-
-    return count;
-}
-
-int32_t
-scan_skip_class(parse_scanner_t *s, parse_char_class_t cc)
-{
-    int32_t count = 0;
-
-    while (s->cursor < s->input.u8_bytes) {
-        int              cp_len;
-        core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        if (!cc_match(cc, cp)) {
             break;
         }
 
@@ -1047,12 +927,6 @@ scan_add_leading_trivia_kind(parse_scanner_t    *s,
 
 
 void
-scan_add_leading_trivia(parse_scanner_t *s, core_string_t text)
-{
-    scan_add_leading_trivia_kind(s, text, PARSE_TRIVIA_COMMENT);
-}
-
-void
 scan_set_trivia_attach(parse_scanner_t *s, scan_trivia_attach_t how)
 {
     if (s) {
@@ -1113,16 +987,6 @@ scan_add_trivia(parse_scanner_t *s, core_string_t text,
 
     scan_add_leading_trivia_kind(s, text, kind);
     return s->pending_leading_tail;
-}
-
-void
-scan_add_trailing_trivia(parse_scanner_t *s, core_string_t text)
-{
-    parse_trivia_t *t = make_trivia(s, text);
-
-    t->kind = PARSE_TRIVIA_COMMENT;
-
-    append_trivia(&s->pending_trailing, &s->pending_trailing_tail, t);
 }
 
 int32_t

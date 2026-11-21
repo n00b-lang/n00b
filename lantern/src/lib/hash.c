@@ -58,13 +58,3 @@ core_buffer_hash(core_buffer_t *b)
 
     return core_hash_raw(b->data, b->byte_len);
 }
-
-core_hash_value_t
-core_hash(void *obj, core_hash_fn fn)
-{
-    if (fn) {
-        return fn(obj);
-    }
-
-    return core_hash_word(obj);
-}

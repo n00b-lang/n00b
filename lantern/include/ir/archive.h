@@ -12,8 +12,6 @@ typedef struct {
     size_t length;
 } ir_archive_input_t;
 
-bool ir_modules_save(ir_module_t *const *modules, size_t count,
-                     core_buffer_t *out);
 bool ir_modules_save_references(ir_module_t *const *modules, size_t count,
                                 core_buffer_t *out,
                                 core_buffer_t *references);

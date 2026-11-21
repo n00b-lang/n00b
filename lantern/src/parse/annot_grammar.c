@@ -77,19 +77,6 @@ parse_annot_grammar(void)
     return grammar;
 }
 
-void
-parse_annot_grammar_shutdown(void)
-{
-    pthread_mutex_lock(&grammar_lock);
-
-    if (grammar) {
-        parse_grammar_free(grammar);
-        grammar = nullptr;
-    }
-
-    pthread_mutex_unlock(&grammar_lock);
-}
-
 static core_option_t(core_string_t)
 scan_ident(parse_scanner_t *s)
 {

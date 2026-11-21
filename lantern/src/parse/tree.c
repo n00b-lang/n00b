@@ -21,16 +21,6 @@ parse_node_token(parse_tree_t *t)
     return core_tree_leaf_value(t);
 }
 
-core_option_t(core_string_t)
-parse_node_name(parse_tree_t *t)
-{
-    if (!t || core_tree_is_leaf(t)) {
-        return core_option_none(core_string_t);
-    }
-
-    return core_option_set(core_string_t, core_tree_node_value(t).name);
-}
-
 core_list_decl(parse_tree_ptr_t);
 
 static void *

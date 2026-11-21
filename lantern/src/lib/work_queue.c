@@ -380,7 +380,6 @@ core_work_wait(core_work_queue_t *q, core_work_job_t *job)
     return ok;
 }
 
-uint32_t core_work_job_kind(const core_work_job_t *job) { return job ? job->key.kind : 0; }
 const core_module_spec_t *core_work_job_module(const core_work_job_t *job) { return job ? &job->key.module : nullptr; }
 
 core_work_state_t

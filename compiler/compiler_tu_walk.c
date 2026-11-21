@@ -354,9 +354,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     }
     bool type_reference = cache && cache->type_reference;
     if (entering) {
-        if (n00bb_postfix_node(grammar, node))
-            parse_tree_set_index_address_access(node,
-                n00bb_index_reference_storage(grammar, node));
         if (field_record_declaration(grammar, node)) {
             parse_sym_entry_t *symbol = parse_tree_sym(node);
             if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) {

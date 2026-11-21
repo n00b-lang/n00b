@@ -68,17 +68,6 @@ parse_trivia_region_count(const parse_trivia_t *trivia)
     return result;
 }
 
-uint64_t
-parse_trivia_region_at(const parse_trivia_t *trivia, size_t index)
-{
-    const parse_trivia_region_link_t *link = trivia ? trivia->regions : nullptr;
-    while (link && index) {
-        link = link->next;
-        index--;
-    }
-    return link ? link->region_id : 0;
-}
-
 bool
 parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id)
 {
@@ -289,15 +278,6 @@ parse_token_use_source_value(parse_token_info_t *token)
     return true;
 }
 
-core_option_t(core_string_t)
-parse_token_file(const parse_token_info_t *token)
-{
-    if (token->extras && core_option_is_set(token->extras->file)) {
-        return token->extras->file;
-    }
-    return parse_source_name(token->fields.source);
-}
-
 void
 parse_token_set_file(parse_token_info_t *token,
                      core_option_t(core_string_t) file, bool owned)
@@ -420,15 +400,6 @@ parse_token_set_postfix_modifier(parse_token_info_t *token,
     parse_token_extras_t *extras = parse_token_extras_for_update(token);
     store_option(&extras->postfix_modifier, &extras->owns_postfix_modifier,
                  value, owned);
-}
-
-void
-parse_token_set_user_info(parse_token_info_t *token, void *info)
-{
-    if (!token->extras && !info) {
-        return;
-    }
-    parse_token_extras_for_update(token)->user_info = info;
 }
 
 void

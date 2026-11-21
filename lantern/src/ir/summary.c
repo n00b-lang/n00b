@@ -12,7 +12,6 @@
 #include "summary/compose.c"
 #include "summary/export.c"
 #include "summary/engine.c"
-#include "summary/points_to.c"
 #include "summary/solve.c"
 #include "summary/codec.c"
 #include "summary/inputs.c"

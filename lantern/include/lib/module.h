@@ -73,7 +73,6 @@ bool core_module_spec_eq(const core_module_spec_t *a,
                          const core_module_spec_t *b);
 void core_module_spec_set_user_data(core_module_spec_t *spec, void *data,
                                     core_module_user_data_free_fn free_fn);
-void *core_module_spec_user_data(const core_module_spec_t *spec);
 
 bool core_source_file_init(core_source_file_t *file, core_string_t path,
                            core_string_t contents);

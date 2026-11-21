@@ -67,7 +67,6 @@ typedef struct parse_trivia_t {
 } parse_trivia_t;
 
 typedef struct parse_token_extras_t {
-    void                         *user_info;
     core_option_t(core_string_t)  value;
     core_option_t(core_string_t)  literal_type;
     core_option_t(core_string_t)  postfix_modifier;
@@ -102,7 +101,6 @@ typedef struct {
     uint32_t value_offset;
     uint32_t source             : 24;
     uint32_t origin             : 1;
-    uint32_t system_header      : 1;
     uint32_t no_trivia          : 1;
     uint32_t layout_mismatch    : 1;
     uint32_t ignore_if_no_match : 1;
@@ -130,7 +128,6 @@ typedef int64_t (*parse_tokenizer_fn)(parse_parser_t *, void **);
 
 void parse_trivia_free(parse_trivia_t *t);
 size_t parse_trivia_region_count(const parse_trivia_t *trivia);
-uint64_t parse_trivia_region_at(const parse_trivia_t *trivia, size_t index);
 bool parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id);
 
 parse_token_info_t *parse_token_new(void);
@@ -206,18 +203,6 @@ parse_token_set_origin(parse_token_info_t *token, parse_token_origin_t origin)
 }
 
 static inline bool
-parse_token_system_header(const parse_token_info_t *token)
-{
-    return token->fields.system_header;
-}
-
-static inline void
-parse_token_set_system_header(parse_token_info_t *token, bool value)
-{
-    token->fields.system_header = value;
-}
-
-static inline bool
 parse_token_no_trivia(const parse_token_info_t *token)
 {
     return token->fields.no_trivia;
@@ -258,18 +243,10 @@ core_option_t(core_string_t) parse_token_value(const parse_token_info_t *token);
 
 bool parse_token_has_value(const parse_token_info_t *token);
 
-static inline bool
-parse_token_value_is_source(const parse_token_info_t *token)
-{
-    return token->fields.value_from_source;
-}
-
 void parse_token_set_value(parse_token_info_t *token,
                            core_option_t(core_string_t) value, bool owned);
 
 bool parse_token_use_source_value(parse_token_info_t *token);
-
-core_option_t(core_string_t) parse_token_file(const parse_token_info_t *token);
 
 void parse_token_set_file(parse_token_info_t *token,
                           core_option_t(core_string_t) file, bool owned);
@@ -307,14 +284,6 @@ parse_token_postfix_modifier(const parse_token_info_t *token)
 void parse_token_set_postfix_modifier(parse_token_info_t *token,
                                       core_option_t(core_string_t) value,
                                       bool owned);
-
-static inline void *
-parse_token_user_info(const parse_token_info_t *token)
-{
-    return token->extras ? token->extras->user_info : nullptr;
-}
-
-void parse_token_set_user_info(parse_token_info_t *token, void *info);
 
 static inline parse_trivia_t *
 parse_token_leading_trivia(const parse_token_info_t *token)

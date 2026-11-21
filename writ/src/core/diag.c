@@ -122,12 +122,6 @@ writ_report_suggest(writ_session_t *session, uint32_t diag, writ_loc_t loc, writ
     }
 }
 
-bool
-writ_session_failed(const writ_session_t *session)
-{
-    return core_diagnostics_failed(session->diagnostics);
-}
-
 static writ_diag_label_t *
 labels_of(writ_session_t *session, const core_list_t(writ_diag_part_t) *parts)
 {

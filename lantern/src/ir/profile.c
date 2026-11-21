@@ -147,42 +147,6 @@ core_string_t ir_module_op_spelling(ir_module_t *m, ir_op_t op)
     return info ? info->spelling : (core_string_t){};
 }
 
-bool ir_module_op_lookup(ir_module_t *m, core_string_t spelling,
-                         ir_op_t *out)
-{
-    if (ir_op_lookup(spelling, out)) {
-        return true;
-    }
-
-    if (!m || !m->profile || !spelling.data) {
-        return false;
-    }
-
-    if (!m->ext_op_index) {
-        for (size_t i = 0; i < m->profile->n_ext_ops; i++) {
-            ir_index_add(m->ctx, &m->ext_op_index,
-                         m->profile->ext_ops[i].spelling,
-                         (void *)(uintptr_t)(i + 1));
-        }
-
-        if (!m->ext_op_index) {
-            return false;
-        }
-    }
-
-    uintptr_t slot = (uintptr_t)ir_index_find(m->ext_op_index, spelling);
-
-    if (!slot) {
-        return false;
-    }
-
-    if (out) {
-        *out = (ir_op_t)(IR_OP_COUNT + (slot - 1));
-    }
-
-    return true;
-}
-
 ir_machine_t ir_machine_of(ir_module_t *m, th_type *t)
 {
     if (!m || !t) {
@@ -258,37 +222,6 @@ th_type *ir_profile_scalar(ir_module_t *m, ir_class_t c, uint32_t width)
     }
 
     return nullptr;
-}
-
-th_type *ir_profile_role(ir_module_t *m, ir_role_t role)
-{
-    if (!m || !m->profile || role == IR_ROLE_NONE) {
-        return nullptr;
-    }
-
-    ready_scalars(m);
-
-    for (size_t i = 0; i < m->profile->n_scalars; i++) {
-        if (m->profile->scalars[i].role == role) {
-            return m->scalar_types[i];
-        }
-    }
-
-    return nullptr;
-}
-
-bool ir_profile_has(ir_module_t *m, th_type *t)
-{
-    if (!m || !t) {
-        return false;
-    }
-
-    t = th_resolve(t);
-    if (th_kind_of(t) != TH_NAMED) {
-        return false;
-    }
-
-    return find_scalar(m, t) != nullptr;
 }
 
 static const ir_scalar_t bce_scalars[] = {

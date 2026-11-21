@@ -252,14 +252,6 @@ parse_source_value(uint32_t id, uint32_t offset)
                               value_length);
 }
 
-size_t
-parse_source_length(uint32_t id)
-{
-    parse_source_t *source = source_get(id);
-    return source ? atomic_load_explicit(&source->length,
-                                         memory_order_acquire) : 0;
-}
-
 bool
 parse_source_slice(uint32_t id, size_t start, size_t end, core_string_t *out)
 {

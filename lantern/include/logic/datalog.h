@@ -86,8 +86,6 @@ bool core_datalog_rule_builder_head(core_datalog_rule_builder_t *builder,
 bool core_datalog_rule_builder_add_literal(
     core_datalog_rule_builder_t *builder, core_datalog_relation_id_t relation,
     int32_t arity, const core_datalog_symbol_t *arguments, bool negated);
-bool core_datalog_rule_builder_add_builtin(core_datalog_rule_builder_t *builder,
-                                           core_datalog_builtin_t builtin);
 core_datalog_rule_t
 core_datalog_rule_builder_finish(core_datalog_rule_builder_t *builder);
 void core_datalog_rule_builder_free(core_datalog_rule_builder_t *builder);
@@ -161,6 +159,5 @@ core_datalog_expr_t *core_datalog_expr_integer(int64_t value);
 core_datalog_expr_t *core_datalog_expr_binary(core_datalog_expr_kind_t kind,
                                               core_datalog_expr_t *left,
                                               core_datalog_expr_t *right);
-core_datalog_expr_t *core_datalog_expr_negate(core_datalog_expr_t *operand);
 void core_datalog_expr_free(core_datalog_expr_t *expression);
 void core_datalog_rule_free(core_datalog_rule_t *rule);

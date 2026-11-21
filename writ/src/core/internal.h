@@ -130,7 +130,6 @@ void     writ_report_label(writ_session_t *session, uint32_t diag, writ_loc_t lo
 void     writ_report_suggest(writ_session_t *session, uint32_t diag, writ_loc_t loc,
                              writ_str_t replacement, core_text_message_t description);
 writ_str_t writ_message_text(writ_session_t *session, core_text_message_t message);
-bool     writ_session_failed(const writ_session_t *session);
 void     writ_diag_flush(writ_session_t *session, size_t from);
 
 typedef struct writ_map writ_map_t;

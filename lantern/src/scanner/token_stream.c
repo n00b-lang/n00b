@@ -588,37 +588,6 @@ scan_stream_next(parse_token_stream_t *ts)
 }
 
 bool
-scan_stream_is_done(parse_token_stream_t *ts)
-{
-    if (ts->exhausted) {
-        return true;
-    }
-
-    if (!ensure_filled(ts, ts->pos)) {
-        ts->exhausted = true;
-        return true;
-    }
-
-    return false;
-}
-
-parse_token_info_t *
-scan_stream_peek(parse_token_stream_t *ts, int32_t n)
-{
-    int32_t target = ts->pos + n;
-
-    if (target < 0) {
-        return nullptr;
-    }
-
-    if (!ensure_filled(ts, target)) {
-        return nullptr;
-    }
-
-    return ts->tokens[target];
-}
-
-bool
 scan_stream_rewind(parse_token_stream_t *ts, int32_t n)
 {
     int32_t new_pos = ts->pos - n;
@@ -631,18 +600,6 @@ scan_stream_rewind(parse_token_stream_t *ts, int32_t n)
     ts->exhausted = false;
 
     return true;
-}
-
-parse_token_info_t *
-scan_stream_lookback(parse_token_stream_t *ts, int32_t n)
-{
-    int32_t target = ts->pos - n;
-
-    if (target < 0 || target >= ts->token_count) {
-        return nullptr;
-    }
-
-    return ts->tokens[target];
 }
 
 parse_token_info_t *

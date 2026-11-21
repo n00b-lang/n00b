@@ -50,7 +50,6 @@ bool core_persist_arena_rebase_pointer(const core_persist_arena_t *arena,
                                        const void *saved_pointer, size_t size,
                                        const void **out);
 void *core_persist_arena_base(const core_persist_arena_t *arena);
-size_t core_persist_arena_capacity(const core_persist_arena_t *arena);
 size_t core_persist_arena_used(const core_persist_arena_t *arena);
 bool core_persist_arena_sync(core_persist_arena_t *arena,
                              core_persist_arena_error_t *error);

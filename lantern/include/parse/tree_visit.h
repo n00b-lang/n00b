@@ -115,8 +115,3 @@ void parse_tree_walk_stop(parse_tree_walk_t *w);
 bool parse_tree_walk_stopped(parse_tree_walk_t *w);
 bool parse_tree_walk_failed(parse_tree_walk_t *w);
 parse_tree_t *parse_tree_walk_take_detached(parse_tree_walk_t *w);
-
-parse_tree_t *parse_tree_walk_rewrite(parse_tree_walk_t  *w,
-                                        parse_tree_t *root);
-
-uint32_t parse_tree_walk_replaced(const parse_tree_walk_t *w);

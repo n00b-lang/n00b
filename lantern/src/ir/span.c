@@ -52,14 +52,3 @@ ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
 
     return o;
 }
-
-uint32_t ir_origin_depth(const ir_origin_t *o)
-{
-    uint32_t n = 0;
-
-    for (const ir_origin_t *p = o; p; p = p->parent) {
-        n++;
-    }
-
-    return n;
-}

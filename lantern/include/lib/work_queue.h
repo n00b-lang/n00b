@@ -42,7 +42,6 @@ bool core_work_complete_tu(core_work_queue_t *q, core_work_job_t *job,
                           core_translation_unit_t *unit, bool succeeded);
 bool core_work_wait(core_work_queue_t *q, core_work_job_t *job);
 
-uint32_t core_work_job_kind(const core_work_job_t *job);
 const core_module_spec_t *core_work_job_module(const core_work_job_t *job);
 core_work_state_t core_work_job_state(core_work_queue_t *q,
                                       const core_work_job_t *job);

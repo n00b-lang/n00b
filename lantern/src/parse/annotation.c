@@ -127,16 +127,6 @@ parse_annot_kind_from_name(core_string_t name)
 }
 
 void
-parse_nt_annotate(parse_nonterm_t *nt, parse_annotation_t *a)
-{
-    if (!nt || !a) {
-        return;
-    }
-
-    core_list_push(nt->annotations, a);
-}
-
-void
 parse_rule_annotate(parse_rule_t *rule, parse_annotation_t *a)
 {
     if (!rule || !a) {

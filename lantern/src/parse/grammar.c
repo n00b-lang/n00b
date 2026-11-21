@@ -301,10 +301,7 @@ parse_grammar_new(void)
 {
     parse_grammar_t *g = core_alloc(parse_grammar_t);
 
-    g->error_rules           = true;
-    g->max_penalty           = PARSE_DEFAULT_MAX_PENALTY;
-    g->hide_penalty_rewrites = true;
-    g->hide_groups           = true;
+    g->error_rules = true;
 
     g->nt_map = core_alloc(core_dict_t);
     core_dict_init_string(g->nt_map);
@@ -413,13 +410,6 @@ parse_grammar_free(parse_grammar_t *g)
         core_free(g->terminal_map);
     }
 
-    if (g->has_terminal_categories) {
-        for (size_t i = 0; i < g->terminal_categories.len; i++) {
-            core_free(g->terminal_categories.data[i].data);
-        }
-        core_list_free(g->terminal_categories);
-    }
-
     core_free(g);
 }
 
@@ -427,12 +417,6 @@ void
 parse_grammar_set_error_recovery(parse_grammar_t *g, bool enable)
 {
     g->error_rules = enable;
-}
-
-void
-parse_grammar_set_max_penalty(parse_grammar_t *g, uint32_t max)
-{
-    g->max_penalty = max;
 }
 
 parse_nonterm_t *
@@ -561,41 +545,6 @@ parse_register_terminal(parse_grammar_t *g, core_string_t name)
     }
 
     return parse_register_named_terminal(g, name);
-}
-
-void
-parse_grammar_set_terminal_category(parse_grammar_t *g,
-                                   int64_t         terminal_id,
-                                   core_string_t   category)
-{
-    if (terminal_id < PARSE_TOK_START_ID) {
-        return;
-    }
-
-    int32_t ix = (int32_t)(terminal_id - PARSE_TOK_START_ID);
-
-    if (!g->has_terminal_categories) {
-        g->terminal_categories     = core_list_new(core_string_t);
-        g->has_terminal_categories = true;
-    }
-
-    while ((int32_t)g->terminal_categories.len <= ix) {
-        core_list_push(g->terminal_categories, (core_string_t){0});
-    }
-
-    core_list_set(g->terminal_categories, ix, category);
-}
-
-void
-parse_nonterm_set_user_data(parse_nonterm_t *nt, void *data)
-{
-    nt->user_data = data;
-}
-
-void *
-parse_nonterm_get_user_data(parse_nonterm_t *nt)
-{
-    return nt->user_data;
 }
 
 void

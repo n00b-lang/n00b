@@ -325,46 +325,26 @@ n00bb_frame_root_list(ir_func_t *function, n00bb_frame_root_list_t *list)
 
 static inline bool
 n00bb_frame_root_list_visit(const n00bb_frame_root_list_t *list,
-                            bool pointers_only,
                             n00bb_frame_root_visit_fn visit, void *context)
 {
-    size_t index = 0;
     for (size_t r = 0; r < list->count; r++) {
         const n00bb_frame_root_t *root = &list->roots[r];
-        if (pointers_only && !root->pointer) continue;
-        if (!visit(context, root->kind, index++, root->value, root->local,
+        if (!visit(context, root->kind, r, root->value, root->local,
                    root->instruction)) return false;
     }
     return true;
 }
 
 static inline bool
-n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
-                           n00bb_frame_root_visit_fn visit, void *context,
-                           size_t *count)
-{
-    n00bb_frame_root_list_t list;
-    if (!count || !n00bb_frame_root_list(function, &list)) return false;
-    *count = pointers_only ? list.pointer_count : list.count;
-    bool ok = !visit
-        || n00bb_frame_root_list_visit(&list, pointers_only, visit, context);
-    n00bb_frame_root_list_release(&list);
-    return ok;
-}
-
-static inline bool
-n00bb_frame_pointer_roots(ir_func_t *function,
-                          n00bb_frame_root_visit_fn visit, void *context,
-                          size_t *count)
-{
-    return n00bb_frame_roots_filtered(function, true, visit, context, count);
-}
-
-static inline bool
 n00bb_frame_roots(ir_func_t *function, n00bb_frame_root_visit_fn visit,
                   void *context, size_t *count)
 {
-    return n00bb_frame_roots_filtered(function, false, visit, context, count);
+    n00bb_frame_root_list_t list;
+    if (!count || !n00bb_frame_root_list(function, &list)) return false;
+    *count = list.count;
+    bool ok = !visit || n00bb_frame_root_list_visit(&list, visit, context);
+    n00bb_frame_root_list_release(&list);
+    return ok;
 }
 
 typedef struct {
@@ -430,8 +410,8 @@ n00bb_frame_payload_type(ir_func_t *function,
         return nullptr;
     }
     n00bb_frame_member_context_t context = {function, members, names};
-    bool valid = n00bb_frame_root_list_visit(roots, false,
-                                             n00bb_frame_member, &context);
+    bool valid = n00bb_frame_root_list_visit(roots, n00bb_frame_member,
+                                             &context);
     th_type *payload = valid ? th_record(ir_module_types(function->owner),
                                           members, count) : nullptr;
     free(members);

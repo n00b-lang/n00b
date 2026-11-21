@@ -6,9 +6,6 @@ extern core_option_t(core_string_t) scan_string_double(parse_scanner_t *s);
 
 extern core_option_t(core_string_t) scan_string_single(parse_scanner_t *s);
 
-extern core_option_t(core_string_t)
-    scan_string_raw(parse_scanner_t *s, core_string_t quote);
-
 extern core_option_t(core_string_t) scan_integer(parse_scanner_t *s);
 
 extern core_option_t(core_string_t) scan_float(parse_scanner_t *s);

@@ -8,11 +8,9 @@
 #include <stdint.h>
 
 #define TH_VERSION       0
-#define TH_RESERVED      "__ty."
 #define TH_TUPLE         "__ty.tuple"
 #define TH_OPTION        "Option"
 #define TH_NIL           "nil"
-#define TH_UNTYPED       "__ty.untyped"
 #define TH_POISON        "__ty.poison"
 
 typedef enum : uint8_t {

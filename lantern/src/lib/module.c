@@ -108,12 +108,6 @@ core_module_spec_set_user_data(core_module_spec_t *spec, void *data,
     spec->user_data_free = free_fn;
 }
 
-void *
-core_module_spec_user_data(const core_module_spec_t *spec)
-{
-    return spec ? spec->user_data : nullptr;
-}
-
 bool
 core_module_spec_eq(const core_module_spec_t *a, const core_module_spec_t *b)
 {

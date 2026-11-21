@@ -503,22 +503,3 @@ bool ir_instr_move(ir_instr_t *in, ir_block_t *to, uint32_t at)
 
     return true;
 }
-
-bool ir_instr_inlined_from(ir_instr_t *in, ir_span_t call_site,
-                           core_string_t agent)
-{
-    if (!in || !in->block || !agent.data) {
-        return false;
-    }
-
-    ir_origin_t *o = ir_origin_new(in->block->owner->owner->ctx,
-                                   IR_ORIGIN_INLINED_FROM, call_site, agent,
-                                   in->origin);
-
-    if (!o) {
-        return false;
-    }
-    in->origin = o;
-
-    return true;
-}

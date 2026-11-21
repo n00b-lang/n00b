@@ -424,10 +424,6 @@ void *core_persist_arena_base(const core_persist_arena_t *arena) {
   return arena ? arena->mapping : nullptr;
 }
 
-size_t core_persist_arena_capacity(const core_persist_arena_t *arena) {
-  return arena ? arena->mapping_size - payload_offset() : 0;
-}
-
 size_t core_persist_arena_used(const core_persist_arena_t *arena) {
   return arena ? (size_t)arena->header->used : 0;
 }

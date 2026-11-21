@@ -7,7 +7,6 @@
 parse_grammar_t *parse_grammar_new(void);
 void            parse_grammar_free(parse_grammar_t *g);
 void            parse_grammar_set_error_recovery(parse_grammar_t *g, bool enable);
-void            parse_grammar_set_max_penalty(parse_grammar_t *g, uint32_t max);
 void            parse_grammar_finalize(parse_grammar_t *g);
 
 size_t parse_grammar_undefined(const parse_grammar_t *g, core_string_t *out,
@@ -32,10 +31,6 @@ int64_t parse_builtin_terminal_id(core_string_t name);
 int64_t parse_terminal_id(parse_grammar_t *g, core_string_t name);
 
 void  parse_nonterm_set_action(parse_nonterm_t *nt, parse_walk_action_t action);
-void  parse_nonterm_set_user_data(parse_nonterm_t *nt, void *data);
-void *parse_nonterm_get_user_data(parse_nonterm_t *nt);
-void  parse_grammar_set_terminal_category(parse_grammar_t *g, int64_t tid,
-                                          core_string_t category);
 
 #define PARSE_NT(nt)       ((parse_match_t){.kind = PARSE_MATCH_NT, .nt_id = parse_nonterm_id(nt)})
 #define PARSE_CHAR(cp)     ((parse_match_t){.kind = PARSE_MATCH_TERMINAL, .terminal_id = (int64_t)(cp)})
@@ -44,7 +39,6 @@ void  parse_grammar_set_terminal_category(parse_grammar_t *g, int64_t tid,
 #define PARSE_SET(s)       ((parse_match_t){.kind = PARSE_MATCH_SET, \
                                         .set_items = (void *)(s)})
 #define PARSE_EPSILON()    ((parse_match_t){.kind = PARSE_MATCH_EMPTY})
-#define PARSE_CLASS(cc)    ((parse_match_t){.kind = PARSE_MATCH_CLASS, .char_class = (cc)})
 
 parse_match_t parse_group_match_v(parse_grammar_t *g, int min, int max,
                                  int n, parse_match_t *items);

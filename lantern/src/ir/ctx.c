@@ -13,18 +13,6 @@ void *ir_alloc(ir_ctx_t *ctx, size_t n)
     return core_arena_alloc(&ctx->arena, n);
 }
 
-size_t ir_ctx_bytes(const ir_ctx_t *ctx)
-{
-    size_t n = 0;
-
-    for (const core_arena_block_t *b = ctx ? ctx->arena.first : nullptr; b;
-         b = b->next) {
-        n += b->capacity;
-    }
-
-    return n;
-}
-
 core_string_t ir_strdup(ir_ctx_t *ctx, core_string_t s)
 {
     if (!s.data) {
@@ -210,18 +198,6 @@ void ir_module_invalidate(ir_module_t *m, ir_props_t p)
     ir_walk_free(w);
 }
 
-void ir_module_set_profile(ir_module_t *m, const ir_profile_t *p)
-{
-    if (!m || !p) {
-        return;
-    }
-
-    m->profile       = p;
-    m->scalar_hashes = nullptr;
-    m->scalars_ready = false;
-    ir_profile_install_builtins(m->ctx, p);
-}
-
 ir_span_t ir_module_span(const ir_module_t *m)
 {
     return m ? m->span : IR_SPAN_UNKNOWN;
@@ -231,13 +207,6 @@ void ir_module_set_span(ir_module_t *m, ir_span_t s)
 {
     if (m) {
         m->span = s;
-    }
-}
-
-void ir_module_set_target(ir_module_t *m, core_string_t target)
-{
-    if (m && target.data) {
-        m->target = ir_strdup(m->ctx, target);
     }
 }
 
@@ -258,25 +227,6 @@ core_string_t ir_mutability_name(ir_mutability_t m)
     default:
         return (core_string_t){};
     }
-}
-
-bool ir_mutability_from_name(core_string_t s, ir_mutability_t *out)
-{
-    if (!s.data) {
-        return false;
-    }
-
-    for (ir_mutability_t m = IR_MUT_MUTABLE; m <= IR_MUT_CONST; m++) {
-        if (core_string_eq(s, ir_mutability_name(m))) {
-            if (out) {
-                *out = m;
-            }
-
-            return true;
-        }
-    }
-
-    return false;
 }
 
 bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,

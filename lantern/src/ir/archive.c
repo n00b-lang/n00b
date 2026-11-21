@@ -541,13 +541,6 @@ w_function_details(writer_t *w, ir_func_t *function)
 }
 
 bool
-ir_modules_save(ir_module_t *const *modules, size_t count,
-                core_buffer_t *out)
-{
-    return ir_modules_save_references(modules, count, out, nullptr);
-}
-
-bool
 ir_modules_save_references(ir_module_t *const *modules, size_t count,
                            core_buffer_t *out, core_buffer_t *references)
 {

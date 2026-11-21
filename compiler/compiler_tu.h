@@ -224,12 +224,6 @@ parse_tree_t *referent_access_node(parse_grammar_t *grammar,
                                    parse_tree_t *node);
 bool n00bb_index_node(parse_grammar_t *grammar, parse_tree_t *node,
                       bool *slice);
-bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
-                             core_string_t *trait, core_string_t *method);
-bool n00bb_index_reference_storage(parse_grammar_t *grammar,
-                                   parse_tree_t *node);
-parse_tree_t *n00bb_index_expression_node(parse_grammar_t *grammar,
-                                          parse_tree_t *node);
 core_string_t canonical_builtin_type_name(core_string_t name);
 bool dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node);
 int builtin_generic_type_arity(core_string_t name);
@@ -650,8 +644,6 @@ bool n00bb_scalar_role_is(th_type *type, ir_role_t role);
 bool n00bb_flagset_type(core_translation_unit_t *unit,
                         n00bb_tu_state_t *state, th_type *type,
                         parse_sym_entry_t **symbol_out);
-bool index_is_compound_target(parse_grammar_t *grammar,
-                              parse_tree_t *node);
 bool module_initializer_declaration(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool is_module_initializer_use(parse_grammar_t *grammar,
@@ -696,7 +688,6 @@ typedef struct {
 
 
 bool n00bb_type_interval(th_type *type, ir_interval_t *range);
-#define N00BB_INTEGER_WIDTHS 5
 bool n00bb_integer_representation(th_type *type, uint64_t *width,
                                   bool *is_signed);
 static constexpr char n00bb_string_to_buffer_text[] =

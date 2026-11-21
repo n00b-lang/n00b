@@ -48,14 +48,7 @@ extern void scan_token_stream_free(parse_token_stream_t *ts);
 
 extern parse_token_info_t *scan_stream_next(parse_token_stream_t *ts);
 
-extern bool scan_stream_is_done(parse_token_stream_t *ts);
-
-extern parse_token_info_t *scan_stream_peek(parse_token_stream_t *ts, int32_t n);
-
 extern bool scan_stream_rewind(parse_token_stream_t *ts, int32_t n);
-
-extern parse_token_info_t *scan_stream_lookback(parse_token_stream_t *ts,
-                                                int32_t n);
 
 extern parse_token_info_t *scan_stream_get(parse_token_stream_t *ts, int32_t pos);
 

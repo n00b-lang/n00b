@@ -573,15 +573,6 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
 }
 
 ir_summary_t *
-ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
-                  const uint8_t *data, size_t size,
-                  const ir_summary_resolver_t *resolver)
-{
-    return decode_summary(summaries, function, data, size, resolver,
-                          nullptr);
-}
-
-ir_summary_t *
 ir_summary_decode_with(ir_summaries_t *summaries, const ir_func_t *function,
                        const uint8_t *data, size_t size,
                        const ir_summary_resolver_t *resolver,

@@ -1164,7 +1164,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         argument_types[i] = formal
             && th_mode_is_input_only(formal->mode) && actual
             && !th_is_closed(ir_module_types(context->module), actual)
-            && !parse_tree_integer_literal_origin(argument)
                 ? actual : nullptr;
     }
     bool collected = true;
