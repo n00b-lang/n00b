@@ -531,11 +531,14 @@ n00bb_abi_link_semantic_rows(
                                               (void *)(uintptr_t)linked)
                 || !n00bb_abi_object_string(view, &row->canonical_name,
                                             &name)) continue;
+            bool known = false;
             th_type *type = core_dict_get(&interned,
-                (void *)(uintptr_t)row->typehash, nullptr);
+                (void *)(uintptr_t)row->typehash, &known);
             core_string_t error = {0};
-            if (!type) type = ir_typelang_parse(ctx, core_string_borrow(
+            if (!known) type = ir_typelang_parse(ctx, core_string_borrow(
                 (const char *)name.bytes, name.length), &error);
+            if (!known) core_dict_add(&interned,
+                (void *)(uintptr_t)row->typehash, type);
             core_free(error.data);
             if (type && th_hash(ctx, type) == row->typehash)
                 valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
