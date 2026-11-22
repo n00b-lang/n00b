@@ -438,15 +438,9 @@ typedef struct {
 } content_memo_t;
 
 typedef struct {
-    pt_loc_t loc;
-    uint64_t signature;
-} aliased_key_t;
-
-typedef struct {
-    aliased_key_t         key;
-    core_list_t(uint64_t) visible;
-    pt_set_t              items;
-    pt_memo_t             memo;
+    content_key_t key;
+    pt_set_t      items;
+    pt_memo_t     memo;
 } aliased_memo_t;
 
 typedef struct {
