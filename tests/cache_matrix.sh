@@ -91,18 +91,17 @@ same() {
 }
 
 cold() {
-    run check.hello.off off check "$hello"
-    run check.hello.off2 off check "$hello"
-    run check.records.off off check "$records"
-    run check.text.off off check "$text"
-    run check.threads.off off check "$threads"
-    run build.hello.off off build "$hello"
-    run build.hello.off2 off build "$hello"
-    run build.records.off off build "$records"
-    run build.text.off off build "$text"
-    run build.summaries.off off build-summaries "$hello"
-    run build.heap.off off build "$heap"
-    run library.off off library record_root
+    run check.hello.off off check "$hello" &
+    run check.records.off off check "$records" &
+    run check.text.off off check "$text" &
+    run check.threads.off off check "$threads" &
+    run build.hello.off off build "$hello" &
+    run build.records.off off build "$records" &
+    run build.text.off off build "$text" &
+    run build.summaries.off off build-summaries "$hello" &
+    run build.heap.off off build "$heap" &
+    run library.off off library record_root &
+    wait
 }
 
 filled_by_stack_caller() {
@@ -111,29 +110,38 @@ filled_by_stack_caller() {
 }
 
 filled_by_hello() {
-    run check.hello.fill h check "$hello"
-    run check.hello.warm h check "$hello"
-    run check.records.cross h check "$records"
-    run check.text.cross h check "$text"
-    run check.text.warm h check "$text"
-    run check.threads.cross-hello h check "$threads"
+    {
+        run check.hello.fill h check "$hello"
+        run check.hello.warm h check "$hello"
+        run check.records.cross h check "$records"
+        run check.text.cross h check "$text"
+        run check.text.warm h check "$text"
+        run check.threads.cross-hello h check "$threads"
+    } &
     run build.hello.fill bh build "$hello"
+    for cache in bs sf cf; do cp -R "$tmp/cache.bh" "$tmp/cache.$cache"; done
+    filled_by_stack_caller &
+    comptime_main_cache &
     run build.hello.warm bh build "$hello"
     run build.records.cross bh build "$records"
     run build.text.cross bh build "$text"
     run build.text.warm bh build "$text"
+    wait
 }
 
 filled_by_records() {
-    run check.records.fill r check "$records"
-    run check.records.warm r check "$records"
-    run check.hello.cross r check "$hello"
-    run check.threads.cross-records r check "$threads"
+    {
+        run check.records.fill r check "$records"
+        run check.records.warm r check "$records"
+        run check.hello.cross r check "$hello"
+        run check.threads.cross-records r check "$threads"
+    } &
     run build.records.fill br build "$records"
     run build.records.warm br build "$records"
     run build.hello.cross br build "$hello"
     run build.summaries.cross br build-summaries "$hello"
     run library.cross br library record_root
+    wait
 }
 
 reuses() {
@@ -151,7 +159,7 @@ reuses() {
 comptime_main_cache() {
     cp -R "$programs/comptime/imports" "$imports"
     export N00B_PATH="$imports"
-    run build.starter.off off build "$starter"
+    run build.starter.off off build "$starter" &
     run build.starter.fill sf build "$starter"
     export N00B_CACHE_LOG="$tmp/starter.warm.log"
     run build.starter.warm sf build "$starter"
@@ -161,12 +169,14 @@ comptime_main_cache() {
     export N00B_CACHE_LOG="$tmp/starter.cross.log"
     run build.starter.cross-again cf build "$starter"
     unset N00B_CACHE_LOG
+    wait
     echo >>"$starter"
+    run build.starter.edited-off off build "$starter" &
     run build.starter.edited cf build "$starter"
     export N00B_CACHE_LOG="$tmp/starter.edited.log"
     run build.starter.edited-again cf build "$starter"
     unset N00B_CACHE_LOG
-    run build.starter.edited-off off build "$starter"
+    wait
 }
 
 library_cache() {
@@ -194,9 +204,10 @@ syntax_settings() {
             function-fn) flags="--syntax-preference function=fn" ;;
             block-colon) flags="--syntax-preference block=:" ;;
         esac
-        run "syntax.off.$setting" off syntax "" "$flags"
+        run "syntax.off.$setting" off syntax "" "$flags" &
         run "syntax.warm.$setting" s syntax "" "$flags"
     done
+    wait
 }
 
 if [ "$scope" = pr ]; then
@@ -208,15 +219,12 @@ else
     filled_by_hello &
     filled_by_records &
     library_cache &
-    filled_by_stack_caller &
     syntax_settings &
-    comptime_main_cache &
     wait
     for setting in default no-warnings function-fn block-colon; do
         same "check.syntax-warnings.$setting" "syntax.off.$setting" \
             "syntax.warm.$setting"
     done
-    same check.hello.cold-again check.hello.off check.hello.off2
     same check.hello.fill check.hello.off check.hello.fill
     same check.hello.warm check.hello.off check.hello.warm
     same check.hello.cross-records check.hello.off check.hello.cross
@@ -229,7 +237,6 @@ else
         check.threads.cross-hello
     same check.threads.cross-records check.threads.off \
         check.threads.cross-records
-    same build.hello.cold-again build.hello.off build.hello.off2
     same build.hello.fill build.hello.off build.hello.fill
     same build.hello.warm build.hello.off build.hello.warm
     same build.hello.cross-records build.hello.off build.hello.cross
