@@ -2863,7 +2863,12 @@ static bool
 take_fill_lock(n00bb_cache_t *cache)
 {
     core_string_t builtin = CORE_STRING_STATIC("builtin.__init");
-    if (fill_lock >= 0 || fill_waited || !cache->shared.data
+    bool excluded = false;
+    for (size_t e = 0; e < cache->entries.len; e++)
+        for (size_t m = 0; m < cache->entries.data[e].members.len; m++)
+            excluded |= cache->entries.data[e].excluded && core_string_eq(
+                cache->entries.data[e].members.data[m].name, builtin);
+    if (excluded || fill_lock >= 0 || fill_waited || !cache->shared.data
         || core_dict_contains(&cache->loaded_members, &builtin))
         return false;
     core_buffer_t variant = {0};
