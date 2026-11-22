@@ -14,6 +14,7 @@
 #include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_tu.h"
+#include "comptime.h"
 #include "config.h"
 #include "driver.h"
 #include "builtin_types.h"
@@ -952,10 +953,17 @@ name_listed(core_string_t list, core_string_t name)
 }
 
 static bool
-entry_excluded(const cache_entry_t *entry, core_string_t excluded)
+entry_excluded(const n00bb_cache_t *cache, const cache_entry_t *entry,
+               const cache_section_t *changed)
 {
-    for (size_t m = 0; m < entry->members.len; m++)
-        if (name_listed(excluded, entry->members.data[m].name)) return true;
+    for (size_t m = 0; m < entry->members.len; m++) {
+        core_string_t name = entry->members.data[m].name;
+        if (changed ? name_listed(core_string_borrow(
+                          (const char *)changed->data, changed->length), name)
+                : cache->unrecorded && phase_section(entry,
+                      CORE_STRING_STATIC("state"), name))
+            return true;
+    }
     return false;
 }
 
@@ -1499,9 +1507,7 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     for (size_t e = 0; e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         entry->fresh = entry_fresh(cache, entry, false);
-        entry->excluded = cache->unrecorded || (rebuilt
-                && entry_excluded(entry, core_string_borrow(
-                       (const char *)rebuilt->data, rebuilt->length)))
+        entry->excluded = entry_excluded(cache, entry, rebuilt)
             || entry_uses_library(cache, entry);
     }
     entry_release(&record);
@@ -2254,6 +2260,18 @@ put_members(core_buffer_t *manifest, const cache_scc_t *scc)
     }
 }
 
+static bool
+holds_state(core_translation_unit_t *unit, bool baked)
+{
+    ir_module_t *module = tu_state(unit)->ir_module;
+    for (size_t g = 0; g < ir_global_count(module); g++) {
+        ir_global_t *global = ir_global_at(module, g);
+        if (!global->is_extern && global->mutability != IR_MUT_CONST)
+            return baked || n00bb_comptime_needed(unit);
+    }
+    return false;
+}
+
 static void
 store_record(const n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
 {
@@ -2261,12 +2279,9 @@ store_record(const n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
         .key = record_key(cache),
         .members = core_list_new(core_translation_unit_ptr_t),
     };
-    bool complete = true;
-    for (size_t s = 0; s < sccs->len; s++) {
-        complete &= !sccs->data[s].cached;
+    for (size_t s = 0; s < sccs->len; s++)
         for (size_t m = 0; m < sccs->data[s].members.len; m++)
             core_list_push(program.members, sccs->data[s].members.data[m]);
-    }
     qsort(program.members.data, program.members.len,
           sizeof(*program.members.data), compare_units);
     scc_freshness(&program);
@@ -2275,8 +2290,8 @@ store_record(const n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
     for (int i = 0; i < 3; i++) core_put_u32(&manifest, 0);
     core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
     object_path_in(cache->directory, program.key, &path);
-    if (complete && sections_set(&sections, CORE_STRING_STATIC("manifest"),
-                                 manifest.data, manifest.byte_len)
+    if (sections_set(&sections, CORE_STRING_STATIC("manifest"),
+                     manifest.data, manifest.byte_len)
         && sections_set(&sections, CORE_STRING_STATIC("changed"),
                         cache->unstored.data, cache->unstored.byte_len)) {
         sections_serialize(&sections, &serialized);
@@ -2356,7 +2371,7 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         else core_put_u32(&warnings, 0);
         n00bb_tu_state_t *state = tu_state(scc->members.data[m]);
         struct { core_string_t kind; const void *data; size_t length; }
-            parts[7 + N00BB_PHASE_FINAL] = {
+            parts[8 + N00BB_PHASE_FINAL] = {
             {CORE_STRING_STATIC("object"), present ? object->object : nullptr,
              present ? object->object_bytes : 0},
             {CORE_STRING_STATIC("abi"), present ? object->abi : nullptr,
@@ -2374,13 +2389,16 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
             {CORE_STRING_STATIC("sites"), state->declaration_sites.data
                 ? state->declaration_sites.data : "",
              state->declaration_sites.byte_len},
+            {CORE_STRING_STATIC("state"),
+             holds_state(scc->members.data[m],
+                         present && object->runtime_object) ? "" : nullptr, 0},
         };
         for (uint8_t p = 0; p < N00BB_PHASE_FINAL; p++) {
             const uint8_t *stored = nullptr;
             size_t stored_bytes = 0;
             bool found = snapshot_summaries(snapshot, p, module, &stored,
                                             &stored_bytes);
-            parts[7 + p] = (typeof(parts[0])){summary_sections[p],
+            parts[8 + p] = (typeof(parts[0])){summary_sections[p],
                 found ? (stored ? (const void *)stored : "") : nullptr,
                 stored_bytes};
         }
