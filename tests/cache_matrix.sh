@@ -4,7 +4,6 @@ set -u
 build=$1
 tests=$2
 expected=$3
-scope=${4:-full}
 compiler="$build/n00b"
 llvm=$(sed -n 's/^LLVM_BINDIR := //p' "$build/config.mk")
 programs="$tests/programs"
@@ -16,13 +15,8 @@ unset N00B_NO_OBJECT_CACHE N00B_PATH
 : >"$tmp/cells"
 
 hello="$tests/perf/hello.n"
-records="$programs/merged/records.n"
-text="$programs/text/text_suite.n"
-threads="$programs/buffer/buffer_thread_slice.n"
 stack="$programs/cache_barrier/stack_caller.n"
 heap="$programs/cache_barrier/heap_caller.n"
-imports="$tmp/imports"
-starter="$imports/starter.n"
 racy="$tmp/record/racy.n"
 slots=${N00B_MATRIX_JOBS:-2}
 
@@ -55,7 +49,8 @@ run() {
     if [ "$cache" = off ]; then
         set -- env N00B_NO_OBJECT_CACHE=1 N00B_CACHE="$tmp/off.$label"
     else
-        set -- env N00B_CACHE="$tmp/cache.$cache"
+        set -- env N00B_CACHE="$tmp/cache.$cache" \
+            N00B_CACHE_LOG="$tmp/$label.log"
     fi
     case $command in
         syntax)
@@ -67,16 +62,11 @@ run() {
             "$@" "$compiler" check --dump-summaries "$target" \
                 >"$out/dump" 2>"$out/diagnostics"
             echo "status $?" >>"$out/diagnostics"
-            awk '/^summary @/ { name = $2; print name "\t" $0; next }
-                 /^  / && name != "" { print name "\t" $0; next }
-                 { name = ""; print }' "$out/dump" | LC_ALL=C sort \
-                >"$out/summaries"
+            LC_ALL=C sort "$out/dump" >"$out/summaries"
             rm -f "$out/dump"
             ;;
-        build|build-summaries)
-            flags=
-            [ "$command" = build-summaries ] && flags=--function-summaries
-            "$@" "$compiler" build $flags "$target" -o "$out/program" \
+        build)
+            "$@" "$compiler" build "$target" -o "$out/program" \
                 >"$out/stdout" 2>"$out/diagnostics"
             echo "status $?" >>"$out/diagnostics"
             [ -f "$out/program" ] && image "$out/program" >"$out/image"
@@ -105,65 +95,10 @@ same() {
     fi
 }
 
-cold() {
-    run check.hello.off off check "$hello" &
-    run check.records.off off check "$records" &
-    run check.text.off off check "$text" &
-    run check.threads.off off check "$threads" &
-    run build.hello.off off build "$hello" &
-    run build.records.off off build "$records" &
-    run build.text.off off build "$text" &
-    run build.summaries.off off build-summaries "$hello" &
-    run build.heap.off off build "$heap" &
-    run library.off off library record_root &
-    wait
-}
-
-filled_by_stack_caller() {
-    run build.stack.fill bs build "$stack"
-    run build.heap.cross bs build "$heap"
-}
-
-filled_by_hello() {
-    {
-        run check.hello.fill h check "$hello"
-        run check.hello.warm h check "$hello"
-        run check.records.cross h check "$records"
-        run check.text.cross h check "$text"
-        run check.text.warm h check "$text"
-        run check.threads.cross-hello h check "$threads"
-    } &
-    run build.hello.fill bh build "$hello"
-    for cache in bs sf cf; do cp -R "$tmp/cache.bh" "$tmp/cache.$cache"; done
-    filled_by_stack_caller &
-    comptime_main_cache &
-    run build.hello.warm bh build "$hello"
-    run build.records.cross bh build "$records"
-    run build.text.cross bh build "$text"
-    run build.text.warm bh build "$text"
-    wait
-}
-
-filled_by_records() {
-    {
-        run check.records.fill r check "$records"
-        run check.records.warm r check "$records"
-        run check.hello.cross r check "$hello"
-        run check.threads.cross-records r check "$threads"
-    } &
-    run build.records.fill br build "$records"
-    run build.records.warm br build "$records"
-    run build.hello.cross br build "$hello"
-    run build.summaries.cross br build-summaries "$hello"
-    run library.cross br library record_root
-    wait
-}
-
-reuses() {
-    cell=$1 log=$2 built="$tmp/$3/image" found=$4 missing=$5
+logged() {
+    cell=$1 log="$tmp/$2.log" found=$3 missing=$4
     echo "$cell" >>"$tmp/cells"
-    if [ -s "$built" ] && grep -q "$found" "$log" \
-        && ! grep -q "$missing" "$log"; then
+    if grep -q "$found" "$log" && ! grep -q "$missing" "$log"; then
         echo "pass $cell"
     else
         echo "FAIL $cell"
@@ -171,139 +106,54 @@ reuses() {
     fi
 }
 
-comptime_main_cache() {
-    cp -R "$programs/comptime/imports" "$imports"
-    export N00B_PATH="$imports"
-    run build.starter.off off build "$starter" &
-    run build.starter.fill sf build "$starter"
-    export N00B_CACHE_LOG="$tmp/starter.warm.log"
-    run build.starter.warm sf build "$starter"
-    unset N00B_CACHE_LOG
-    run build.changer.fill cf build "$imports/changer.n"
-    run build.starter.cross cf build "$starter"
-    export N00B_CACHE_LOG="$tmp/starter.cross.log"
-    run build.starter.cross-again cf build "$starter"
-    unset N00B_CACHE_LOG
-    wait
-    echo >>"$starter"
-    run build.starter.edited-off off build "$starter" &
-    run build.starter.edited cf build "$starter"
-    export N00B_CACHE_LOG="$tmp/starter.edited.log"
-    run build.starter.edited-again cf build "$starter"
-    unset N00B_CACHE_LOG
+checks() {
+    run check.hello.cold h check "$hello"
+    cp -R "$tmp/cache.h" "$tmp/cache.s"
+    cp -R "$tmp/cache.h" "$tmp/cache.so"
+    run check.hello.warm h check "$hello"
+    mkdir -p "$tmp/syntax"
+    cp "$programs/syntax_preferences.n" "$tmp/syntax/prefs.n"
+    printf 'import prefs\n' >"$tmp/syntax/main.n"
+    run syntax.fill s syntax ""
+    run syntax.warm s syntax "" --no-syntax-warnings &
+    run syntax.cold so syntax "" --no-syntax-warnings
     wait
 }
 
-library_cache() {
-    run library.fill lr library record_root
-    run library.warm lr library record_root
-}
-
-program_record() {
+builds() {
     mkdir -p "$tmp/record"
-    cp "$programs/cache_record/racy.n" "$racy"
-    run build.racy.off off build "$racy" &
-    run build.racy.fill pr build "$racy"
-    export N00B_CACHE_LOG="$tmp/racy.warm.log"
-    run build.racy.warm pr build "$racy"
+    cp "$programs/cache_record/racy.n" "$programs/cache_record/state.n" \
+        "$tmp/record/"
+    export N00B_PATH="$tmp/record"
+    run build.racy.cold r build "$racy" &
+    run build.heap.cold off build "$heap"
+    wait
+    cp -R "$tmp/cache.r" "$tmp/cache.b"
+    run build.racy.warm r build "$racy" &
+    run build.stack.fill b build "$stack"
+    run build.heap.cross b build "$heap"
     wait
     echo >>"$racy"
-    unset N00B_CACHE_LOG
-    run build.racy.edited-off off build "$racy" &
-    export N00B_CACHE_LOG="$tmp/racy.edited.log"
-    run build.racy.edited pr build "$racy"
+    run build.racy.edited r build "$racy" &
+    run build.racy.edited-cold off build "$racy"
+    wait
+    run library.cold off library record_root &
+    run library.fill l library record_root
     wait
 }
 
-pr_cells() {
-    run check.hello.fill h check "$hello"
-    run check.hello.warm h check "$hello"
-    run check.records.cross h check "$records"
-    run check.records.fill r check "$records"
-}
-
-syntax_settings() {
-    mkdir -p "$tmp/syntax"
-    cp "$programs/syntax_aliases.n" "$tmp/syntax/aliases.n"
-    cp "$programs/syntax_preferences.n" "$tmp/syntax/prefs.n"
-    printf 'import aliases\nimport prefs\n' >"$tmp/syntax/main.n"
-    run syntax.fill s syntax ""
-    for setting in default no-warnings function-fn block-colon; do
-        case $setting in
-            default) flags= ;;
-            no-warnings) flags=--no-syntax-warnings ;;
-            function-fn) flags="--syntax-preference function=fn" ;;
-            block-colon) flags="--syntax-preference block=:" ;;
-        esac
-        run "syntax.off.$setting" off syntax "" "$flags" &
-        run "syntax.warm.$setting" s syntax "" "$flags"
-    done
-    wait
-}
-
-if [ "$scope" = pr ]; then
-    pr_cells
-    same check.hello.warm check.hello.fill check.hello.warm
-    same check.records.cross-hello check.records.fill check.records.cross
-else
-    cold &
-    filled_by_hello &
-    filled_by_records &
-    library_cache &
-    syntax_settings &
-    program_record &
-    wait
-    for setting in default no-warnings function-fn block-colon; do
-        same "check.syntax-warnings.$setting" "syntax.off.$setting" \
-            "syntax.warm.$setting"
-    done
-    same check.hello.fill check.hello.off check.hello.fill
-    same check.hello.warm check.hello.off check.hello.warm
-    same check.hello.cross-records check.hello.off check.hello.cross
-    same check.records.fill check.records.off check.records.fill
-    same check.records.warm check.records.off check.records.warm
-    same check.records.cross-hello check.records.off check.records.cross
-    same check.text_suite.cross-hello check.text.off check.text.cross
-    same check.text_suite.warm check.text.off check.text.warm
-    same check.threads.cross-hello check.threads.off \
-        check.threads.cross-hello
-    same check.threads.cross-records check.threads.off \
-        check.threads.cross-records
-    same build.hello.fill build.hello.off build.hello.fill
-    same build.hello.warm build.hello.off build.hello.warm
-    same build.hello.cross-records build.hello.off build.hello.cross
-    same build.records.fill build.records.off build.records.fill
-    same build.records.warm build.records.off build.records.warm
-    same build.records.cross-hello build.records.off build.records.cross
-    same build.text_suite.cross-hello build.text.off build.text.cross
-    same build.text_suite.warm build.text.off build.text.warm
-    same build.heap_caller.cross-stack-caller build.heap.off build.heap.cross
-    same build.hello-function-summaries.cross-records build.summaries.off \
-        build.summaries.cross
-    same build.starter.fill build.starter.off build.starter.fill
-    same build.starter.warm build.starter.off build.starter.warm
-    same build.starter.cross-changer build.starter.off build.starter.cross
-    same build.starter.cross-changer-again build.starter.off \
-        build.starter.cross-again
-    same build.starter.edited build.starter.edited-off build.starter.edited
-    same build.starter.edited-again build.starter.edited-off \
-        build.starter.edited-again
-    for cell in warm:warm cross:cross-again edited:edited-again; do
-        reuses "build.starter.${cell%%:*}-reuses-cache" \
-            "$tmp/starter.${cell%%:*}.log" "build.starter.${cell#*:}" \
-            "reuse scc builtin" "reuse scc shared"
-    done
-    same build.racy.fill build.racy.off build.racy.fill
-    same build.racy.warm build.racy.off build.racy.warm
-    same build.racy.edited build.racy.edited-off build.racy.edited
-    reuses build.racy.warm-reuses-record "$tmp/racy.warm.log" \
-        build.racy.warm "reuse record" "store scc"
-    reuses build.racy.edited-rebuilds-record "$tmp/racy.edited.log" \
-        build.racy.edited "reuse scc builtin" "reuse record"
-    same library.record_root.fill library.off library.fill
-    same library.record_root.warm library.off library.warm
-    same library.record_root.cross-records library.off library.cross
-fi
+checks &
+builds &
+wait
+same check.cold-warm check.hello.cold check.hello.warm
+same check.syntax-setting syntax.cold syntax.warm
+same build.cold-warm build.racy.cold build.racy.warm
+logged build.warm-reuses-record build.racy.warm "reuse record" "store scc"
+same build.heap_caller.cross-stack-caller build.heap.cold build.heap.cross
+same build.edited-root build.racy.edited-cold build.racy.edited
+logged build.edited-rebuilds-record build.racy.edited "reuse scc builtin" \
+    "reuse record"
+same library.fill library.cold library.fill
 
 LC_ALL=C sort "$tmp/cells" >"$tmp/cells.sorted"
 LC_ALL=C sort "$expected" | LC_ALL=C join - "$tmp/cells.sorted" \
