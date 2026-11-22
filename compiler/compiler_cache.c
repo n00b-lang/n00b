@@ -14,7 +14,6 @@
 #include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_tu.h"
-#include "comptime.h"
 #include "config.h"
 #include "driver.h"
 #include "builtin_types.h"
@@ -2348,13 +2347,13 @@ put_members(core_buffer_t *manifest, const cache_scc_t *scc)
 }
 
 static bool
-holds_state(core_translation_unit_t *unit, bool baked)
+holds_state(core_translation_unit_t *unit)
 {
     ir_module_t *module = tu_state(unit)->ir_module;
     for (size_t g = 0; g < ir_global_count(module); g++) {
         ir_global_t *global = ir_global_at(module, g);
         if (!global->is_extern && global->mutability != IR_MUT_CONST)
-            return baked || n00bb_comptime_needed(unit);
+            return true;
     }
     return false;
 }
@@ -2481,8 +2480,7 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                 ? state->declaration_sites.data : "",
              state->declaration_sites.byte_len},
             {CORE_STRING_STATIC("state"),
-             holds_state(scc->members.data[m],
-                         present && object->runtime_object) ? "" : nullptr, 0},
+             holds_state(scc->members.data[m]) ? "" : nullptr, 0},
         };
         for (uint8_t p = 0; p < N00BB_PHASE_FINAL; p++) {
             const uint8_t *stored = nullptr;
