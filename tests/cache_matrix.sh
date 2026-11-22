@@ -24,6 +24,18 @@ heap="$programs/cache_barrier/heap_caller.n"
 imports="$tmp/imports"
 starter="$imports/starter.n"
 racy="$tmp/record/racy.n"
+slots=${N00B_MATRIX_JOBS:-2}
+
+acquire() {
+    while :; do
+        slot=0
+        while [ $slot -lt $slots ]; do
+            mkdir "$tmp/slot.$slot" 2>/dev/null && return
+            slot=$((slot + 1))
+        done
+        sleep 1
+    done
+}
 
 image() {
     "$llvm/llvm-objdump" -s "$1" | awk '
@@ -37,6 +49,7 @@ image() {
 
 run() {
     label=$1 cache=$2 command=$3 target=$4 extra=${5:-}
+    acquire
     out="$tmp/$label"
     mkdir -p "$out"
     if [ "$cache" = off ]; then
@@ -77,6 +90,7 @@ run() {
             echo "status $?" >>"$out/diagnostics"
             ;;
     esac
+    rmdir "$tmp/slot.$slot"
 }
 
 same() {
