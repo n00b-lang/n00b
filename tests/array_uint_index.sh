@@ -6,7 +6,7 @@ program_dir=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if "$compiler" lower "$program_dir/bitcode_array_noninteger_index_rejected.n" \
+if "$compiler" check "$program_dir/bitcode_array_noninteger_index_rejected.n" \
     >"$tmp/invalid.log" 2>&1; then
     echo 'non-integer array index unexpectedly compiled' >&2
     exit 1

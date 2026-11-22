@@ -13,12 +13,6 @@ when target_arch() == "arm64" or target_arch() == "x86_64" {
     let known_arch = false
 }
 
-when preproc_defines("PUNCH_FLAG") and preproc_value("PUNCH_FLAG") {
-    let bare_define = true
-} else {
-    let bare_define = false
-}
-
 private alias Count = int
 
 type Meters = int
@@ -59,7 +53,6 @@ func same_name(a: Name, b: Name) -> bool {
 
 require arithmetic_when
 require known_arch
-require bare_define
 require "\« \» \[" == "« » ["
 require counted(3) == 4
 require counted(nil) == -1
