@@ -150,18 +150,23 @@ same_string(n00bb_abi_string_view_t value, core_string_t text)
 }
 
 static bool
+receivable(const link_index_t *link, uint32_t index)
+{
+    const n00bb_abi_merged_table_t *types = link->types;
+    const n00b_abi_type_v1 *row = index ? (const void *)(types->records
+        + (size_t)index * types->record_bytes) : nullptr;
+    return row && !(row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+        && row->kind != N00B_ABI_TYPE_TRAIT;
+}
+
+static bool
 add_receiver(th_ctx *ctx, link_index_t *link,
              core_list_t(receiver_t) *receivers, core_dict_t *seen,
              th_type *type)
 {
-    const n00bb_abi_merged_table_t *types = link->types;
     if (!type || !th_is_closed(ctx, type)) return true;
     uint32_t index = type_index(link, th_hash(ctx, type));
-    if (!index) return true;
-    const n00b_abi_type_v1 *row = (const void *)(types->records
-        + (size_t)index * types->record_bytes);
-    if ((row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-        || row->kind == N00B_ABI_TYPE_TRAIT
+    if (!receivable(link, index)
         || core_dict_contains(seen, (void *)(uintptr_t)index)) return true;
     th_type *copy = th_type_clone(ctx, type);
     if (!copy) return false;
@@ -527,8 +532,9 @@ n00bb_abi_link_semantic_rows(
                 N00B_ABI_TABLE_TYPE, r);
             n00bb_abi_string_view_t name = {0};
             uint32_t linked = row ? type_index(&link, row->typehash) : 0;
-            if (!linked || core_dict_contains(&seen_receivers,
-                                              (void *)(uintptr_t)linked)
+            if (!receivable(&link, linked)
+                || core_dict_contains(&seen_receivers,
+                                      (void *)(uintptr_t)linked)
                 || !n00bb_abi_object_string(view, &row->canonical_name,
                                             &name)) continue;
             bool known = false;
