@@ -7,6 +7,7 @@
 #include "compiler_cache.h"
 #include "compiler_link.h"
 #include "driver.h"
+#include "qualified_names.h"
 #include "compiler_lower.h"
 #include "compiler_lower_emit.h"
 #include "config.h"
@@ -114,6 +115,14 @@ has_const_initializer(ir_module_t *module)
     for (size_t f = 0; module && f < ir_func_count(module); f++)
         if (n00bb_const_initializer(ir_func_at(module, f))) return true;
     return false;
+}
+
+bool
+n00bb_runtime_internal(core_translation_unit_t *unit)
+{
+    core_string_t member = {0};
+    return n00bb_name_member(unit->module.identifier,
+                             CORE_STRING_STATIC("sys.internal"), &member);
 }
 
 bool
@@ -487,7 +496,8 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         core_translation_unit_t *owner = ok ? n00bb_unit_named(analysis, path)
                                             : nullptr;
         bool bakeable = owner && (owner == unit
-                                  || !tu_state(owner)->interface_module);
+                                  || (!tu_state(owner)->interface_module
+                                      && !n00bb_runtime_internal(owner)));
         frozen_graph_t discarded = {
             .nodes = core_list_new(frozen_node_t),
             .edges = core_list_new(frozen_edge_t),
@@ -515,10 +525,11 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         ok = read_text(reader, &path) && read_text(reader, &global);
         core_translation_unit_t *owner = ok ? n00bb_unit_named(analysis, path)
                                             : nullptr;
-        bool frozen = false;
+        bool runtime = owner && n00bb_runtime_internal(owner);
+        bool frozen = runtime;
         for (size_t k = 0; owner && k < kept.len; k++)
             frozen |= kept.data[k] == owner;
-        bool started = ok && starts && owner != unit;
+        bool started = ok && starts && owner != unit && !runtime;
         if (started) n00bb_cache_skip_store(analysis->cache, path);
         if (ok && !frozen && n00bb_report(diagnostics, unit,
                 N00B_DIAG_COMPTIME_IMPORT_CHANGE_DROPPED,

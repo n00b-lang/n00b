@@ -210,7 +210,7 @@ Obviously that's pseudo-code, but at comptime, the downloading and precomputatio
 
 And then, with link-time optimization on, `download_unicode_db()` and `compute_unicode_character_info_cache()` would get compiled out of the binary (assuming they're not used anywhere else).
 
-If `comptime` execution exits normally, then comptime "succeeds". Any module-level variables that were set at compile time that may be used at runtime are stored as starting values.
+If `comptime` execution exits normally, then comptime "succeeds". Any module-level variables that were set at compile time that may be used at runtime are stored as starting values. The runtime's own bookkeeping, the variables of the `sys.internal` modules, is never stored; every program starts it fresh.
 
 Note that, for variables marked as thread-local, the starting values are taken from the main thread's value, and are available for any thread that launches.
 

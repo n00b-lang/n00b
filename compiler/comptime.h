@@ -6,6 +6,7 @@
 #include "compiler_tu.h"
 #include "specialize.h"
 
+bool n00bb_runtime_internal(core_translation_unit_t *unit);
 bool n00bb_comptime_needed(core_translation_unit_t *unit);
 bool n00bb_comptime_seeds(core_translation_unit_t *unit, ir_global_t *global);
 bool n00bb_comptime_run(n00bb_link_analysis_t *analysis,

@@ -14,6 +14,7 @@
 #include "compiler_lower.h"
 #include "compiler_phases.h"
 #include "compiler_tu.h"
+#include "comptime.h"
 #include "config.h"
 #include "driver.h"
 #include "builtin_types.h"
@@ -2350,7 +2351,8 @@ static bool
 holds_state(core_translation_unit_t *unit)
 {
     ir_module_t *module = tu_state(unit)->ir_module;
-    for (size_t g = 0; g < ir_global_count(module); g++) {
+    for (size_t g = 0; !n00bb_runtime_internal(unit)
+         && g < ir_global_count(module); g++) {
         ir_global_t *global = ir_global_at(module, g);
         if (!global->is_extern && global->mutability != IR_MUT_CONST)
             return true;
