@@ -1993,6 +1993,14 @@ collect_trait_bounds(n00bb_link_analysis_t *analysis)
     }
 }
 
+static bool
+pure_bound(const n00bb_trait_bound_t *bound)
+{
+    return core_string_eq(bound->qualified, N00BB_HASH_TRAIT)
+        && core_string_eq(bound->method, CORE_STRING_STATIC("hash"))
+        && bound->rule.query == N00BB_QUERY_FORBIDS_EFFECT;
+}
+
 static void
 trait_bound_tags(n00bb_link_analysis_t *analysis, core_string_t trait,
                  core_string_t method, core_buffer_t *tags)
@@ -2007,6 +2015,8 @@ trait_bound_tags(n00bb_link_analysis_t *analysis, core_string_t trait,
                 && bound->rule.query != N00BB_QUERY_HAS_EFFECT)) continue;
         n00bb_bound_tag(tags, bound->rule.query, 0, bound->rule.effect);
         core_buffer_putc(tags, '\n');
+        if (pure_bound(bound))
+            core_buffer_puts(tags, "forbids_effect:0:writes_parameter\n");
     }
 }
 
@@ -2418,6 +2428,7 @@ typedef struct {
     core_translation_unit_t   *unit;
     ir_func_t                 *function;
     const n00bb_trait_bound_t *bound;
+    bool                       writes;
 } trait_violation_t;
 core_list_decl(trait_violation_t);
 
@@ -2489,6 +2500,17 @@ report_implementation(n00bb_link_analysis_t *analysis,
     const n00bb_trait_bound_t *bound = violation->bound;
     core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(violation->unit);
+    if (violation->writes) {
+        core_string_t key = violation->function->params[0]->name;
+        if (n00bb_report(diagnostics, violation->unit, N00B_DIAG_TRAIT_CHECK,
+                n00bb_span_location(violation->function->span),
+                N00B_TEXT_HASH_WRITES_KEY,
+                N00BB_ARGS(ARG_TEXT(n00bb_function_root(
+                               violation->function->name)), ARG_TEXT(key))))
+            n00bb_report_help(diagnostics, N00B_TEXT_HASH_FROM_WHAT_IT_READS,
+                              N00BB_ARGS(ARG_TEXT(key)));
+        return;
+    }
     n00bb_report(diagnostics, violation->unit, N00B_DIAG_TRAIT_CHECK,
         n00bb_span_location(violation->function->span),
         bound->expression.u8_bytes ? N00B_TEXT_IMPLEMENTATION_CHECK_FALSE
@@ -2527,11 +2549,15 @@ check_trait_candidate(n00bb_link_analysis_t *analysis, ir_func_t *function,
     core_string_t root = n00bb_function_root(function->name);
     for (size_t b = 0; b < analysis->trait_bounds.len; b++) {
         const n00bb_trait_bound_t *bound = &analysis->trait_bounds.data[b];
-        if (!implements_method(types->types, function, root, bound)
-            || trait_bound_holds(analysis, bound, function))
-            continue;
+        if (!implements_method(types->types, function, root, bound)) continue;
+        bool holds = trait_bound_holds(analysis, bound, function);
+        bool writes = holds && pure_bound(bound)
+            && (ir_summary_effect_bits(ir_summary_of(analysis->summaries,
+                    function)) & UINT64_C(1) << IR_SEFFECT_WRITES_PARAM_SHIFT);
+        if (holds && !writes) continue;
         core_list_push(*violations, ((trait_violation_t){
-            .unit = owner, .function = function, .bound = bound}));
+            .unit = owner, .function = function, .bound = bound,
+            .writes = writes}));
         core_dict_put(violators, function, function);
     }
 }
@@ -2564,7 +2590,8 @@ check_trait_implementations(n00bb_link_analysis_t *analysis)
     core_dict_free(&seen);
     for (size_t v = 0; v < violations.len; v++) {
         const trait_violation_t *violation = &violations.data[v];
-        if (violation->bound->rule.query == N00BB_QUERY_FORBIDS_EFFECT
+        if (!violation->writes
+            && violation->bound->rule.query == N00BB_QUERY_FORBIDS_EFFECT
             && through_violation(analysis, &violators, violation))
             continue;
         report_implementation(analysis, violation);

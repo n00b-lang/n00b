@@ -863,6 +863,8 @@ N00B_TEXT(CALLBACK_NOT_ALWAYS, "the callback passed as `{1}` to `{0}` must alway
 N00B_TEXT(CALLBACK_UNKNOWN_TARGET, "`{0}` requires a check on `{1}` that the compiler can't show for this argument")
 N00B_TEXT(IMPLEMENTATION_MAY_DO, "`{0}` implements `{1}.{2}`, which must never have effect `{3}`, but:")
 N00B_TEXT(IMPLEMENTATION_NOT_ALWAYS, "`{0}` implements `{1}.{2}`, which must always have effect `{3}`, but it can return without it")
+N00B_TEXT(HASH_WRITES_KEY, "`{0}` implements `Hash.hash`, so it must be pure, but it may change what `{1}` refers to")
+N00B_TEXT(HASH_FROM_WHAT_IT_READS, "compute the hash only from what `{0}` holds, without changing it")
 N00B_TEXT(TRAIT_FORBIDS_HERE, "`{0}.{1}` forbids `{2}` here")
 N00B_TEXT(TRAIT_REQUIRES_HERE, "`{0}.{1}` requires `{2}` here")
 N00B_TEXT(TRAIT_CHECKS_HERE, "`{0}` checks this here")

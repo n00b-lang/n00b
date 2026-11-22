@@ -1,0 +1,2 @@
+tests/diagnostics/lower/hash_writes.n:5:1: error N00B-S0078: `hash` implements `Hash.hash`, so it must be pure, but it may change what `self` refers to
+  help: compute the hash only from what `self` holds, without changing it
