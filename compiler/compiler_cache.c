@@ -314,13 +314,6 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         core_put_u32(out, n00bb_setting_bool(settings[i]));
-    core_put_u32(out, n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
-    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
-    core_put_u32(out, (uint32_t)n00bb_setting_count(preferences));
-    for (size_t i = 0; i < n00bb_setting_count(preferences); i++) {
-        core_string_t value = n00bb_setting_at(preferences, i);
-        core_put_bytes(out, value.data, value.u8_bytes);
-    }
     core_put_u32(out, (uint32_t)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
@@ -669,8 +662,17 @@ struct n00bb_cache_t {
     core_buffer_t libraries;
 };
 
+static bool
+stdlib_path(const n00bb_cache_t *cache, core_string_t path)
+{
+    return cache->stdlib_root.u8_bytes
+        && path.u8_bytes > cache->stdlib_root.u8_bytes
+        && core_string_starts_with(path, cache->stdlib_root)
+        && path.data[cache->stdlib_root.u8_bytes] == '/';
+}
+
 static uint64_t
-scc_key(const n00bb_cache_t *cache, uint64_t freshness,
+scc_key(const n00bb_cache_t *cache, bool stdlib, uint64_t freshness,
         const uint64_t *imports, size_t import_count,
         const uint64_t *inlined, size_t inlined_count)
 {
@@ -684,6 +686,13 @@ scc_key(const n00bb_cache_t *cache, uint64_t freshness,
     for (size_t i = 0; i < inlined_count; i++) core_put_u64(&key, inlined[i]);
     core_put_u64(&key, cache->compiler);
     core_put_bytes(&key, cache->flags.data, cache->flags.byte_len);
+    n00bb_setting_id_t preferences = N00BB_KEY_SYNTAX_PREFERENCES;
+    bool syntax = !stdlib || stdlib_path(cache, cache->root_path);
+    core_put_u32(&key, syntax && n00bb_setting_bool(N00BB_KEY_SYNTAX_WARNINGS));
+    for (size_t i = 0; syntax && i < n00bb_setting_count(preferences); i++) {
+        core_string_t value = n00bb_setting_at(preferences, i);
+        core_put_bytes(&key, value.data, value.u8_bytes);
+    }
     core_put_text(&key, cache->triple);
     uint64_t result = buffer_hash(&key);
     core_buffer_release(&key);
@@ -1040,8 +1049,11 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
         ok = callee != nullptr;
         if (ok) inlined[i] = callee->freshness;
     }
-    ok = ok && scc_key(cache, entry->freshness, imports, entry->imports.len,
-                       inlined, entry->inlined.len) == entry->key;
+    const cache_member_t *lead = entry->members.data;
+    ok = ok && scc_key(cache, stdlib_path(cache, lead->owner.data
+                           ? lead->owner_path : lead->path),
+                       entry->freshness, imports, entry->imports.len, inlined,
+                       entry->inlined.len) == entry->key;
     core_free(imports);
     core_free(inlined);
     entry->state = ok ? ENTRY_VALID : ENTRY_INVALID;
@@ -1183,7 +1195,6 @@ reference_holds(n00bb_cache_t *cache, const cache_entry_t *entry,
 static bool
 scc_in_stdlib(const n00bb_cache_t *cache, const cache_scc_t *scc)
 {
-    if (!cache->stdlib_root.u8_bytes) return false;
     bool inside = scc->members.len > 0;
     for (size_t m = 0; inside && m < scc->members.len; m++) {
         core_string_t owner = {0}, owner_path = {0};
@@ -1191,9 +1202,7 @@ scc_in_stdlib(const n00bb_cache_t *cache, const cache_scc_t *scc)
         core_string_t path = canonical_path(
             n00bb_source_file_generated_owner(source, &owner, &owner_path)
                 ? owner_path : core_source_file_path(source));
-        inside = path.u8_bytes > cache->stdlib_root.u8_bytes
-            && core_string_starts_with(path, cache->stdlib_root)
-            && path.data[cache->stdlib_root.u8_bytes] == '/';
+        inside = stdlib_path(cache, path);
         core_free(path.data);
     }
     return inside;
@@ -1405,7 +1414,8 @@ record_key(const n00bb_cache_t *cache)
     core_buffer_t root = {0};
     core_buffer_puts(&root, "n00b.comptime.record.v1");
     core_put_text(&root, cache->root_path);
-    uint64_t key = scc_key(cache, buffer_hash(&root), nullptr, 0, nullptr, 0);
+    uint64_t key = scc_key(cache, false, buffer_hash(&root), nullptr, 0,
+                           nullptr, 0);
     core_buffer_release(&root);
     return key;
 }
@@ -2460,8 +2470,8 @@ scc_key_of(const n00bb_cache_t *cache, core_list_t(cache_scc_t) *sccs,
         imports[i] = scc_key_of(cache, sccs, scc->imports.data[i]);
     for (size_t i = 0; i < scc->inlined.len; i++)
         inlined[i] = sccs->data[scc->inlined.data[i]].freshness;
-    scc->key = scc_key(cache, scc->freshness, imports, scc->imports.len,
-                       inlined, scc->inlined.len);
+    scc->key = scc_key(cache, scc_in_stdlib(cache, scc), scc->freshness,
+                       imports, scc->imports.len, inlined, scc->inlined.len);
     core_free(imports);
     core_free(inlined);
     return scc->key;
