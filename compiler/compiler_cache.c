@@ -399,11 +399,20 @@ scc_freshness(cache_scc_t *scc)
                              unit->module.identifier.u8_bytes,
                              made.data ? made.data : "", made.byte_len);
             core_buffer_release(&made);
-        } else
+        } else {
+            uint8_t *read = nullptr;
+            size_t read_bytes = 0;
+            bool cached = !core_source_file_size(&unit->source)
+                && read_file(core_source_file_path(&unit->source), &read,
+                             &read_bytes);
             freshness_member(&input, unit->module.identifier.data,
-                             unit->module.identifier.u8_bytes,
-                             core_source_file_contents(&unit->source).data,
-                             core_source_file_size(&unit->source));
+                             unit->module.identifier.u8_bytes, cached
+                                 ? (const char *)read
+                                 : core_source_file_contents(&unit->source).data,
+                             cached ? read_bytes
+                                    : core_source_file_size(&unit->source));
+            core_free(read);
+        }
         for (size_t i = 0; i < core_translation_unit_import_count(unit);
              i++) {
             core_string_t name =
@@ -621,7 +630,7 @@ capture_snapshot(cache_snapshot_t *snapshot, n00bb_link_analysis_t *analysis,
     snapshot->captured[phase - 1] = summaries != nullptr;
     for (size_t m = 0; summaries && m < snapshot->modules.len; m++) {
         core_buffer_t encoded = {0};
-        if (n00bb_encode_stored_summaries(analysis, summaries,
+        if (n00bb_encode_stored_summaries(analysis, summaries, nullptr,
                                           snapshot->modules.data[m], phase,
                                           snapshot->types, &encoded)) {
             core_put_text(out, snapshot->names.data[m]);
@@ -659,6 +668,10 @@ struct n00bb_cache_t {
     n00bb_cache_locate_fn locate;
     void *locate_context;
     bool unrecorded;
+    bool recorded;
+    cache_entry_t record;
+    core_list_t(cache_section_t) recording;
+    th_type_writer_t *recording_types;
     core_buffer_t unstored;
     core_buffer_t libraries;
 };
@@ -1420,8 +1433,9 @@ static uint64_t
 record_key(const n00bb_cache_t *cache)
 {
     core_buffer_t root = {0};
-    core_buffer_puts(&root, "n00b.comptime.record.v1");
+    core_buffer_puts(&root, "n00b.program.record.v1");
     core_put_text(&root, cache->root_path);
+    core_put_text(&root, core_buffer_string(&cache->libraries));
     uint64_t key = scc_key(cache, false, buffer_hash(&root), nullptr, 0,
                            nullptr, 0);
     core_buffer_release(&root);
@@ -1429,7 +1443,7 @@ record_key(const n00bb_cache_t *cache)
 }
 
 static const cache_section_t *
-read_record(n00bb_cache_t *cache, cache_entry_t *record)
+read_record(n00bb_cache_t *cache)
 {
     uint8_t *bytes = nullptr;
     size_t length = 0;
@@ -1440,18 +1454,27 @@ read_record(n00bb_cache_t *cache, cache_entry_t *record)
     core_free(bytes);
     bytes = nullptr;
     core_buffer_t path = {0};
-    object_path_in(cache->directory, record->key, &path);
-    const cache_section_t *changed = starts
-            && read_file(core_buffer_string(&path), &bytes, &length)
-            && entry_parse(record, bytes, length)
-            && entry_fresh(cache, record, true)
-        ? phase_section(record, CORE_STRING_STATIC("changed"),
-                        (core_string_t){0})
-        : nullptr;
+    cache->record = (cache_entry_t){.key = record_key(cache)};
+    object_path_in(cache->directory, cache->record.key, &path);
+    cache->recorded = read_file(core_buffer_string(&path), &bytes, &length)
+        && entry_parse(&cache->record, bytes, length)
+        && entry_fresh(cache, &cache->record, true);
     core_free(bytes);
     core_buffer_release(&path);
-    cache->unrecorded = starts && !changed;
-    return changed;
+    const cache_section_t *table = cache->recorded ? phase_section(
+        &cache->record, CORE_STRING_STATIC("types"), (core_string_t){0})
+        : nullptr;
+    if (table)
+        cache->record.types = th_type_reader_open(
+            ir_ctx_types(cache->ir_context), table->data, table->length,
+            nullptr);
+    if (cache->recorded) {
+        core_string_t phase = phase_name();
+        cache_log("%.*s reuse record", (int)phase.u8_bytes, phase.data);
+    }
+    cache->unrecorded = starts && !cache->recorded;
+    return starts && cache->recorded ? phase_section(&cache->record,
+        CORE_STRING_STATIC("changed"), (core_string_t){0}) : nullptr;
 }
 
 n00bb_cache_t *
@@ -1499,18 +1522,17 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->snapshots = core_list_new(cache_snapshot_t);
     cache->sccs = core_list_new(cache_scc_t);
     cache->instances = core_list_new(cache_instance_t);
+    cache->recording = core_list_new(cache_section_t);
     core_buffer_append_string(&cache->libraries, libraries);
     read_module_keys(cache);
     read_reachable_entries(cache);
-    cache_entry_t record = {.key = record_key(cache)};
-    const cache_section_t *rebuilt = read_record(cache, &record);
+    const cache_section_t *rebuilt = read_record(cache);
     for (size_t e = 0; e < cache->entries.len; e++) {
         cache_entry_t *entry = &cache->entries.data[e];
         entry->fresh = entry_fresh(cache, entry, false);
         entry->excluded = entry_excluded(cache, entry, rebuilt)
             || entry_uses_library(cache, entry);
     }
-    entry_release(&record);
     for (size_t e = 0; e < cache->entries.len; e++)
         (void)entry_validate(cache, &cache->entries.data[e]);
     for (size_t e = 0; e < cache->entries.len; e++) {
@@ -1586,6 +1608,9 @@ n00bb_cache_free(n00bb_cache_t *cache)
     for (size_t i = 0; i < cache->instances.len; i++)
         sections_release(&cache->instances.data[i].sections);
     core_list_free(cache->instances);
+    entry_release(&cache->record);
+    sections_release(&cache->recording);
+    th_type_writer_free(cache->recording_types);
     core_buffer_release(&cache->flags);
     core_buffer_release(&cache->unstored);
     core_buffer_release(&cache->libraries);
@@ -1653,12 +1678,18 @@ n00bb_cache_has_module(const n00bb_cache_t *cache, core_string_t module)
 
 bool
 n00bb_cache_module_source(const n00bb_cache_t *cache, core_string_t module,
-                          core_string_t *path, uint64_t *source_hash)
+                          core_string_t *path, uint64_t *source_hash,
+                          core_string_t generated[3])
 {
     const cache_member_t *member = loaded_member(cache, module, nullptr);
     if (!member) return false;
     *path = member->path;
     *source_hash = member->source_hash;
+    if (generated) {
+        generated[0] = member->owner;
+        generated[1] = member->owner_path;
+        generated[2] = core_buffer_string(&member->inputs);
+    }
     return true;
 }
 
@@ -1676,6 +1707,60 @@ n00bb_cache_module_section(const n00bb_cache_t *cache, core_string_t module,
     *length = section->length;
     *types  = entry->types;
     return true;
+}
+
+bool
+n00bb_cache_record_section(const n00bb_cache_t *cache, core_string_t module,
+                           core_string_t kind, const uint8_t **data,
+                           size_t *length, const th_type_reader_t **types)
+{
+    const cache_section_t *section = cache && cache->recorded
+        ? phase_section(&cache->record, kind, module) : nullptr;
+    if (!section) return false;
+    *data = section->data;
+    *length = section->length;
+    if (types) *types = cache->record.types;
+    return true;
+}
+
+void
+n00bb_cache_record_put(n00bb_cache_t *cache, core_string_t module,
+                       core_string_t kind, const core_buffer_t *bytes)
+{
+    if (!cache || cache->recorded) return;
+    core_buffer_t name = {0};
+    core_buffer_append_string(&name, kind);
+    if (module.data) {
+        core_buffer_putc(&name, '.');
+        core_buffer_append_string(&name, module);
+    }
+    (void)sections_set(&cache->recording, core_buffer_string(&name),
+                       bytes->data ? bytes->data : "", bytes->byte_len);
+    core_buffer_release(&name);
+}
+
+static void
+record_program_summaries(n00bb_cache_t *cache, n00bb_link_analysis_t *analysis)
+{
+    if (cache->recorded || analysis->may_link_further || !analysis->summaries
+        || analysis->summaries == analysis->library_summaries) return;
+    if (!cache->recording_types)
+        cache->recording_types = th_type_writer_new(
+            ir_ctx_types(cache->ir_context));
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        ir_module_t *body = interface_body_module(analysis,
+                                                  unit->module.identifier);
+        ir_module_t *module = body ? body : state ? state->ir_module : nullptr;
+        core_buffer_t encoded = {0};
+        if (module && n00bb_encode_stored_summaries(analysis,
+                analysis->summaries, analysis->library_summaries, module,
+                N00BB_PHASE_MAIN, cache->recording_types, &encoded))
+            n00bb_cache_record_put(cache, unit->module.identifier,
+                                   CORE_STRING_STATIC("program"), &encoded);
+        core_buffer_release(&encoded);
+    }
 }
 
 bool
@@ -1995,6 +2080,8 @@ n00bb_cache_capture_summaries(n00bb_cache_t *cache,
          && i < cache->snapshots.len; i++)
         capture_snapshot(&cache->snapshots.data[i], analysis, summaries,
                          phase);
+    if (cache && analysis && phase == N00BB_PHASE_MAIN)
+        record_program_summaries(cache, analysis);
 }
 
 static bool
@@ -2273,7 +2360,7 @@ holds_state(core_translation_unit_t *unit, bool baked)
 }
 
 static void
-store_record(const n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
+store_record(n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
 {
     cache_scc_t program = {
         .key = record_key(cache),
@@ -2285,20 +2372,24 @@ store_record(const n00bb_cache_t *cache, const core_list_t(cache_scc_t) *sccs)
     qsort(program.members.data, program.members.len,
           sizeof(*program.members.data), compare_units);
     scc_freshness(&program);
-    core_buffer_t manifest = {0}, serialized = {0}, path = {0};
+    core_buffer_t manifest = {0}, serialized = {0}, path = {0}, table = {0};
     put_members(&manifest, &program);
     for (int i = 0; i < 3; i++) core_put_u32(&manifest, 0);
-    core_list_t(cache_section_t) sections = core_list_new(cache_section_t);
     object_path_in(cache->directory, program.key, &path);
-    if (sections_set(&sections, CORE_STRING_STATIC("manifest"),
+    if (sections_set(&cache->recording, CORE_STRING_STATIC("manifest"),
                      manifest.data, manifest.byte_len)
-        && sections_set(&sections, CORE_STRING_STATIC("changed"),
-                        cache->unstored.data, cache->unstored.byte_len)) {
-        sections_serialize(&sections, &serialized);
+        && sections_set(&cache->recording, CORE_STRING_STATIC("changed"),
+                        cache->unstored.data, cache->unstored.byte_len)
+        && (!cache->recording_types
+            || (th_type_writer_finish(cache->recording_types, &table)
+                && sections_set(&cache->recording,
+                                CORE_STRING_STATIC("types"), table.data,
+                                table.byte_len)))) {
+        sections_serialize(&cache->recording, &serialized);
         (void)core_os_write_file_atomic(core_buffer_string(&path),
                                         serialized.data, serialized.byte_len);
     }
-    sections_release(&sections);
+    core_buffer_release(&table);
     core_buffer_release(&serialized);
     core_buffer_release(&path);
     core_buffer_release(&manifest);
@@ -2860,7 +2951,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         if (object && ok)
             log_instance(CORE_STRING_STATIC("store"), item);
     }
-    if (ok && cache->unrecorded) store_record(cache, sccs);
+    if (ok && !cache->recorded) store_record(cache, sccs);
     release_fill_lock();
     return ok;
 }

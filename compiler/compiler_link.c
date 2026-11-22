@@ -4045,7 +4045,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     ir_group_pdg_free(analysis->program);
     core_list_free(analysis->assert_sites);
     n00bb_interface_summaries_free(analysis->interface_summaries);
-    for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
+    for (size_t p = 0; p <= N00BB_PHASE_FINAL; p++)
         n00bb_interface_summaries_free(analysis->stored_summaries[p]);
     if (analysis->module_names_ready) {
         core_dict_foreach(&analysis->module_names, item)

@@ -773,13 +773,19 @@ n00bb_resolver_same_root(const n00bb_resolver_t *resolver,
 
 void
 n00bb_source_file_mark_interface(core_source_file_t *source,
-                                 uint64_t source_hash, bool linked_library)
+                                 uint64_t source_hash, bool linked_library,
+                                 const core_string_t generated[3])
 {
     n00bb_source_origin_t *origin = source
         ? core_source_file_user_data(source) : nullptr;
     if (!origin) return;
     origin->interface_module = true;
     origin->linked_library = linked_library;
+    if (generated[0].data) {
+        origin->generated_owner = core_string_dup(generated[0]);
+        origin->generated_owner_path = core_string_dup(generated[1]);
+        origin->generated_inputs = core_string_dup(generated[2]);
+    }
     core_source_file_set_identity(source, source_hash);
 }
 

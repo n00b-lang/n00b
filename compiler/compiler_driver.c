@@ -1038,11 +1038,11 @@ make_interface_module_source(locate_worker_context_t *context,
     core_string_t package = interface_package_for_module(
         &context->interfaces, module->identifier);
     if (!package.data) return false;
-    core_string_t cached_path = {0};
+    core_string_t cached_path = {0}, generated[3] = {0};
     uint64_t source_hash = 0;
     core_buffer_t path = {0};
     if (!n00bb_cache_module_source(context->cache, module->identifier,
-                                   &cached_path, &source_hash)
+                                   &cached_path, &source_hash, generated)
         || !cached_path.data)
         core_buffer_printf(&path, "<interface:%.*s>",
             (int)module->identifier.u8_bytes, module->identifier.data);
@@ -1052,7 +1052,8 @@ make_interface_module_source(locate_worker_context_t *context,
     core_buffer_release(&path);
     if (!initialized) return false;
     n00bb_source_file_set_package(source, package);
-    n00bb_source_file_mark_interface(source, source_hash, !cached_path.data);
+    n00bb_source_file_mark_interface(source, source_hash, !cached_path.data,
+                                     generated);
     return true;
 }
 
@@ -2351,7 +2352,7 @@ restore_interface_literals(import_driver_t *driver,
     core_string_t path = {0};
     uint64_t hash = 0;
     if (!data || !n00bb_cache_module_source(driver->loader->cache,
-            unit->module.identifier, &path, &hash)) return true;
+            unit->module.identifier, &path, &hash, nullptr)) return true;
     char *contents = nullptr;
     size_t bytes = 0;
     bool ok = core_os_read_file(path, &contents, &bytes)

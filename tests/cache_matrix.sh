@@ -23,6 +23,7 @@ stack="$programs/cache_barrier/stack_caller.n"
 heap="$programs/cache_barrier/heap_caller.n"
 imports="$tmp/imports"
 starter="$imports/starter.n"
+racy="$tmp/record/racy.n"
 
 image() {
     "$llvm/llvm-objdump" -s "$1" | awk '
@@ -145,10 +146,10 @@ filled_by_records() {
 }
 
 reuses() {
-    cell=$1 log=$2 built="$tmp/$3/image"
+    cell=$1 log=$2 built="$tmp/$3/image" found=$4 missing=$5
     echo "$cell" >>"$tmp/cells"
-    if [ -s "$built" ] && grep -q "reuse scc builtin" "$log" \
-        && ! grep -q "reuse scc shared" "$log"; then
+    if [ -s "$built" ] && grep -q "$found" "$log" \
+        && ! grep -q "$missing" "$log"; then
         echo "pass $cell"
     else
         echo "FAIL $cell"
@@ -182,6 +183,22 @@ comptime_main_cache() {
 library_cache() {
     run library.fill lr library record_root
     run library.warm lr library record_root
+}
+
+program_record() {
+    mkdir -p "$tmp/record"
+    cp "$programs/cache_record/racy.n" "$racy"
+    run build.racy.off off build "$racy" &
+    run build.racy.fill pr build "$racy"
+    export N00B_CACHE_LOG="$tmp/racy.warm.log"
+    run build.racy.warm pr build "$racy"
+    wait
+    echo >>"$racy"
+    unset N00B_CACHE_LOG
+    run build.racy.edited-off off build "$racy" &
+    export N00B_CACHE_LOG="$tmp/racy.edited.log"
+    run build.racy.edited pr build "$racy"
+    wait
 }
 
 pr_cells() {
@@ -220,6 +237,7 @@ else
     filled_by_records &
     library_cache &
     syntax_settings &
+    program_record &
     wait
     for setting in default no-warnings function-fn block-colon; do
         same "check.syntax-warnings.$setting" "syntax.off.$setting" \
@@ -256,12 +274,18 @@ else
     same build.starter.edited build.starter.edited-off build.starter.edited
     same build.starter.edited-again build.starter.edited-off \
         build.starter.edited-again
-    reuses build.starter.warm-reuses-cache "$tmp/starter.warm.log" \
-        build.starter.warm
-    reuses build.starter.cross-reuses-cache "$tmp/starter.cross.log" \
-        build.starter.cross-again
-    reuses build.starter.edited-reuses-cache "$tmp/starter.edited.log" \
-        build.starter.edited-again
+    for cell in warm:warm cross:cross-again edited:edited-again; do
+        reuses "build.starter.${cell%%:*}-reuses-cache" \
+            "$tmp/starter.${cell%%:*}.log" "build.starter.${cell#*:}" \
+            "reuse scc builtin" "reuse scc shared"
+    done
+    same build.racy.fill build.racy.off build.racy.fill
+    same build.racy.warm build.racy.off build.racy.warm
+    same build.racy.edited build.racy.edited-off build.racy.edited
+    reuses build.racy.warm-reuses-record "$tmp/racy.warm.log" \
+        build.racy.warm "reuse record" "store scc"
+    reuses build.racy.edited-rebuilds-record "$tmp/racy.edited.log" \
+        build.racy.edited "reuse scc builtin" "reuse record"
     same library.record_root.fill library.off library.fill
     same library.record_root.warm library.off library.warm
     same library.record_root.cross-records library.off library.cross

@@ -149,8 +149,8 @@ body_matches(void *context, const ir_func_t *function, uint64_t body)
 
 static bool
 module_summaries(n00bb_link_analysis_t *analysis, ir_summaries_t *summaries,
-                 ir_module_t *module, uint8_t phase, th_type_writer_t *types,
-                 core_buffer_t *out)
+                 ir_summaries_t *except, ir_module_t *module, uint8_t phase,
+                 th_type_writer_t *types, core_buffer_t *out)
 {
     core_buffer_t encoded = {0};
     uint32_t count = 0;
@@ -167,7 +167,9 @@ module_summaries(n00bb_link_analysis_t *analysis, ir_summaries_t *summaries,
         ir_func_t *function = ir_func_at(module, f);
         ir_summary_t *summary = function->n_blocks
             ? ir_summary_of(summaries, function) : nullptr;
-        if (!summary) continue;
+        if (!summary || (except && (summary == ir_summary_of(except, function)
+                                    || !ir_summary_results_known(summary))))
+            continue;
         core_buffer_t bytes = {0};
         ok = phase
             ? ir_summary_encode_stored(summaries, function,
@@ -252,8 +254,8 @@ static bool
 encode_summaries(void *context, ir_module_t *module, core_buffer_t *out)
 {
     n00bb_link_analysis_t *analysis = context;
-    return module_summaries(analysis, analysis->summaries, module, 0, nullptr,
-                            out);
+    return module_summaries(analysis, analysis->summaries, nullptr, module, 0,
+                            nullptr, out);
 }
 
 bool
@@ -437,26 +439,29 @@ n00bb_interface_summary(n00bb_link_analysis_t *analysis,
 
 bool
 n00bb_encode_stored_summaries(n00bb_link_analysis_t *analysis,
-                              ir_summaries_t *summaries, ir_module_t *module,
+                              ir_summaries_t *summaries,
+                              ir_summaries_t *except, ir_module_t *module,
                               uint8_t phase, th_type_writer_t *types,
                               core_buffer_t *out)
 {
     return summaries && phase && types
-        && module_summaries(analysis, summaries, module, phase, types, out);
+        && module_summaries(analysis, summaries, except, module, phase, types,
+                            out);
 }
 
 static const core_string_t stored_sections[] = {
     CORE_STRING_STATIC("escapes"),
     CORE_STRING_STATIC("summaries"),
     CORE_STRING_STATIC("final"),
+    CORE_STRING_STATIC("program"),
 };
 
 static n00bb_interface_summaries_t *
-stored_index(n00bb_link_analysis_t *analysis, uint8_t phase)
+stored_index(n00bb_link_analysis_t *analysis, size_t slot)
 {
-    n00bb_interface_summaries_t **slot =
-        &analysis->stored_summaries[phase - 1];
-    if (*slot) return *slot;
+    bool record = slot == N00BB_PHASE_FINAL;
+    if (analysis->stored_summaries[slot])
+        return analysis->stored_summaries[slot];
     n00bb_interface_summaries_t *index = new_index(analysis);
     for (size_t u = 0; analysis->cache && u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
@@ -464,14 +469,15 @@ stored_index(n00bb_link_analysis_t *analysis, uint8_t phase)
         const uint8_t *data = nullptr;
         size_t size = 0;
         const th_type_reader_t *types = nullptr;
-        if (state && state->ir_module && state->interface_module
-            && n00bb_cache_module_section(analysis->cache,
-                   unit->module.identifier, stored_sections[phase - 1],
-                   &data, &size, &types) && types)
+        if (state && state->ir_module && (record || state->interface_module)
+            && (record ? n00bb_cache_record_section
+                       : n00bb_cache_module_section)(analysis->cache,
+                   unit->module.identifier, stored_sections[slot], &data,
+                   &size, &types) && types)
             index_module(index, ir_module_name(state->ir_module), data,
                          size, types);
     }
-    *slot = index;
+    analysis->stored_summaries[slot] = index;
     return index;
 }
 
@@ -480,18 +486,21 @@ n00bb_stored_summary(void *context, ir_summaries_t *summaries,
                      const ir_func_t *function)
 {
     n00bb_link_analysis_t *analysis = context;
-    if (analysis && analysis->program_layer)
-        return ir_summary_of(analysis->library_summaries, function);
     uint8_t phase = analysis ? analysis->summary_phase : 0;
     if (!phase || phase > 3 || !analysis->cache || !function
-        || !function->n_blocks || !function->owner)
-        return nullptr;
+        || !function->n_blocks || !function->owner
+        || (analysis->program_layer && analysis->may_link_further))
+        return analysis && analysis->program_layer
+            ? ir_summary_of(analysis->library_summaries, function) : nullptr;
     interface_summary_t probe = {
         .module = ir_module_name(function->owner), .function = function->name,
     };
     bool found = false;
-    interface_summary_t *entry = core_dict_get(
-        &stored_index(analysis, phase)->by_function, &probe, &found);
+    interface_summary_t *entry = core_dict_get(&stored_index(analysis,
+        analysis->program_layer ? N00BB_PHASE_FINAL : phase - 1u)
+            ->by_function, &probe, &found);
+    if (!found && analysis->program_layer)
+        return ir_summary_of(analysis->library_summaries, function);
     ir_summary_resolver_t resolver = {
         .global = resolve_global, .function = resolve_function,
         .context = analysis, .texts = found ? entry->texts : nullptr,

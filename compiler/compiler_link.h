@@ -411,7 +411,7 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_failed_region_t) dead_regions;
     core_list_t(n00bb_assert_site_t) assert_sites;
     n00bb_interface_summaries_t *interface_summaries;
-    n00bb_interface_summaries_t *stored_summaries[N00BB_PHASE_FINAL];
+    n00bb_interface_summaries_t *stored_summaries[N00BB_PHASE_FINAL + 1];
     uint8_t summary_phase;
     core_dict_t module_names;
     size_t module_units_seen;

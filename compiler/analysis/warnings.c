@@ -1080,8 +1080,56 @@ report_race(void *context, const ir_race_t *race)
         N00BB_ARGS(ARG_TEXT(global)));
 }
 
+static void find_races(n00bb_link_analysis_t *analysis,
+    const core_list_t(n00bb_ir_func_ptr_t) *runtime_entries);
+
 void
 warn_shared_global_races(n00bb_link_analysis_t *analysis,
+    const core_list_t(n00bb_ir_func_ptr_t) *runtime_entries)
+{
+    const core_string_t races = CORE_STRING_STATIC("races");
+    n00bb_cache_t *cache = analysis->may_link_further ? nullptr
+                                                      : analysis->cache;
+    const uint8_t *data = nullptr;
+    size_t size = 0, at = 0;
+    if (n00bb_cache_record_section(cache, (core_string_t){0}, races, &data,
+                                   &size, nullptr)) {
+        while (at < size) {
+            core_byte_cursor_t in = core_cursor(data + at, size - at);
+            core_string_t module = core_cursor_text(&in);
+            core_diagnostic_t item = {0};
+            at += (size_t)(in.at - (data + at));
+            core_translation_unit_t *unit = n00bb_unit_named(analysis, module);
+            if (in.failed || !unit
+                || !core_diagnostic_decode(data, size, &at, &item)) break;
+            core_diagnostics_append(core_translation_unit_diagnostics(unit),
+                                    &item);
+            core_diagnostic_release(&item);
+        }
+        return;
+    }
+    size_t *before = core_alloc_array(size_t, analysis->units.len + 1);
+    for (size_t u = 0; u < analysis->units.len; u++)
+        before[u] = core_diagnostics_count(core_translation_unit_diagnostics(
+            analysis->units.data[u]));
+    find_races(analysis, runtime_entries);
+    core_buffer_t found = {0};
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        const core_diagnostics_t *list =
+            core_translation_unit_diagnostics(unit);
+        for (size_t d = before[u]; d < core_diagnostics_count(list); d++) {
+            core_put_text(&found, unit->module.identifier);
+            core_diagnostic_encode(&found, core_diagnostics_at(list, d));
+        }
+    }
+    n00bb_cache_record_put(cache, (core_string_t){0}, races, &found);
+    core_buffer_release(&found);
+    core_free(before);
+}
+
+static void
+find_races(n00bb_link_analysis_t *analysis,
     const core_list_t(n00bb_ir_func_ptr_t) *runtime_entries)
 {
     core_list_t(n00bb_ir_func_ptr_t) main_roots =

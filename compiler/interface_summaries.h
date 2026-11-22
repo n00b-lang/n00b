@@ -27,6 +27,7 @@ ir_summary_t *n00bb_interface_summary(n00bb_link_analysis_t *analysis,
 void n00bb_note_cached_bodies(n00bb_link_analysis_t *analysis);
 bool n00bb_encode_stored_summaries(n00bb_link_analysis_t *analysis,
                                    ir_summaries_t *summaries,
+                                   ir_summaries_t *except,
                                    ir_module_t *module, uint8_t phase,
                                    th_type_writer_t *types,
                                    core_buffer_t *out);
