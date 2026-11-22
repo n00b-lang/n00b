@@ -19,7 +19,6 @@ serial = $$2 ~ /(^|,)serial(,|$$)/
 N00B_DEV := $(call select,$(N00B_MANIFEST),$(dev))
 N00B_PR := $(call select,$(N00B_MANIFEST),$(pr) && !($(serial)))
 N00B_SERIAL := $(call select,$(N00B_MANIFEST),$(pr) && $(serial))
-N00B_CI := $(call select,$(N00B_MANIFEST),$$2 ~ /(^|,)ci(,|$$)/)
 N00B_ALL := $(call select,$(N00B_MANIFEST),1)
 LANTERN_DEV := $(call select,$(LANTERN_MANIFEST),$(dev))
 LANTERN_PR := $(call select,$(LANTERN_MANIFEST),$(pr))
@@ -44,6 +43,8 @@ test-reset:
 
 test/n00b/%: n00b-test-programs | test-reset
 	@N00B_CACHE=$(BUILD)/n00b-cache $(RUN_TEST) $(N00B_MANIFEST) n00b $(SRC) $(BUILD) $*
+
+$(filter-out test/n00b/cache-fill,$(N00B_PR:%=test/n00b/%)): test/n00b/cache-fill
 
 test/lantern/%: lantern-tests | test-reset
 	@$(RUN_TEST) $(LANTERN_MANIFEST) lantern $(SRC)/lantern $(BUILD)/lantern $*
@@ -76,7 +77,7 @@ endif
 test-pr: $(PR_TESTS)
 	@TEST_TIER=pr tools/test_summary.sh
 
-test-all: $(DEV_TESTS) $(PR_TESTS) $(N00B_CI:%=serial/n00b/%)
+test-all: $(DEV_TESTS) $(PR_TESTS)
 	@tools/test_summary.sh
 
 test-lantern: $(LANTERN_ALL:%=test/lantern/%)

@@ -7,7 +7,7 @@ expected=$3
 names=$4
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-N00B_CACHE="$tmp/cache"
+N00B_CACHE=${N00B_CACHE:-$tmp/cache}
 export N00B_CACHE
 cp "$sources"/*.n "$tmp/"
 cd "$tmp"

@@ -24,9 +24,8 @@ awk -F'\t' -v releasing="$releasing" '
         tags = "," $2 ","
         dev = tags ~ /,dev,/
         pr = tags ~ /,pr,/
-        ci = tags ~ /,ci,/
-        if (dev + pr + ci != 1) { fail($1 " must be tagged with exactly one of dev, pr or ci"); next }
-        tier = dev ? "dev" : pr ? "pr" : "ci"
+        if (dev + pr != 1) { fail($1 " must be tagged with exactly one of dev or pr"); next }
+        tier = dev ? "dev" : "pr"
         count[tier]++
         cap = ($1 in exempt) ? exempt[$1] : budget[tier " test"]
         if (cap != "" && $3 + 0 > cap + 0)

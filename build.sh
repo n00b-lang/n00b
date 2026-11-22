@@ -16,7 +16,7 @@ Usage: ./build.sh [command] [args]
   test [names]        compile, then run the dev tier (run after every change;
                       budget in tests/budget), or the named tests
   test-pr             compile, then run the pr tier (run before raising a PR)
-  test-all            compile, then run the dev, pr and ci tiers
+  test-all            compile, then run both tiers
   test-lantern        compile, then run lantern's tests
   test-writ           compile, then run writ's tests
   bench               compile, then run lantern's benchmarks and gates

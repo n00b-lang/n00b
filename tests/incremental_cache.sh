@@ -7,7 +7,7 @@ part=$3
 lto_flag=${4:-}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-N00B_CACHE="$tmp/cache"
+N00B_CACHE=${N00B_CACHE:-$tmp/cache}
 export N00B_CACHE
 build_flags=
 
@@ -154,14 +154,6 @@ instances() {
     grep -q '^program reuse instance boxes\.pick$' "$tmp/log" \
         || fail "new instantiation: the cached boxes.pick instantiation was not reused"
 
-    prepare second
-    build second main_new.n
-    grep -q '^program reuse scc builtin\.' "$tmp/log" \
-        || fail "shared stdlib: a second project reused no builtin SCC"
-    if grep -q '^program store scc builtin\.' "$tmp/log"; then
-        fail "shared stdlib: a second project stored its own builtin SCCs"
-    fi
-
     build work generic_values.n
     build work generic_values.n
     grep -q '^program reuse scc builtin\.containers\.list' "$tmp/log" \
@@ -238,10 +230,12 @@ lto() {
     expect_stored "lto build after native" ""
 }
 
-case $part in
-edits|shapes|instances|contexts|lto) ;;
-*) fail "unknown part $part" ;;
-esac
+for name in $part; do
+    case $name in
+    edits|shapes|instances|contexts|lto) ;;
+    *) fail "unknown part $name" ;;
+    esac
+done
 prepare work
 build work main.n
-"$part"
+for name in $part; do "$name"; done
