@@ -50,7 +50,6 @@ typedef enum : uint8_t {
 
 typedef enum : uint8_t {
     IR_OPD_VALUE,
-    IR_OPD_SPREAD,
     IR_OPD_TYPE,
     IR_OPD_NAME,
     IR_OPD_BLOCK,
@@ -261,8 +260,6 @@ struct ir_value_t {
     ir_global_t *global;
     ir_func_t   *owner;
     uint32_t     index;
-    bool         is_keyword;
-    bool         is_rest;
     bool         is_optional;
     ir_shape_t  *shape;
     ir_annots_t  annots;

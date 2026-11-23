@@ -98,7 +98,6 @@ static ir_value_t **operand_use(ir_operand_t *op)
     case IR_OPD_NAMED_ARG:
         return &op->named.value;
     case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
     case IR_OPD_FRESH:
         return ir_operand_local(op) ? nullptr : &op->value;
     default:

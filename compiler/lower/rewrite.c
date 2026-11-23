@@ -506,10 +506,9 @@ n00bb_rewrite_arguments(n00bb_rewrite_t *rewrite, ir_instr_t *in,
             continue;
         }
         uint32_t index = UINT32_MAX;
-        ir_value_t *param = ir_call_param(target, operand, &position, &index);
+        (void)ir_call_param(target, operand, &position, &index);
         const th_param *formal = index != UINT32_MAX
-            ? th_func_param(signature, index)
-            : param && param->is_rest ? th_func_rest(signature) : nullptr;
+            ? th_func_param(signature, index) : nullptr;
         if (formal && th_mode_is_in(formal->mode)
             && operand->kind != IR_OPD_FRESH)
             ok = visit(rewrite, in, o, formal->type);

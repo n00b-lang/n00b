@@ -210,14 +210,10 @@ bool ir_func_parameter_is_optional(const ir_func_t *function, uint32_t index)
 ir_value_t *ir_func_param_value(const ir_func_t *function, uint32_t index)
 {
     if (!function || !function->type
-        || index >= th_func_nparams(function->type))
+        || index >= th_func_nparams(function->type)
+        || index >= function->n_params)
         return nullptr;
-    for (uint32_t p = 0, k = 0; p < function->n_params; p++) {
-        ir_value_t *param = function->params[p];
-        if (!param->is_keyword && !param->is_rest && k++ == index)
-            return param;
-    }
-    return nullptr;
+    return function->params[index];
 }
 
 static bool global_init_integer_fits(ir_lit_t value, ir_machine_t machine)
@@ -618,8 +614,7 @@ bool ir_param_set_optional(ir_value_t *parameter, bool optional)
 {
     if (!parameter || parameter->kind != IR_VAL_PARAM || !parameter->owner
         || parameter->index >= parameter->owner->n_params
-        || parameter->owner->params[parameter->index] != parameter
-        || (optional && (parameter->is_rest || parameter->is_keyword)))
+        || parameter->owner->params[parameter->index] != parameter)
         return false;
     if (!ir_func_set_parameter_optional(parameter->owner, parameter->index,
                                         optional)) return false;
@@ -848,7 +843,6 @@ ir_value_t *ir_operand_value(const ir_operand_t *od)
 {
     switch (od->kind) {
     case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
     case IR_OPD_FRESH:
         return od->value;
     case IR_OPD_NAMED_ARG:
@@ -1336,7 +1330,7 @@ static ir_operand_t *push(ir_instr_t *in, ir_opdkind_t kind)
 
     if (want != kind
         && !(want == IR_OPD_ARG
-             && (kind == IR_OPD_VALUE || kind == IR_OPD_SPREAD ||
+             && (kind == IR_OPD_VALUE ||
                  kind == IR_OPD_NAMED_ARG || kind == IR_OPD_FRESH || kind == IR_OPD_MISSING))) {
         return nullptr;
     }

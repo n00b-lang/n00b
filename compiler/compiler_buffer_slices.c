@@ -296,8 +296,7 @@ static uint64_t
 parameter_bit(const ir_value_t *root)
 {
     th_type *signature = function_signature(root->owner);
-    return !signature || root->is_keyword || root->is_rest
-        || root->index >= 64 ? UINT64_MAX : UINT64_C(1) << root->index;
+    return !signature || root->index >= 64 ? UINT64_MAX : UINT64_C(1) << root->index;
 }
 
 typedef struct {

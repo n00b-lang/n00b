@@ -130,8 +130,6 @@ static bool clone_annots(clone_t *c, ir_annots_t *destination,
 static bool clone_value_details(clone_t *c, ir_value_t *source,
                                 ir_value_t *copy)
 {
-    copy->is_keyword = source->is_keyword;
-    copy->is_rest = source->is_rest;
     copy->is_optional = source->is_optional;
     if (c->failure) *c->failure = CORE_STRING_STATIC("value shape");
     copy->shape = source->shape ? clone_shape(c, source->shape) : nullptr;
@@ -143,7 +141,6 @@ static bool clone_operand(clone_t *c, ir_operand_t *operand)
 {
     switch (operand->kind) {
     case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
     case IR_OPD_FRESH:
         operand->value = clone_value(c, operand->value);
         return operand->value != nullptr;

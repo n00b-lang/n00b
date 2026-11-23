@@ -202,11 +202,6 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         }
         break;
 
-    case IR_OPD_SPREAD:
-        core_buffer_puts(b, "*%");
-        put_known(b, o->value ? o->value->name : (core_string_t){});
-        break;
-
     case IR_OPD_TYPE:
         put_type(b, m, o->type);
         break;
@@ -704,9 +699,7 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     }
 
     size_t mapped = th_func_nparams(f->type);
-    for (uint32_t i = 0, k = 0; i < f->n_params; i++) {
-        if (f->params[i]->is_keyword || f->params[i]->is_rest
-            || k++ < mapped) continue;
+    for (size_t i = mapped; i < f->n_params; i++) {
         core_buffer_printf(b, "%s", first ? "" : ", ");
         core_buffer_puts(b, "%");
         put_text(b, f->params[i]->name);
@@ -723,16 +716,7 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
         if (rest->mode != TH_IN)
             core_buffer_printf(b, "%s ", param_mode_spelling(rest->mode));
         core_buffer_puts(b, "*");
-        ir_value_t *rest_value = nullptr;
-        for (uint32_t i = 0; i < f->n_params; i++)
-            if (f->params[i]->is_rest) rest_value = f->params[i];
-        if (rest_value) {
-            core_buffer_puts(b, "%");
-            put_text(b, rest_value->name);
-            core_buffer_puts(b, ": ");
-        }
         put_type(b, m, rest->type);
-        if (rest_value) put_annots(b, m, ir_value_annots(rest_value));
         first = false;
     }
 
