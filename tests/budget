@@ -10,6 +10,7 @@ release array-uint-index-n00b
 release ffi-resharp
 release incremental-cache-lto
 release closed-world-n00b
+release cache-fill-lto
 exempt lto-n00b 31
 exempt diagnostics 36
 exempt check-programs-a 36
@@ -28,6 +29,7 @@ exempt generics-text-n00b 21
 exempt nil-types-n00b 30
 exempt ffi-zlib-litmod 21
 exempt cache-fill 25
+exempt cache-fill-lto 30
 exempt incremental-cache-instances 30
 exempt incremental-cache-lto 55
 exempt bitcode-build-time 28
