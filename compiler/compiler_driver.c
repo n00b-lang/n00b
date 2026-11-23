@@ -5278,7 +5278,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     ir_ctx_t *ir_context = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
-    n00bb_cache_t *cache = (build_command || check_command) && scheduled
+    n00bb_cache_t *cache = (build_command || check_command || normalize_fmt)
+        && scheduled
         && options_valid && input_count == 1
         ? open_object_cache(resolver, args, ir_context, linked_interfaces,
                             (size_t)interface_count)

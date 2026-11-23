@@ -326,12 +326,6 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
         core_put_u32(out, parse_cmdr_flag_present(args, flags[i]));
-    n00bb_setting_id_t defines = N00BB_KEY_BUILD_DEFINES;
-    core_put_u32(out, (uint32_t)n00bb_setting_count(defines));
-    for (size_t i = 0; i < n00bb_setting_count(defines); i++) {
-        core_string_t value = n00bb_setting_at(defines, i);
-        core_put_bytes(out, value.data, value.u8_bytes);
-    }
     core_string_t flag = CORE_STRING_STATIC("--native-root");
     native_roots.byte_len = 0;
     for (int32_t i = 0; i < parse_cmdr_flag_value_count(args, flag); i++) {
@@ -374,6 +368,13 @@ freshness_member(core_buffer_t *input, const void *name, size_t name_bytes,
 {
     core_put_bytes(input, name, name_bytes);
     core_put_bytes(input, source, source_bytes);
+    n00bb_setting_id_t defines = N00BB_KEY_BUILD_DEFINES;
+    bool reads = core_string_find(core_string_borrow(source, source_bytes),
+                                  CORE_STRING_STATIC("preproc_")) >= 0;
+    for (size_t i = 0; reads && i < n00bb_setting_count(defines); i++) {
+        core_string_t value = n00bb_setting_at(defines, i);
+        core_put_bytes(input, value.data, value.u8_bytes);
+    }
     core_string_t roots = core_buffer_string(&native_roots);
     for (size_t at = 0; at < roots.u8_bytes;) {
         core_string_t root = core_string_slice(roots, at,
