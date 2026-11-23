@@ -321,7 +321,6 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     static const core_string_t flags[] = {
         CORE_STRING_STATIC("--gc-conservative-stacks"),
         CORE_STRING_STATIC("--no-specialize"),
-        CORE_STRING_STATIC("--closed-world"),
         CORE_STRING_STATIC("--no-closed-world"),
         CORE_STRING_STATIC("--function-summaries"),
     };

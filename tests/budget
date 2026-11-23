@@ -9,6 +9,7 @@ release ffi
 release array-uint-index-n00b
 release ffi-resharp
 release incremental-cache-lto
+release closed-world-n00b
 exempt lto-n00b 31
 exempt diagnostics 36
 exempt check-programs-a 36

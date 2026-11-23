@@ -6,7 +6,7 @@ program=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-"$compiler" build --closed-world --output "$tmp/closed" "$program" \
+"$compiler" build --release --lto --output "$tmp/closed" "$program" \
     >"$tmp/closed.log" 2>&1
 for expected in "field \`spare\` of \`Point\` is never used" \
     "bitcode_closed_world.n:5:5" \
