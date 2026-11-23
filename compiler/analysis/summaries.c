@@ -518,6 +518,16 @@ reinterpretation_sources(void *context, ir_summary_target_fn add, void *sink)
     core_list_free(bodies);
 }
 
+static bool
+reinterpretation_sees(void *context, const ir_module_t *viewer,
+                      const ir_module_t *other)
+{
+    return viewer == other
+        || (core_string_find(ir_module_name((ir_module_t *)other),
+                             CORE_STRING_STATIC("$spec$")) < 0
+            && n00bb_module_sees(context, viewer, other));
+}
+
 static void
 discard_target(void *sink, ir_func_t *target)
 {
@@ -553,7 +563,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         analysis->visibility_ready = true;
     }
     ir_reinterpretations_set_visibility(analysis->ir_context,
-                                        n00bb_module_sees, analysis);
+                                        reinterpretation_sees, analysis);
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,
