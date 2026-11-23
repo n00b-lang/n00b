@@ -16,12 +16,6 @@ record Stream layout(c) {
     reserved: u64
 }
 
-const ZLIB_VERSION: string = "1.2.12"
-const ZLIB_VERNUM: i32 = 4800
-const ZLIB_VER_MAJOR: i32 = 1
-const ZLIB_VER_MINOR: i32 = 2
-const ZLIB_VER_REVISION: i32 = 12
-const ZLIB_VER_SUBREVISION: i32 = 0
 const Z_NO_FLUSH: i32 = 0
 const Z_PARTIAL_FLUSH: i32 = 1
 const Z_SYNC_FLUSH: i32 = 2
@@ -52,6 +46,7 @@ const Z_TEXT: i32 = 1
 const Z_UNKNOWN: i32 = 2
 const Z_DEFLATED: i32 = 8
 const Z_NULL: i32 = 0
+const ZLIB_VERSION: string = "1"
 
 private func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     let value: Ffi_Bytes = bytes.__value
