@@ -1222,7 +1222,7 @@ main(int argc, char **argv)
     output_path = argv[2];
     entry = argv[3][0] == 'e' || argv[3][0] == 's';
     keep_imports = argv[3][0] == 's';
-    argv[4] = argv[0];
+    argv[4] = "n00b-comptime";
     n00b_comptime = true;
     n00b_comptime_exit = exited;
     n00b_os_set_thread_seed_hooks(remember_main_tls, seed_thread);
