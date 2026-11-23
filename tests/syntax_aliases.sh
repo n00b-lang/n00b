@@ -7,7 +7,7 @@ preferences_program=$3
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if ! "$compiler" lower "$program" >"$tmp/out" 2>"$tmp/err"; then
+if ! "$compiler" check "$program" >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
 fi
@@ -31,7 +31,7 @@ do
     }
 done
 
-if ! "$compiler" lower "$preferences_program" >"$tmp/out" 2>"$tmp/err"; then
+if ! "$compiler" check "$preferences_program" >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
 fi
@@ -52,7 +52,7 @@ set -- \
     --syntax-preference 'block=:' \
     --syntax-preference record=struct \
     --syntax-preference 'return-type=return:'
-if ! "$compiler" "$@" lower "$preferences_program" \
+if ! "$compiler" "$@" check "$preferences_program" \
     >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
@@ -63,7 +63,7 @@ if grep -q 'warning N00B-P0012:' "$tmp/err"; then
     exit 1
 fi
 
-if ! "$compiler" --no-syntax-warnings lower "$program" \
+if ! "$compiler" --no-syntax-warnings check "$program" \
     >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
@@ -74,7 +74,7 @@ if grep -q 'warning N00B-P001[12]:' "$tmp/err"; then
     exit 1
 fi
 
-if "$compiler" --syntax-preference function=bogus lower \
+if "$compiler" --syntax-preference function=bogus check \
     "$preferences_program" >"$tmp/out" 2>"$tmp/err"; then
     echo "invalid syntax preference unexpectedly succeeded" >&2
     exit 1

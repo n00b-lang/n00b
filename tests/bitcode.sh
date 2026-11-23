@@ -57,11 +57,14 @@ build-time)
     fi
     "$compiler" build --native --output "$tmp/bootstrap_io" \
         "$program_dir/bitcode_bootstrap_io.n" \
-        >"$tmp/bootstrap_io_compile"
+        >"$tmp/bootstrap_io_compile" 2>"$tmp/bootstrap_io_compile.err"
     test "$(cat "$tmp/bootstrap_io_compile")" = "compile"
-    "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
+    test "$(grep -Fxc 'compile-debug' "$tmp/bootstrap_io_compile.err")" -eq 1
+    "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime" \
+        2>"$tmp/bootstrap_io_runtime.err"
     test "$(cat "$tmp/bootstrap_io_runtime")" = \
         "runtime0123456789abcdef0123456789abcdef"
+    test "$(cat "$tmp/bootstrap_io_runtime.err")" = "runtime-debug"
     build_time_failure bitcode_litmod_comptime_fail \
         'uncaught failure "prelude failed"' \
         'bitcode_litmod_comptime_fail.n:7:5'

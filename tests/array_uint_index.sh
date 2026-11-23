@@ -20,7 +20,7 @@ if (ulimit -c 0; "$tmp/high") >/dev/null 2>&1; then
     exit 1
 fi
 
-"$compiler" build --release --output "$tmp/at-length" \
+"$compiler" build --release --lto --output "$tmp/at-length" \
     "$program_dir/../containers/readiness/array_bounds_runtime_trap.n" \
     >"$tmp/at-length.log" 2>&1
 if (ulimit -c 0; "$tmp/at-length") >/dev/null 2>&1; then
