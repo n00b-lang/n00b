@@ -407,7 +407,9 @@ record_use(recorder_t *recorder, parse_sym_entry_t *target,
 {
     core_translation_unit_t *unit = node_unit(node);
     unit_facts_t *facts = unit_facts(recorder, unit);
-    if (!facts) return;
+    if (!facts || (target->owner_unit && target->owner_unit != unit
+                   && !n00bb_unit_reaches_import(unit, target->owner_unit)))
+        return;
     parse_sym_entry_t *context = context_of(recorder, node);
     if (context == target || (context && context->kind == PARSE_SYM_FUNCTION
                               && in_dead_code(recorder, unit, node)))

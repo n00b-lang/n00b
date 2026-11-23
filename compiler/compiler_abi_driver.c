@@ -507,7 +507,7 @@ n00bb_closed_callers(const ir_func_t *function, void *context)
     core_translation_unit_t *unit = function && function->owner && origin
         ? n00bb_visibility_unit(origin->analysis, function->owner) : nullptr;
     if (!unit || origin->has_user_native_objects
-        || !n00bb_same_package(unit, origin->analysis->units.data[0]))
+        || unit != origin->analysis->units.data[0])
         return false;
     if (core_string_eq(function->name, CORE_STRING_STATIC("__finalize"))
         || core_string_starts_with(function->name,
@@ -705,8 +705,8 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
     item->backend = backend;
     if (!backend) return item->ok = false;
     n00bb_llvm_backend_bind_summaries(backend,
-        n00bb_summary_open(analysis, item->module)
-            ? analysis->library_summaries : analysis->summaries);
+        n00bb_closed_module(analysis, item->module, false)
+            ? analysis->summaries : analysis->library_summaries);
     n00bb_llvm_backend_bind_mutator_decisions(backend,
                                               emission->mutator_decisions);
     core_string_t table_symbol = artifact && !item->linked_indices

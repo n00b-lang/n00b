@@ -114,6 +114,8 @@ core_translation_unit_t *unit_for_ir_module(n00bb_link_analysis_t *analysis,
                                             ir_module_t *module);
 core_translation_unit_t *n00bb_unit_named(n00bb_link_analysis_t *analysis,
                                           core_string_t name);
+bool n00bb_closed_module(n00bb_link_analysis_t *analysis,
+                         const ir_module_t *module, bool package);
 bool n00bb_summary_open(n00bb_link_analysis_t *analysis,
                         const ir_module_t *module);
 void copy_export_binding_facts(parse_sym_entry_t *binding,

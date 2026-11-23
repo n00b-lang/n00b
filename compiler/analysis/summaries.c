@@ -526,14 +526,22 @@ discard_target(void *sink, ir_func_t *target)
 }
 
 bool
+n00bb_closed_module(n00bb_link_analysis_t *analysis, const ir_module_t *module,
+                    bool package)
+{
+    core_translation_unit_t *unit = module && !analysis->may_link_further
+        ? n00bb_visibility_unit(analysis, module) : nullptr;
+    return unit && analysis->units.len
+        && (package ? n00bb_same_package(unit, analysis->units.data[0])
+                    : unit == analysis->units.data[0]);
+}
+
+bool
 n00bb_summary_open(n00bb_link_analysis_t *analysis, const ir_module_t *module)
 {
     if (analysis->may_link_further) return true;
     if (analysis->program_layer) return false;
-    core_translation_unit_t *unit = module
-        ? n00bb_visibility_unit(analysis, module) : nullptr;
-    return !unit || !analysis->units.len
-        || !n00bb_same_package(unit, analysis->units.data[0]);
+    return !n00bb_closed_module(analysis, module, !analysis->summary_phase);
 }
 
 void
@@ -620,14 +628,14 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
     visit_effect_queries(analysis, &roots);
     push_effect_check_subjects(analysis, &roots);
     push_effects_of_roots(analysis, &roots);
+    analysis->summary_phase = analysis->boxes_rewritten ? N00BB_PHASE_FINAL
+                                                        : N00BB_PHASE_MAIN;
     bind_summary_hooks(analysis, false);
     n00bb_push_summary_roots(analysis, &roots);
     ir_summaries_t *previous = analysis->summaries;
     ir_summaries_t *earlier = analysis->library_summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);
-    analysis->summary_phase = analysis->boxes_rewritten ? N00BB_PHASE_FINAL
-                                                        : N00BB_PHASE_MAIN;
     analysis->library_summaries = ir_summaries_recompute(roots.data,
         roots.len, &analysis->summary_hooks, earlier);
     analysis->summaries = analysis->library_summaries;
@@ -635,7 +643,7 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t r = 0; r < roots.len; r++)
         if (r >= subjects
-            || !n00bb_summary_open(analysis, roots.data[r]->owner))
+            || n00bb_closed_module(analysis, roots.data[r]->owner, true))
             core_list_push(program, roots.data[r]);
     analysis->program_layer = true;
     if (analysis->library_summaries && !analysis->boxes_rewritten)
