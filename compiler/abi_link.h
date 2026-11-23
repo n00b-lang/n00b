@@ -7,7 +7,6 @@
 #include "lib/indexed_table.h"
 #include "lib/link_unit.h"
 #include "lib/object_emit.h"
-#include "lib/native_archive.h"
 #include "lib/object_section.h"
 
 typedef struct {
@@ -41,11 +40,6 @@ typedef struct {
 } n00bb_abi_object_input_t;
 
 typedef struct {
-    n00bb_abi_object_input_t *objects;
-    size_t count;
-} n00bb_abi_archive_inputs_t;
-
-typedef struct {
     n00bb_abi_object_view_t *views;
     size_t count;
 } n00bb_abi_selected_objects_t;
@@ -69,11 +63,6 @@ bool n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
                              const n00b_abi_string_v1 *value,
                              n00bb_abi_string_view_t *out);
 
-bool n00bb_abi_archive_inputs_open(const core_target_desc_t *target,
-                                    const void *archive, size_t archive_bytes,
-                                    n00bb_abi_archive_inputs_t *out);
-void n00bb_abi_archive_inputs_release(n00bb_abi_archive_inputs_t *inputs);
-
 bool n00bb_abi_select_objects(core_link_unit_t *link,
                               const core_target_desc_t *target,
                               const n00bb_abi_object_input_t *candidates,
@@ -83,8 +72,6 @@ void n00bb_abi_selected_objects_release(n00bb_abi_selected_objects_t *selected);
 
 typedef struct n00bb_abi_index_plan_t n00bb_abi_index_plan_t;
 
-n00bb_abi_index_plan_t *n00bb_abi_index_plan_build(
-    const n00bb_abi_selected_objects_t *selected);
 typedef struct {
     size_t input;
     uint32_t table_kind;
@@ -252,22 +239,11 @@ bool n00bb_abi_add_native_bindings(
     const n00bb_abi_native_sections_t *sections,
     n00bb_abi_native_relocations_t *symbols);
 
-bool n00bb_abi_apply_link_patches(
-    const n00bb_abi_selected_objects_t *selected,
-    const n00bb_abi_index_plan_t *plan,
-    const n00bb_abi_merged_rows_t *merged,
-    n00bb_abi_native_sections_t *sections);
-
 bool n00bb_abi_consolidate_native_strings(
     const core_target_desc_t *target,
     n00bb_abi_name_pool_t *pool,
     n00bb_abi_native_sections_t *sections,
     n00bb_abi_native_relocations_t *native);
-
-bool n00bb_abi_link_selected_objects(
-    const n00bb_abi_selected_objects_t *selected,
-    const core_target_desc_t *target,
-    uint8_t **out_object, size_t *out_object_bytes);
 
 typedef bool (*n00bb_abi_link_semantics_fn)(
     const n00bb_abi_selected_objects_t *selected,
@@ -286,8 +262,3 @@ bool n00bb_abi_link_objects_with_semantics(
     core_string_t *failure_stage,
     n00bb_abi_index_plan_failure_t *plan_failure,
     n00bb_abi_native_rebase_failure_t *rebase_failure);
-
-bool n00bb_abi_link_objects(
-    core_link_unit_t *link, const core_target_desc_t *target,
-    const n00bb_abi_object_input_t *candidates, size_t candidate_count,
-    uint8_t **out_object, size_t *out_object_bytes);

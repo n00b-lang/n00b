@@ -14,7 +14,6 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out);
 ir_props_t ir_verify_with_failures(ir_module_t *m, ir_diags_t *out,
                                    ir_verify_failures_t *failures);
 void       ir_verify_failures_release(ir_verify_failures_t *failures);
-ir_props_t ir_verify_only(ir_module_t *m, ir_props_t want, ir_diags_t *out);
 
 typedef struct ir_locsnap_t ir_locsnap_t;
 

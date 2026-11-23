@@ -71,9 +71,6 @@ struct parse_tree_walk_t {
     int32_t                 max_phase;
     bool                    stopped;
     bool                    failed;
-    uint32_t                replaced;
-    parse_tree_t       *new_root;
-    bool                    root_removed;
     core_list_t(parse_tree_ptr_t) detached;
 };
 
@@ -426,10 +423,8 @@ replace_frame_node(parse_tree_walk_t *w, frame_t *f, parse_tree_t *replacement)
         if (!core_tree_set_child(f->parent, (size_t)f->child_index,
                                  replacement)) return false;
     }
-    else w->new_root = replacement;
     f->node = replacement;
     core_list_push(w->detached, old);
-    w->replaced++;
     return true;
 }
 
@@ -445,11 +440,9 @@ remove_frame_node(parse_tree_walk_t *w, frame_t *f)
         if (core_tree_remove_child(f->parent, (size_t)f->child_index) != old)
             return false;
     }
-    else w->root_removed = true;
     core_list_push(w->detached, old);
     f->node = nullptr;
     f->removed = true;
-    w->replaced++;
     return true;
 }
 
@@ -543,9 +536,6 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
 
     w->stopped   = false;
     w->failed    = false;
-    w->replaced  = 0;
-    w->new_root  = nullptr;
-    w->root_removed = false;
     w->stack.len = 0;
 
     push_frame(w, root, parent, depth, child_index);
@@ -662,39 +652,12 @@ parse_tree_walk_run_with_parent(parse_tree_walk_t *w, parse_tree_t *root,
     }
 }
 
-parse_tree_t *
-parse_tree_walk_rewrite(parse_tree_walk_t *w, parse_tree_t *root)
-{
-    if (!w || !root) {
-        return root;
-    }
-
-    w->replaced = 0;
-    w->new_root = nullptr;
-
-    parse_tree_walk_run(w, root);
-
-    return w->root_removed ? nullptr : w->new_root ? w->new_root : root;
-}
-
-uint32_t
-parse_tree_walk_replaced(const parse_tree_walk_t *w)
-{
-    return w ? w->replaced : 0;
-}
-
 void
 parse_tree_walk_stop(parse_tree_walk_t *w)
 {
     if (w) {
         w->stopped = true;
     }
-}
-
-bool
-parse_tree_walk_stopped(parse_tree_walk_t *w)
-{
-    return w && w->stopped;
 }
 
 bool
@@ -980,15 +943,4 @@ parse_reduce_list_t *parse_reduce_as_list(void *result)
     parse_reduce_list_t *l = result;
 
     return l && l->magic == REDUCE_LIST_MAGIC ? l : nullptr;
-}
-
-parse_reduce_list_t *parse_reduce_list_new(size_t n)
-{
-    parse_reduce_list_t *l = core_alloc(parse_reduce_list_t);
-
-    l->magic = REDUCE_LIST_MAGIC;
-    l->n     = n;
-    l->v     = n ? core_alloc_array(vptr_t, n) : nullptr;
-
-    return l;
 }

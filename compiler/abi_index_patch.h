@@ -47,9 +47,6 @@ typedef enum {
     N00BB_ABI_PATCH_DUPLICATE_TARGET,
 } n00bb_abi_patch_status_t;
 
-void n00bb_abi_index_patch_encode(
-    uint8_t out[N00BB_ABI_INDEX_PATCH_BYTES],
-    const n00bb_abi_index_patch_t *patch);
 void n00bb_abi_index_patch_decode(
     const uint8_t in[N00BB_ABI_INDEX_PATCH_BYTES],
     n00bb_abi_index_patch_t *patch);

@@ -129,16 +129,6 @@ retire_text(parse_source_t *source, char *text)
     core_list_push(source->retired, text);
 }
 
-static void
-truncate_lines(parse_source_t *source, size_t offset)
-{
-    while (source->line_starts.len > 1
-           && source->line_starts.data[source->line_starts.len - 1] > offset)
-        source->line_starts.len--;
-    size_t start = source->line_starts.data[source->line_starts.len - 1];
-    if (source->lines_scanned > start) source->lines_scanned = start;
-}
-
 bool
 parse_source_append(uint32_t id, core_string_t data)
 {
@@ -163,38 +153,6 @@ parse_source_append(uint32_t id, core_string_t data)
     memcpy(text + length, data.data, len);
     atomic_store_explicit(&source->length, length + len,
                           memory_order_release);
-    pthread_mutex_unlock(&source->lock);
-    return true;
-}
-
-bool
-parse_source_replace(uint32_t id, size_t start, size_t end,
-                     core_string_t data)
-{
-    parse_source_t *source = source_get(id);
-    size_t          len    = data.u8_bytes;
-    if (!source || start > end || (len && !data.data)) return false;
-
-    pthread_mutex_lock(&source->lock);
-    char  *text = atomic_load(&source->text);
-    size_t length = atomic_load(&source->length);
-    if (end > length) {
-        pthread_mutex_unlock(&source->lock);
-        return false;
-    }
-    size_t updated = length - (end - start) + len;
-    size_t capacity = source->capacity > updated + 1
-        ? source->capacity : updated + 1;
-    char *replaced = core_alloc_size(capacity, 1);
-    if (start) memcpy(replaced, text, start);
-    if (len) memcpy(replaced + start, data.data, len);
-    if (length > end)
-        memcpy(replaced + start + len, text + end, length - end);
-    retire_text(source, text);
-    source->capacity = capacity;
-    truncate_lines(source, start);
-    atomic_store_explicit(&source->text, replaced, memory_order_release);
-    atomic_store_explicit(&source->length, updated, memory_order_release);
     pthread_mutex_unlock(&source->lock);
     return true;
 }
@@ -250,14 +208,6 @@ parse_source_value(uint32_t id, uint32_t offset)
     memcpy(&value_length, values + offset, sizeof(value_length));
     return core_string_borrow(values + offset + sizeof(value_length),
                               value_length);
-}
-
-size_t
-parse_source_length(uint32_t id)
-{
-    parse_source_t *source = source_get(id);
-    return source ? atomic_load_explicit(&source->length,
-                                         memory_order_acquire) : 0;
 }
 
 bool

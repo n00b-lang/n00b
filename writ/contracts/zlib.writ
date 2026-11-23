@@ -11,6 +11,8 @@ when platform in [x86_64-w64-windows-gnu] {
     use "zlib/x86_64-w64-windows-gnu.writ"
 }
 
+const ZLIB_VERSION: *cstr = "1"
+
 refine alloc_func {
     -> own ?void
 }

@@ -26,10 +26,6 @@ bool core_persist_arena_create(core_string_t path, size_t capacity,
                                uint64_t abi_tag,
                                core_persist_arena_t **out,
                                core_persist_arena_error_t *error);
-bool core_persist_arena_open(core_string_t path, uint64_t abi_tag,
-                             bool writable,
-                             core_persist_arena_t **out,
-                             core_persist_arena_error_t *error);
 bool core_persist_arena_open_relocated(
     core_string_t path, uint64_t abi_tag, bool writable,
     core_persist_arena_t **out, core_persist_arena_error_t *error);
@@ -49,9 +45,6 @@ bool core_persist_arena_contains(const core_persist_arena_t *arena,
 bool core_persist_arena_rebase_pointer(const core_persist_arena_t *arena,
                                        const void *saved_pointer, size_t size,
                                        const void **out);
-void *core_persist_arena_base(const core_persist_arena_t *arena);
-size_t core_persist_arena_capacity(const core_persist_arena_t *arena);
-size_t core_persist_arena_used(const core_persist_arena_t *arena);
 bool core_persist_arena_sync(core_persist_arena_t *arena,
                              core_persist_arena_error_t *error);
 bool core_persist_arena_close(core_persist_arena_t *arena,

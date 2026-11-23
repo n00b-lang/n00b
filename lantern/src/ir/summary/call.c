@@ -1120,7 +1120,7 @@ pt_call(pt_t *pt, const ir_instr_t *call)
         settled = call_escapes(pt, call, callees->callees.data[t], &reach,
                                &result) && settled;
     if (settled) settle_writes(pt, call);
-    pt_define(pt, call, &result);
+    define_items(pt, call, &result);
     core_list_free(reach);
     core_list_free(result);
 }

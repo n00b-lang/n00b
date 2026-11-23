@@ -165,13 +165,6 @@ n00bb_call_plan_argument(const n00bb_call_plan_t *plan, size_t position,
         : plan->keywords.data[position - plan->positional.len].expression;
 }
 
-parse_tree_t *
-n00bb_call_plan_parameter_argument(const n00bb_call_plan_t *plan, size_t index)
-{
-    return plan->slots && plan->status == N00BB_CALL_PLAN_OK
-        && index < plan->slot_count ? plan->slots[index].argument : nullptr;
-}
-
 static bool
 n00bb_call_plan_optional(const n00bb_call_plan_t *plan, size_t index)
 {

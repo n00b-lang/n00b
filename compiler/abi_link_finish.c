@@ -909,20 +909,6 @@ apply_link_patches(
     return true;
 }
 
-bool
-n00bb_abi_apply_link_patches(
-    const n00bb_abi_selected_objects_t *selected,
-    const n00bb_abi_index_plan_t *plan,
-    const n00bb_abi_merged_rows_t *merged,
-    n00bb_abi_native_sections_t *sections)
-{
-    provider_index_t providers = {0};
-    bool valid = apply_link_patches(selected, plan, &providers, merged,
-                                    sections);
-    provider_index_close(&providers);
-    return valid;
-}
-
 static void
 strip_summaries(n00bb_abi_merged_rows_t *merged)
 {
@@ -1268,18 +1254,6 @@ link_selected_objects(
 }
 
 bool
-n00bb_abi_link_selected_objects(
-    const n00bb_abi_selected_objects_t *selected,
-    const core_target_desc_t *target,
-    uint8_t **out_object, size_t *out_object_bytes)
-{
-    return link_selected_objects(selected, target, true, nullptr, nullptr,
-                                 nullptr, nullptr, out_object,
-                                 out_object_bytes, nullptr,
-                                 nullptr, nullptr);
-}
-
-bool
 n00bb_abi_link_objects_with_semantics(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,
@@ -1305,16 +1279,4 @@ n00bb_abi_link_objects_with_semantics(
                                        rebase_failure);
     n00bb_abi_selected_objects_release(&selected);
     return valid;
-}
-
-bool
-n00bb_abi_link_objects(
-    core_link_unit_t *link, const core_target_desc_t *target,
-    const n00bb_abi_object_input_t *candidates, size_t candidate_count,
-    uint8_t **out_object, size_t *out_object_bytes)
-{
-    return n00bb_abi_link_objects_with_semantics(link, target, candidates,
-        candidate_count, true, nullptr, nullptr, nullptr, nullptr,
-        out_object, out_object_bytes,
-        nullptr, nullptr, nullptr);
 }

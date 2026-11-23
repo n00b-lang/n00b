@@ -3,15 +3,10 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
-#include "ir/grammar.h"
 #include "ir/layout.h"
 #include "ir/shape.h"
 #include "ir/text.h"
 #include "ir/walk.h"
-
-#include "parse/pwz.h"
-#include "parse/tree_print.h"
-#include "scanner/token_stream.h"
 
 core_string_t ir_types_text(th_ctx *types, th_type *t)
 {
@@ -74,30 +69,6 @@ core_string_t ir_origin_kind_name(ir_origin_kind_t k)
     default:
         return CORE_STRING_STATIC("generated");
     }
-}
-
-bool ir_origin_kind_from_name(core_string_t s, ir_origin_kind_t *out)
-{
-    static const struct {
-        core_string_t    name;
-        ir_origin_kind_t k;
-    } tab[] = {
-        {CORE_STRING_STATIC("source"), IR_ORIGIN_SOURCE},
-        {CORE_STRING_STATIC("inlined"), IR_ORIGIN_INLINED_FROM},
-        {CORE_STRING_STATIC("expanded"), IR_ORIGIN_EXPANDED_FROM},
-        {CORE_STRING_STATIC("lowered"), IR_ORIGIN_LOWERED_FROM},
-        {CORE_STRING_STATIC("generated"), IR_ORIGIN_GENERATED_BY},
-    };
-
-    for (size_t i = 0; s.data && i < sizeof(tab) / sizeof(tab[0]); i++) {
-        if (core_string_eq(tab[i].name, s)) {
-            *out = tab[i].k;
-
-            return true;
-        }
-    }
-
-    return false;
 }
 
 static void put_origin(core_buffer_t *b, const ir_origin_t *o)
@@ -449,24 +420,6 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
         if (value->aggregate.count == 1 && value->aggregate.items)
             put_global_init_value(b, m, value->aggregate.items);
         else core_buffer_puts(b, "?");
-        core_buffer_puts(b, "}");
-        break;
-    case IR_GLOBAL_INIT_SET:
-        core_buffer_puts(b, "set{");
-        for (size_t i = 0; i < value->aggregate.count; i++) {
-            if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, m, &value->aggregate.items[i]);
-        }
-        core_buffer_puts(b, "}");
-        break;
-    case IR_GLOBAL_INIT_DICTIONARY:
-        core_buffer_puts(b, "dict{");
-        for (size_t i = 0; i + 1 < value->aggregate.count; i += 2) {
-            if (i) core_buffer_puts(b, ", ");
-            put_global_init_value(b, m, &value->aggregate.items[i]);
-            core_buffer_puts(b, " => ");
-            put_global_init_value(b, m, &value->aggregate.items[i + 1]);
-        }
         core_buffer_puts(b, "}");
         break;
     }
@@ -1011,31 +964,3 @@ core_string_t ir_func_print(ir_func_t *f)
     return core_buffer_take_string(b);
 }
 
-core_string_t ir_text_format(core_string_t text, int32_t width)
-{
-    parse_grammar_t *g = text.data ? ir_grammar() : nullptr;
-
-    if (!g) {
-        return (core_string_t){};
-    }
-
-    parse_token_stream_t *ts = ir_lex(text);
-    parse_pwz_parser_t   *p
-        = parse_pwz_new_for_start(g, ir_grammar_nt(CORE_STRING_STATIC("module")));
-    core_string_t         out = {};
-
-    if (parse_pwz_parse(p, ts)) {
-        parse_print_opts_t o = {
-            .source = text,
-            .width  = width,
-            .indent = 2,
-        };
-
-        out = parse_tree_print(g, parse_pwz_get_tree(p), &o);
-    }
-
-    parse_pwz_free(p);
-    scan_token_stream_free(ts);
-
-    return out;
-}

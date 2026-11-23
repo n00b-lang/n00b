@@ -33,7 +33,6 @@
 #include "lib/indexed_table.h"
 #include "lib/list.h"
 #include "lib/object_section.h"
-#include "ir/typelang.h"
 #include "parse/tree_util.h"
 #include "signature_typevars.h"
 

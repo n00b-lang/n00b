@@ -354,9 +354,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     }
     bool type_reference = cache && cache->type_reference;
     if (entering) {
-        if (n00bb_postfix_node(grammar, node))
-            parse_tree_set_index_address_access(node,
-                n00bb_index_reference_storage(grammar, node));
         if (field_record_declaration(grammar, node)) {
             parse_sym_entry_t *symbol = parse_tree_sym(node);
             if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) {
@@ -1016,7 +1013,6 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
     core_string_t package = n00bb_package_id(unit);
     if (!th_ctx_set_scope(types, unit->module.identifier, package))
         return false;
-    th_ctx_set_source_file(types, core_source_file_path(&unit->source));
     annotation_context_t context = {
         .grammar = grammar,
         .types = types,
@@ -1163,7 +1159,6 @@ declare_unit(parse_grammar_t *grammar, th_ctx *types,
     core_string_t package = n00bb_package_id(unit);
     if (!tree || !th_ctx_set_scope(types, unit->module.identifier, package)
         || !prepare_initial_symbols(unit, types)) return false;
-    th_ctx_set_source_file(types, core_source_file_path(&unit->source));
     state->semantic_annotation_started = true;
     parse_annot_result_set_node_callback(state->annotations,
                                          declared_symbol_node, nullptr);

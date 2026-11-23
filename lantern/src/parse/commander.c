@@ -1691,14 +1691,6 @@ parse_cmdr_result_error_count(parse_cmdr_result_t *r)
     return r ? (int32_t)r->errors.len : 0;
 }
 
-core_string_t
-parse_cmdr_result_error(parse_cmdr_result_t *r, int index)
-{
-    if (!r || index < 0 || (size_t)index >= r->errors.len)
-        return (core_string_t){0};
-    return r->errors.data[index];
-}
-
 parse_cmdr_error_t
 parse_cmdr_result_error_detail(parse_cmdr_result_t *r, int index)
 {

@@ -37,40 +37,6 @@ check_span(parse_scanner_t *s, size_t start, size_t end, int32_t tid)
 }
 
 static bool
-partial_utf8_at_end(const parse_scanner_t *s)
-{
-    if (!s || s->source_final || s->cursor >= s->input.u8_bytes) {
-        return false;
-    }
-
-    const uint8_t *p = (const uint8_t *)s->input.data + s->cursor;
-    size_t remaining = s->input.u8_bytes - s->cursor;
-    size_t width = p[0] >= 0xC2 && p[0] <= 0xDF ? 2
-                 : p[0] >= 0xE0 && p[0] <= 0xEF ? 3
-                 : p[0] >= 0xF0 && p[0] <= 0xF4 ? 4 : 1;
-
-    if (width == 1 || remaining >= width) {
-        return false;
-    }
-
-    for (size_t i = 1; i < remaining; i++) {
-        if (p[i] < 0x80 || p[i] > 0xBF) {
-            return false;
-        }
-    }
-
-    if (remaining > 1
-        && ((p[0] == 0xE0 && p[1] < 0xA0)
-            || (p[0] == 0xED && p[1] > 0x9F)
-            || (p[0] == 0xF0 && p[1] < 0x90)
-            || (p[0] == 0xF4 && p[1] > 0x8F))) {
-        return false;
-    }
-
-    return true;
-}
-
-static bool
 cc_match(parse_char_class_t cc, core_codepoint_t cp)
 {
     switch (cc) {
@@ -177,7 +143,6 @@ scan_scanner_new(core_buffer_t                *buf,
     s->grammar   = grammar;
     s->at_eof    = false;
     s->status    = SCAN_STATUS_ACTIVE;
-    s->source_final = true;
 
     s->mark      = 0;
     s->mark_line = 1;
@@ -240,88 +205,11 @@ scan_scanner_set_finalize_callback(parse_scanner_t *s,
 }
 
 void
-scan_scanner_set_state_clone(parse_scanner_t *s,
-                             scan_state_clone_cb_t clone_cb)
-{
-    if (s) {
-        s->state_clone_cb = clone_cb;
-    }
-}
-
-void
-scan_scanner_set_state_equal(parse_scanner_t *s,
-                             scan_state_equal_cb_t equal_cb)
-{
-    if (s) {
-        s->state_equal_cb = equal_cb;
-    }
-}
-
-void
-scan_scanner_set_state_shift(parse_scanner_t *s,
-                             scan_state_shift_cb_t shift_cb)
-{
-    if (s) {
-        s->state_shift_cb = shift_cb;
-    }
-}
-
-void
 scan_scanner_take_buffer(parse_scanner_t *s)
 {
     if (s) {
         s->owns_buffer = true;
     }
-}
-
-void
-scan_scanner_set_compact_callback(parse_scanner_t *s,
-                                  scan_compact_cb_t compact_cb)
-{
-    if (s) {
-        s->compact_cb = compact_cb;
-    }
-}
-
-bool
-scan_scanner_discard_consumed(parse_scanner_t *s)
-{
-    if (!s || !s->buffer || s->source_final || s->append_closed
-        || !s->mark || s->mark > s->cursor || s->mark > s->input.u8_bytes) {
-        return false;
-    }
-
-    size_t removed  = s->mark;
-    size_t remain   = s->input.u8_bytes - removed;
-
-    if (s->checked_to < removed) {
-        check_span(s, s->checked_to, removed, -1);
-        s->checked_to = removed;
-    }
-    s->checked_to -= removed;
-
-    s->input_offset += removed;
-    s->input.u8_bytes  = remain;
-    s->cursor    -= removed;
-    s->mark       = 0;
-    s->source_base += removed;
-
-    if (!remain || s->input_offset >= remain) {
-        memmove(s->buffer->data,
-                s->buffer->data + s->input_offset,
-                remain);
-        s->buffer->byte_len = remain;
-        s->buffer->data[remain] = '\0';
-        s->input_offset = 0;
-    }
-
-    s->input = core_string_borrow(s->buffer->data + s->input_offset, remain);
-
-    if (s->compact_cb) {
-        s->compact_cb(s, removed);
-    }
-
-    return true;
 }
 
 void
@@ -401,12 +289,6 @@ scan_scanner_set_recovery(parse_scanner_t *s, bool enable)
     return true;
 }
 
-bool
-scan_scanner_recovery_enabled(const parse_scanner_t *s)
-{
-    return s && s->recovery_enabled;
-}
-
 scan_status_t
 scan_status(const parse_scanner_t *s)
 {
@@ -464,33 +346,6 @@ scan_scanner_check_rest(parse_scanner_t *s)
     }
 }
 
-void
-scan_scanner_rewind_checks(parse_scanner_t *s, size_t to)
-{
-    if (!s) {
-        return;
-    }
-
-    s->checked_to = to;
-    size_t kept = 0;
-    for (size_t i = 0; i < core_list_len(s->warnings); i++) {
-        if (s->warnings.data[i].start_byte < s->source_base + to) {
-            s->warnings.data[kept++] = s->warnings.data[i];
-        }
-    }
-    s->warnings.len = kept;
-    kept = 0;
-    for (size_t i = 0; i < core_list_len(s->recoveries); i++) {
-        if (s->recoveries.data[i].start_byte < s->source_base + to) {
-            s->recoveries.data[kept++] = s->recoveries.data[i];
-        }
-        else {
-            core_free(s->recoveries.data[i].problem.detail.data);
-        }
-    }
-    s->recoveries.len = kept;
-}
-
 size_t
 scan_warning_count(const parse_scanner_t *s)
 {
@@ -517,59 +372,6 @@ scan_recovery_at(const parse_scanner_t *s, size_t index)
         ? &s->recoveries.data[index] : nullptr;
 }
 
-bool
-scan_scanner_append(parse_scanner_t *s, core_string_t data)
-{
-    if (!s || !s->buffer || s->append_closed
-        || (s->source_final && s->status != SCAN_STATUS_INCOMPLETE)
-        || (!s->source_final && s->status == SCAN_STATUS_INVALID)
-        || !data.data || !data.u8_bytes) {
-        return false;
-    }
-
-    core_buffer_append_string(s->buffer, data);
-    parse_source_append(s->source, data);
-
-    s->input             = core_string_borrow(
-        s->buffer->data + s->input_offset,
-        s->buffer->byte_len - s->input_offset);
-    s->at_eof            = false;
-    s->status            = SCAN_STATUS_ACTIVE;
-    s->status_problem    = (scan_problem_t){0};
-    s->status_lexer      = (core_string_t){0};
-    s->status_start_byte = 0;
-    s->status_end_byte   = 0;
-
-    if (s->stream) {
-        s->stream->exhausted = false;
-    }
-
-    return true;
-}
-
-bool
-scan_scanner_finish(parse_scanner_t *s)
-{
-    if (!s || s->append_closed || s->source_final) {
-        return false;
-    }
-
-    s->source_final = true;
-    s->append_closed = true;
-    s->at_eof = false;
-    s->status = SCAN_STATUS_ACTIVE;
-    s->status_problem = (scan_problem_t){0};
-    s->status_lexer = (core_string_t){0};
-    s->status_start_byte = 0;
-    s->status_end_byte = 0;
-
-    if (s->stream) {
-        s->stream->exhausted = false;
-    }
-
-    return true;
-}
-
 void
 scan_scanner_reset(parse_scanner_t *s)
 {
@@ -579,7 +381,6 @@ scan_scanner_reset(parse_scanner_t *s)
 
     s->cursor   = 0;
     s->source_base = 0;
-    s->work_bytes = 0;
     s->line     = 1;
     s->column   = 1;
     s->mark     = 0;
@@ -606,7 +407,6 @@ scan_scanner_reset(parse_scanner_t *s)
     s->pending_leading_tail = nullptr;
     s->pending_trailing = nullptr;
     s->pending_trailing_tail = nullptr;
-    s->last_trailing_tail = nullptr;
 
     if (s->reset_cb) {
         s->reset_cb(s);
@@ -645,7 +445,7 @@ scan_peek_byte(parse_scanner_t *s, int32_t offset)
 bool
 scan_at_eof(parse_scanner_t *s)
 {
-    return s->cursor >= s->input.u8_bytes || partial_utf8_at_end(s);
+    return s->cursor >= s->input.u8_bytes;
 }
 
 size_t
@@ -664,12 +464,6 @@ scan_offset(parse_scanner_t *s)
     return s->cursor;
 }
 
-size_t
-scan_work_bytes(const parse_scanner_t *s)
-{
-    return s ? s->work_bytes : 0;
-}
-
 void
 scan_advance(parse_scanner_t *s)
 {
@@ -681,7 +475,6 @@ scan_advance(parse_scanner_t *s)
     core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
     s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
 
     if (core_codepoint_is_line_terminator(cp)) {
         s->line++;
@@ -703,7 +496,6 @@ scan_advance_n(parse_scanner_t *s, int32_t n)
 void
 scan_advance_bytes(parse_scanner_t *s, size_t n)
 {
-    size_t start = s->cursor;
     size_t end = s->cursor + n;
 
     if (end > s->input.u8_bytes) {
@@ -724,7 +516,6 @@ scan_advance_bytes(parse_scanner_t *s, size_t n)
     }
 
     s->cursor = end;
-    s->work_bytes += end - start;
 }
 
 size_t
@@ -737,11 +528,8 @@ scan_match_str(parse_scanner_t *s, core_string_t lit)
     }
 
     if (memcmp(s->input.data + s->cursor, lit.data, len) != 0) {
-        s->work_bytes += len;
         return 0;
     }
-
-    s->work_bytes += len;
 
     for (size_t i = 0; i < len; ) {
         int              cp_len;
@@ -762,90 +550,6 @@ scan_match_str(parse_scanner_t *s, core_string_t lit)
     return len;
 }
 
-size_t
-scan_match_if(parse_scanner_t *s, scan_cp_predicate_fn pred)
-{
-    if (s->cursor >= s->input.u8_bytes) {
-        return 0;
-    }
-
-    int              cp_len;
-    core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-    if (!pred(cp, nullptr)) {
-        return 0;
-    }
-
-    s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
-
-    if (core_codepoint_is_line_terminator(cp)) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
-
-    return (size_t)cp_len;
-}
-
-size_t
-scan_match_class(parse_scanner_t *s, parse_char_class_t cc)
-{
-    if (s->cursor >= s->input.u8_bytes) {
-        return 0;
-    }
-
-    int              cp_len;
-    core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-    if (!cc_match(cc, cp)) {
-        return 0;
-    }
-
-    s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
-
-    if (core_codepoint_is_line_terminator(cp)) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
-
-    return (size_t)cp_len;
-}
-
-size_t
-scan_match_cp(parse_scanner_t *s, core_codepoint_t target)
-{
-    if (s->cursor >= s->input.u8_bytes) {
-        return 0;
-    }
-
-    int              cp_len;
-    core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-    if (cp != target) {
-        return 0;
-    }
-
-    s->cursor += (size_t)cp_len;
-    s->work_bytes += (size_t)cp_len;
-
-    if (core_codepoint_is_line_terminator(cp)) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
-
-    return (size_t)cp_len;
-}
-
 int32_t
 scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred)
 {
@@ -860,37 +564,6 @@ scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred)
         }
 
         s->cursor += (size_t)cp_len;
-        s->work_bytes += (size_t)cp_len;
-
-        if (core_codepoint_is_line_terminator(cp)) {
-            s->line++;
-            s->column = 1;
-        }
-        else {
-            s->column++;
-        }
-
-        count++;
-    }
-
-    return count;
-}
-
-int32_t
-scan_skip_class(parse_scanner_t *s, parse_char_class_t cc)
-{
-    int32_t count = 0;
-
-    while (s->cursor < s->input.u8_bytes) {
-        int              cp_len;
-        core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        if (!cc_match(cc, cp)) {
-            break;
-        }
-
-        s->cursor += (size_t)cp_len;
-        s->work_bytes += (size_t)cp_len;
 
         if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
@@ -996,8 +669,6 @@ emit_token(parse_scanner_t *s, int32_t tid,
     parse_token_set_leading_trivia(tok, s->pending_leading);
     parse_token_set_trailing_trivia(tok, s->pending_trailing);
 
-    s->last_trailing_tail = s->pending_trailing_tail;
-
     s->pending_leading  = nullptr;
     s->pending_leading_tail = nullptr;
     s->pending_trailing = nullptr;
@@ -1008,12 +679,6 @@ emit_token(parse_scanner_t *s, int32_t tid,
     s->mark      = s->cursor;
     s->mark_line = s->line;
     s->mark_col  = s->column;
-}
-
-void
-scan_emit(parse_scanner_t *s, int32_t tid, core_option_t(core_string_t) value)
-{
-    emit_token(s, tid, value, false);
 }
 
 void
@@ -1047,27 +712,6 @@ scan_add_leading_trivia_kind(parse_scanner_t    *s,
 }
 
 
-void
-scan_add_leading_trivia(parse_scanner_t *s, core_string_t text)
-{
-    scan_add_leading_trivia_kind(s, text, PARSE_TRIVIA_COMMENT);
-}
-
-void
-scan_set_trivia_attach(parse_scanner_t *s, scan_trivia_attach_t how)
-{
-    if (s) {
-        s->trivia_attach = (uint8_t)how;
-    }
-}
-
-scan_trivia_attach_t
-scan_trivia_attach(const parse_scanner_t *s)
-{
-    return s ? (scan_trivia_attach_t)s->trivia_attach
-             : SCAN_TRIVIA_ATTACH_RIGHT;
-}
-
 parse_trivia_t *
 scan_add_trivia(parse_scanner_t *s, core_string_t text,
                     parse_trivia_kind_t kind)
@@ -1076,54 +720,8 @@ scan_add_trivia(parse_scanner_t *s, core_string_t text,
         return nullptr;
     }
 
-    if (s->trivia_attach == (uint8_t)SCAN_TRIVIA_ATTACH_LEFT) {
-        parse_token_info_t *prev = scan_prev_token(s);
-        parse_trivia_t     *t    = make_trivia(s, text);
-
-        t->kind = kind;
-
-        if (prev && !parse_token_no_trivia(prev)) {
-            parse_trivia_t *trailing = parse_token_trailing_trivia(prev);
-
-            if (s->pending_leading) {
-                if (s->last_trailing_tail) {
-                    s->last_trailing_tail->next = s->pending_leading;
-                }
-                else {
-                    trailing = s->pending_leading;
-                }
-                s->last_trailing_tail = s->pending_leading_tail;
-                s->pending_leading = nullptr;
-                s->pending_leading_tail = nullptr;
-            }
-
-            append_trivia(&trailing, &s->last_trailing_tail, t);
-            parse_token_set_trailing_trivia(prev, trailing);
-        }
-        else if (!prev) {
-            append_trivia(&s->pending_leading,
-                          &s->pending_leading_tail, t);
-        }
-        else {
-            parse_trivia_free(t);
-            t = nullptr;
-        }
-
-        return t;
-    }
-
     scan_add_leading_trivia_kind(s, text, kind);
     return s->pending_leading_tail;
-}
-
-void
-scan_add_trailing_trivia(parse_scanner_t *s, core_string_t text)
-{
-    parse_trivia_t *t = make_trivia(s, text);
-
-    t->kind = PARSE_TRIVIA_COMMENT;
-
-    append_trivia(&s->pending_trailing, &s->pending_trailing_tail, t);
 }
 
 int32_t
@@ -1162,114 +760,6 @@ scan_skip_whitespace(parse_scanner_t *s)
     }
 
     return count;
-}
-
-void
-scan_skip_line_comment(parse_scanner_t *s)
-{
-    size_t start = s->cursor;
-
-    while (s->cursor < s->input.u8_bytes) {
-        int              cp_len;
-        core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        if (core_codepoint_is_line_terminator(cp)) {
-            break;
-        }
-
-        s->cursor += (size_t)cp_len;
-        s->column++;
-    }
-
-    size_t byte_len = s->cursor - start;
-
-    if (byte_len > 0) {
-        core_string_t text = core_string_from_raw(s->input.data + start,
-                                                   (int64_t)byte_len);
-        scan_add_trivia(s, text, PARSE_TRIVIA_COMMENT);
-    }
-}
-
-bool
-scan_skip_block_comment(parse_scanner_t *s,
-                            core_string_t opener,
-                            core_string_t closer)
-{
-    size_t opener_len = opener.u8_bytes;
-    size_t closer_len = closer.u8_bytes;
-    size_t start      = s->cursor;
-
-    if (s->cursor + opener_len > s->input.u8_bytes
-        || memcmp(s->input.data + s->cursor, opener.data, opener_len) != 0) {
-        return false;
-    }
-
-    for (size_t i = 0; i < opener_len; ) {
-        int              cp_len;
-        core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        s->cursor += (size_t)cp_len;
-        i += (size_t)cp_len;
-
-        if (core_codepoint_is_line_terminator(cp)) {
-            s->line++;
-            s->column = 1;
-        }
-        else {
-            s->column++;
-        }
-    }
-
-    while (s->cursor + closer_len <= s->input.u8_bytes) {
-        if (memcmp(s->input.data + s->cursor, closer.data, closer_len) == 0) {
-            for (size_t i = 0; i < closer_len; ) {
-                int              cp_len;
-                core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-                s->cursor += (size_t)cp_len;
-                i += (size_t)cp_len;
-
-                if (core_codepoint_is_line_terminator(cp)) {
-                    s->line++;
-                    s->column = 1;
-                }
-                else {
-                    s->column++;
-                }
-            }
-
-            size_t byte_len = s->cursor - start;
-
-            core_string_t text = core_string_from_raw(s->input.data + start,
-                                                       (int64_t)byte_len);
-            scan_add_trivia(s, text, PARSE_TRIVIA_COMMENT);
-            return true;
-        }
-
-        int              cp_len;
-        core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
-
-        s->cursor += (size_t)cp_len;
-
-        if (core_codepoint_is_line_terminator(cp)) {
-            s->line++;
-            s->column = 1;
-        }
-        else {
-            s->column++;
-        }
-    }
-
-    while (s->cursor < s->input.u8_bytes) {
-        scan_advance(s);
-    }
-
-    size_t byte_len = s->cursor - start;
-
-    core_string_t text = core_string_from_raw(s->input.data + start,
-                                               (int64_t)byte_len);
-    scan_add_trivia(s, text, PARSE_TRIVIA_COMMENT);
-    return false;
 }
 
 int64_t

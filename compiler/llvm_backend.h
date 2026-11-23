@@ -108,16 +108,8 @@ core_string_t n00bb_llvm_backend_mutator_entries(
 void n00bb_llvm_mutator_decisions_add(core_dict_t *decisions,
     ir_module_t *module, core_string_t entries);
 
-bool n00bb_llvm_backend_write_bitcode(
-    n00bb_llvm_backend_t *backend, core_buffer_t *out,
-    core_diagnostics_t *diagnostics);
 bool n00bb_llvm_backend_bind_index_table(n00bb_llvm_backend_t *backend,
     const n00bb_llvm_index_table_t *table);
-bool n00bb_llvm_backend_emit_object(
-    n00bb_llvm_backend_t *backend,
-    const core_string_t *entry_initializers, size_t initializer_count,
-    size_t metadata_bytes,
-    core_buffer_t *out, core_diagnostics_t *diagnostics);
 bool n00bb_llvm_backend_emit_linkable_bitcode(
     n00bb_llvm_backend_t *backend,
     const core_string_t *entry_initializers, size_t initializer_count,

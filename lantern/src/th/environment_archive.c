@@ -100,9 +100,6 @@ static bool save_type(core_object_writer_t *writer, const void *object,
       case TH_ARG_UINT:
         if (!core_object_writer_u64(writer, arg->u)) return false;
         break;
-      case TH_ARG_SINT:
-        if (!core_object_writer_u64(writer, (uint64_t)arg->s)) return false;
-        break;
       case TH_ARG_STR:
         if (!write_string_arg(writer, arg->str)) return false;
         break;
@@ -237,8 +234,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     if (type->named.nargs && !type->named.args) return false;
     for (size_t i = 0; i < type->named.nargs; i++) {
       th_arg *arg = &type->named.args[i];
-      if (!core_object_reader_u32(reader, &value) || value > TH_ARG_STR)
-        return false;
+      if (!core_object_reader_u32(reader, &value)) return false;
       arg->kind = (th_argkind)value;
       switch (arg->kind) {
       case TH_ARG_TYPE:
@@ -247,15 +243,11 @@ static bool restore_type(core_object_reader_t *reader, void *object,
       case TH_ARG_UINT:
         if (!core_object_reader_u64(reader, &arg->u)) return false;
         break;
-      case TH_ARG_SINT: {
-        uint64_t signed_bits;
-        if (!core_object_reader_u64(reader, &signed_bits)) return false;
-        memcpy(&arg->s, &signed_bits, sizeof(arg->s));
-        break;
-      }
       case TH_ARG_STR:
         if (!read_string_arg(reader, &arg->str)) return false;
         break;
+      default:
+        return false;
       }
     }
     return true;

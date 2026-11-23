@@ -453,12 +453,6 @@ void n00bb_trait_targets_free(n00bb_link_analysis_t *analysis);
 core_list_t(n00bb_ir_func_ptr_t) n00bb_program_functions(
     const n00bb_link_analysis_t *analysis);
 
-static inline bool
-n00bb_open_dispatch(const n00bb_link_analysis_t *analysis)
-{
-    return analysis && analysis->may_link_further;
-}
-
 parse_sym_entry_t *n00bb_enum_type_symbol(n00bb_link_analysis_t *analysis,
                                           th_type *type);
 

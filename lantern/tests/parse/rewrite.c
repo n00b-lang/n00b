@@ -51,7 +51,7 @@ lang_scan(parse_scanner_t *s)
         if (core_option_is_set(id)) {
             int64_t kw = scan_terminal_id(s, core_option_get(id));
 
-            scan_emit(s,
+            scan_emit_owned(s,
                           kw != PARSE_TOK_OTHER ? (int32_t)kw
                                               : PARSE_TOK_IDENTIFIER,
                           id);

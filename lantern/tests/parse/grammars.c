@@ -285,7 +285,7 @@ static void test_every_grammar_in_the_corpus_loads(core_string_t dir)
         snprintf(what, sizeof(what),
                  "%.*s defines every non-terminal it uses",
                  SF(CORPUS[i].file));
-        check(what, !ok || parse_grammar_report_undefined(g, stdout));
+        check(what, !ok || !parse_grammar_undefined(g, nullptr, 0));
 
         snprintf(what, sizeof(what), "%.*s has rules", SF(CORPUS[i].file));
         check(what, !ok || g->rules.len > 0);

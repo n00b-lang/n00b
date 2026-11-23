@@ -19,11 +19,5 @@ parse_token_stream_t *scan_tokenize(parse_grammar_t  *g,
                                  core_buffer_t  **buf_out,
                                  parse_scanner_t **sc_out);
 
-parse_token_stream_t *scan_tokenize_incremental(parse_grammar_t  *g,
-                                                core_buffer_t  **buf_out,
-                                                parse_scanner_t **sc_out);
-
 parse_token_stream_t *scan_tokenize_owned(parse_grammar_t *g,
                                            core_string_t src);
-
-parse_token_stream_t *scan_tokenize_incremental_owned(parse_grammar_t *g);

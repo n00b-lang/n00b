@@ -128,8 +128,7 @@ int main(void)
           && core_index_remap_set(narrow, 0, 0x7fffffff));
     core_index_remap_t *empty = core_index_remap_new(0, 0);
     check("empty remap has no addressable rows",
-          core_index_remap_len(empty) == 0
-          && !core_index_remap_set(empty, 0, 0));
+          !core_index_remap_set(empty, 0, 0));
 
     core_index_remap_free(empty);
     core_index_remap_free(narrow);

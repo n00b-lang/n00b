@@ -38,11 +38,6 @@ typedef struct {
 } lex_tid_set_t;
 
 typedef struct {
-    const scan_lex_literal_hook_t *recipe;
-    int32_t                        tid;
-} lex_literal_hook_t;
-
-typedef struct {
     const scan_lex_recovery_t *recipe;
     int32_t                    tid;
     int32_t                    replacement_tid;
@@ -50,13 +45,9 @@ typedef struct {
 
 core_list_decl(lex_term_node_t);
 core_list_decl(lex_term_edge_t);
-core_list_decl(scan_lex_issue_t);
-
 bool scan_lex_analyze_spec(const scan_lex_spec_t *spec,
                            parse_grammar_t *grammar,
-                           core_string_t *error,
-                           core_list_t(scan_lex_issue_t) *issues);
-void scan_lex_issues_free(core_list_t(scan_lex_issue_t) *issues);
+                           core_string_t *error);
 void scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
                                         parse_grammar_t *grammar);
 
@@ -68,8 +59,6 @@ struct scan_lex_t {
     size_t opwidth[256];
     core_list_t(lex_term_node_t) term_nodes;
     core_list_t(lex_term_edge_t) term_edges;
-    core_list_t(lex_term_node_t) opener_nodes;
-    core_list_t(lex_term_edge_t) opener_edges;
     core_list_t(lex_term_node_t) string_nodes;
     core_list_t(lex_term_edge_t) string_edges;
     core_list_t(lex_term_node_t) number_nodes;
@@ -106,7 +95,6 @@ struct scan_lex_t {
     bool         ident_enabled;
     bool         number_enabled;
     scan_unicode_profile_t *identifier_profile;
-    core_list_t(scan_lex_issue_t) issues;
 
     int32_t tid_newline;
     int32_t tid_indent;
@@ -117,8 +105,6 @@ struct scan_lex_t {
     int32_t tid_terminator;
 
     lex_tid_set_t is_literal;
-    lex_literal_hook_t *literal_hooks;
-    size_t              literal_hook_count;
     lex_recovery_t     *recoveries;
     size_t              recovery_count;
     lex_tid_set_t codepoint_terminals;

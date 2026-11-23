@@ -155,7 +155,6 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
             switch (arg->kind) {
             case TH_ARG_TYPE: put_ref(writer, out, arg->type); break;
             case TH_ARG_UINT: core_put_u64(out, arg->u); break;
-            case TH_ARG_SINT: core_put_u64(out, (uint64_t)arg->s); break;
             case TH_ARG_STR: core_put_text(out, arg->str); break;
             }
         }
@@ -313,7 +312,6 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
             switch (arg->kind) {
             case TH_ARG_TYPE: arg->type = get_ref(cursor, reader); break;
             case TH_ARG_UINT: arg->u = core_cursor_u64(cursor); break;
-            case TH_ARG_SINT: arg->s = (int64_t)core_cursor_u64(cursor); break;
             case TH_ARG_STR:
                 arg->str = th_cursor_text(cursor, ctx);
                 break;

@@ -29,8 +29,6 @@ struct core_work_job_t {
     core_list_t(core_work_job_ptr_t) dependencies;
     core_dict_t dependency_index;
     ready_kind_t *ready_kind;
-    core_work_job_t *ready_prev;
-    core_work_job_t *ready_next;
     core_work_job_t *kind_prev;
     core_work_job_t *kind_next;
 };
@@ -40,8 +38,6 @@ struct core_work_queue_t {
     pthread_cond_t changed;
     core_dict_t jobs;
     core_dict_t ready_by_kind;
-    core_work_job_t *ready_head;
-    core_work_job_t *ready_tail;
     size_t terminal;
     bool closed;
 };
@@ -92,10 +88,6 @@ ready_push(core_work_queue_t *q, core_work_job_t *job)
                       (void *)(uintptr_t)job->key.kind, kind);
     }
     job->ready_kind = kind;
-    job->ready_prev = q->ready_tail;
-    if (q->ready_tail) q->ready_tail->ready_next = job;
-    else q->ready_head = job;
-    q->ready_tail = job;
     job->kind_prev = kind->tail;
     if (kind->tail) kind->tail->kind_next = job;
     else kind->head = job;
@@ -103,19 +95,14 @@ ready_push(core_work_queue_t *q, core_work_job_t *job)
 }
 
 static void
-ready_remove(core_work_queue_t *q, core_work_job_t *job)
+ready_remove(core_work_job_t *job)
 {
     ready_kind_t *kind = job->ready_kind;
-    if (job->ready_prev) job->ready_prev->ready_next = job->ready_next;
-    else q->ready_head = job->ready_next;
-    if (job->ready_next) job->ready_next->ready_prev = job->ready_prev;
-    else q->ready_tail = job->ready_prev;
     if (job->kind_prev) job->kind_prev->kind_next = job->kind_next;
     else kind->head = job->kind_next;
     if (job->kind_next) job->kind_next->kind_prev = job->kind_prev;
     else kind->tail = job->kind_prev;
     job->ready_kind = nullptr;
-    job->ready_prev = job->ready_next = nullptr;
     job->kind_prev = job->kind_next = nullptr;
 }
 
@@ -279,21 +266,17 @@ core_work_submit(core_work_queue_t *q, uint32_t kind,
     return result;
 }
 
-static bool
-work_take(core_work_queue_t *q, bool filter_kind, uint32_t kind,
-         core_work_job_t **out)
+bool
+core_work_take_kind(core_work_queue_t *q, uint32_t kind,
+                    core_work_job_t **out)
 {
     if (!q || !out) return false;
     pthread_mutex_lock(&q->lock);
     core_work_job_t *job = nullptr;
     for (;;) {
-        if (!filter_kind) job = q->ready_head;
-        else {
-            ready_kind_t *bucket = core_dict_get(&q->ready_by_kind,
-                                                (void *)(uintptr_t)kind,
-                                                nullptr);
-            job = bucket ? bucket->head : nullptr;
-        }
+        ready_kind_t *bucket = core_dict_get(&q->ready_by_kind,
+                                            (void *)(uintptr_t)kind, nullptr);
+        job = bucket ? bucket->head : nullptr;
         if (job || (q->closed && q->terminal == q->jobs.count))
             break;
         pthread_cond_wait(&q->changed, &q->lock);
@@ -303,24 +286,11 @@ work_take(core_work_queue_t *q, bool filter_kind, uint32_t kind,
         pthread_mutex_unlock(&q->lock);
         return false;
     }
-    ready_remove(q, job);
+    ready_remove(job);
     job->state = CORE_WORK_RUNNING;
     *out = job;
     pthread_mutex_unlock(&q->lock);
     return true;
-}
-
-bool
-core_work_take(core_work_queue_t *q, core_work_job_t **out)
-{
-    return work_take(q, false, 0, out);
-}
-
-bool
-core_work_take_kind(core_work_queue_t *q, uint32_t kind,
-                    core_work_job_t **out)
-{
-    return work_take(q, true, kind, out);
 }
 
 bool
@@ -380,7 +350,6 @@ core_work_wait(core_work_queue_t *q, core_work_job_t *job)
     return ok;
 }
 
-uint32_t core_work_job_kind(const core_work_job_t *job) { return job ? job->key.kind : 0; }
 const core_module_spec_t *core_work_job_module(const core_work_job_t *job) { return job ? &job->key.module : nullptr; }
 
 core_work_state_t

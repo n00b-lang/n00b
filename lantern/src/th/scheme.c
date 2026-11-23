@@ -6,90 +6,21 @@
 #include "lib/list.h"
 #include "lib/option.h"
 
-typedef struct {
-    th_type  *t;
-    th_type **kids;
-    size_t    n;
-    size_t    next;
-    bool      entered;
-} fvframe;
-
-core_option_decl(fvframe);
-core_list_decl(fvframe);
-
 typedef th_type *th_occ_ptr_t;
 
 core_list_decl(th_occ_ptr_t);
 
-static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
-                             size_t *out)
+static void collect_var(void *acc, th_type *t)
 {
-    if (t->kind != TH_VAR) {
-        return th_children(ctx, t, out);
-    }
-
-    bool found;
-
-    *out = 0;
-    core_dict_get(acc, t, &found);
-
-    if (!found) {
-        core_dict_put(acc, t, core_dict_len(acc) + 1);
-    }
-
-    return nullptr;
-}
-
-static void fv_walk(th_ctx *ctx, th_type *root, core_dict_t *acc,
-                    core_dict_t *stack)
-{
-    core_list_t(fvframe) st = core_list_new_cap(fvframe, 16);
-
-    core_list_push(st, ((fvframe){.t = root}));
-
-    while (st.len) {
-        fvframe *f = &st.data[st.len - 1];
-
-        if (!f->entered) {
-            f->entered = true;
-            f->t       = th_resolve(f->t);
-
-            if (!f->t || core_dict_contains(stack, f->t)) {
-                f->t = nullptr;
-                core_list_pop(fvframe, st);
-
-                continue;
-            }
-            core_dict_put(stack, f->t, f->t);
-            f->kids = fv_children(ctx, f->t, acc, &f->n);
-            f       = &st.data[st.len - 1];
-        }
-
-        if (f->next < f->n) {
-            th_type *kid = f->kids[f->next++];
-
-            core_list_push(st, ((fvframe){.t = kid}));
-
-            continue;
-        }
-
-        core_dict_remove(stack, f->t);
-        core_free(f->kids);
-        core_list_pop(fvframe, st);
-    }
-
-    core_list_free(st);
+    if (!core_dict_contains(acc, t)) core_dict_put(acc, t, core_dict_len(acc) + 1);
 }
 
 size_t th_free_vars(th_ctx *ctx, th_type *t, th_type ***out)
 {
-    core_dict_t acc, stack;
+    core_dict_t acc;
 
     core_dict_init(&acc, nullptr, nullptr);
-    core_dict_init(&stack, nullptr, nullptr);
-
-    fv_walk(ctx, t, &acc, &stack);
-    core_dict_free(&stack);
+    th_walk_vars(ctx, t, collect_var, &acc);
 
     size_t n = core_dict_len(&acc);
 
@@ -648,48 +579,4 @@ th_type *th_generalize(th_ctx *ctx, th_type *t)
     return generalize_vars(ctx, t, vars, nvars);
 }
 
-th_type *th_generalize_excluding(th_ctx *ctx, th_type *t,
-                                 th_type *const *environment,
-                                 size_t environment_count)
-{
-    if (!environment || !environment_count)
-        return th_generalize(ctx, t);
-
-    core_dict_t fixed;
-    core_dict_init(&fixed, nullptr, nullptr);
-    for (size_t i = 0; i < environment_count; i++) {
-        th_type **vars = nullptr;
-        size_t nvars = th_free_vars(ctx, environment[i], &vars);
-        for (size_t j = 0; j < nvars; j++)
-            core_dict_put(&fixed, vars[j], 1);
-    }
-
-    th_type **candidates = nullptr;
-    size_t count = th_free_vars(ctx, t, &candidates);
-    th_type **generalizable = th_alloc(ctx,
-        (count ? count : 1) * sizeof(th_type *));
-    size_t n_generalizable = 0;
-    for (size_t i = 0; i < count; i++) {
-        bool is_fixed = false;
-        core_dict_get(&fixed, candidates[i], &is_fixed);
-        if (!is_fixed)
-            generalizable[n_generalizable++] = candidates[i];
-    }
-    core_dict_free(&fixed);
-    return generalize_vars(ctx, t, generalizable, n_generalizable);
-}
-
-bool th_implements(th_ctx *ctx, th_type *type, core_string_t iface)
-{
-    th_type *resolved = type ? th_resolve(type) : nullptr;
-
-    if (!ctx || !resolved || !iface.data) {
-        return false;
-    }
-    if (resolved->kind == TH_VAR) {
-        return false;
-    }
-
-    return th_ctx_environment(ctx) && th_env_implements(ctx, type, iface);
-}
 

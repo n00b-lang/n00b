@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "ir/layout.h"
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "th/environment.h"
@@ -268,10 +267,6 @@ n00bb_abi_type_identity_rows_build(
                 case TH_ARG_UINT:
                     value.kind = N00B_ABI_TYPE_ARG_UINT;
                     value.scalar_bits = arg->u;
-                    break;
-                case TH_ARG_SINT:
-                    value.kind = N00B_ABI_TYPE_ARG_SINT;
-                    value.scalar_bits = (uint64_t)arg->s;
                     break;
                 case TH_ARG_STR:
                     value.kind = N00B_ABI_TYPE_ARG_STRING;

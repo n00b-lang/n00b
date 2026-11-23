@@ -16,10 +16,6 @@ typedef struct parse_sym_entry_t    parse_sym_entry_t;
 
 #define PARSE_EMPTY_STRING         (-126)
 #define PARSE_GROUP_ID             (1 << 28)
-#define PARSE_DEFAULT_MAX_PENALTY  128
-#define PARSE_ERROR_NODE_ID        (-254)
-#define PARSE_GID_SHOW_GROUP_LHS  (-255)
-#define PARSE_IX_START_OF_PROGRAM (-1)
 
 typedef enum {
     PARSE_QUERY_RULE_ANNOT,
@@ -129,11 +125,8 @@ typedef enum : uint8_t {
 
 typedef struct parse_node_facts_t {
     parse_sym_entry_t      *sym;
-    th_type                *argument_type;
-    th_type                *error_type;
     parse_sym_entry_t      *reference_target;
-    void                   *integer_literal_origin;
-    core_string_t           unresolved_name;
+    core_string_t          unresolved_name;
     parse_node_resolution_t resolution;
     bool                    direct_symbol_reference;
     bool                    declares_binding;
@@ -153,7 +146,6 @@ typedef struct parse_node_facts_t {
     bool                    field_write_reads;
     void                   *query_function;
     bool                    names_called;
-    bool                    index_address_access;
     parse_junction_t        junction;
     bool                    comparison;
     bool                    in_effect_query;

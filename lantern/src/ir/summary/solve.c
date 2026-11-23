@@ -770,14 +770,6 @@ compute_summaries(ir_func_t *const *functions, size_t count,
 }
 
 ir_summaries_t *
-ir_summaries_compute(ir_func_t *const *functions, size_t count,
-                     const ir_summary_hooks_t *hooks)
-{
-    return compute_summaries(functions, count, hooks, false, nullptr,
-                             nullptr);
-}
-
-ir_summaries_t *
 ir_summaries_recompute(ir_func_t *const *functions, size_t count,
                        const ir_summary_hooks_t *hooks,
                        ir_summaries_t *previous)

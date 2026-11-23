@@ -31,7 +31,7 @@ struct datalog_tuple {
 typedef datalog_tuple_t *datalog_tuple_ptr_t;
 core_list_decl(datalog_tuple_ptr_t);
 core_list_decl(core_datalog_rule_t);
-core_list_decl(core_datalog_goal_t);
+core_list_decl(core_datalog_literal_t);
 typedef core_string_t *datalog_string_ptr_t;
 core_list_decl(datalog_string_ptr_t);
 
@@ -91,7 +91,7 @@ static bool tuple_eq(const void *left, const void *right) {
 
 struct core_datalog_rule_builder {
   core_datalog_literal_t head;
-  core_list_t(core_datalog_goal_t) body;
+  core_list_t(core_datalog_literal_t) body;
   bool has_head;
 };
 
@@ -99,7 +99,7 @@ core_datalog_rule_builder_t *core_datalog_rule_builder_new(void) {
   core_datalog_rule_builder_t *builder =
       core_alloc(core_datalog_rule_builder_t);
   memset(builder, 0, sizeof(*builder));
-  builder->body = core_list_new(core_datalog_goal_t);
+  builder->body = core_list_new(core_datalog_literal_t);
   return builder;
 }
 
@@ -137,17 +137,7 @@ bool core_datalog_rule_builder_add_literal(
   };
   if (arity)
     memcpy(literal.arguments, arguments, (size_t)arity * sizeof(*arguments));
-  core_list_push(builder->body,
-                 core_variant_make_1(core_datalog_goal_t, literal));
-  return true;
-}
-
-bool core_datalog_rule_builder_add_builtin(core_datalog_rule_builder_t *builder,
-                                           core_datalog_builtin_t builtin) {
-  if (!builder)
-    return false;
-  core_list_push(builder->body,
-                 core_variant_make_2(core_datalog_goal_t, builtin));
+  core_list_push(builder->body, literal);
   return true;
 }
 
@@ -161,7 +151,7 @@ core_datalog_rule_builder_finish(core_datalog_rule_builder_t *builder) {
       .body_count = builder->body.len,
   };
   builder->head.arguments = nullptr;
-  builder->body = (core_list_t(core_datalog_goal_t)){0};
+  builder->body = (core_list_t(core_datalog_literal_t)){0};
   builder->has_head = false;
   core_datalog_rule_builder_free(builder);
   return rule;
@@ -171,16 +161,8 @@ void core_datalog_rule_builder_free(core_datalog_rule_builder_t *builder) {
   if (!builder)
     return;
   core_free(builder->head.arguments);
-  for (size_t i = 0; i < builder->body.len; i++) {
-    core_datalog_goal_t goal = builder->body.data[i];
-    if (core_variant_is(goal, 1))
-      core_free(core_variant_get_1(goal).arguments);
-    else if (core_variant_is(goal, 2)) {
-      core_datalog_builtin_t builtin = core_variant_get_2(goal);
-      core_datalog_expr_free(builtin.left);
-      core_datalog_expr_free(builtin.right);
-    }
-  }
+  for (size_t i = 0; i < builder->body.len; i++)
+    core_free(builder->body.data[i].arguments);
   core_list_free(builder->body);
   core_free(builder);
 }
@@ -204,24 +186,12 @@ core_datalog_engine_t *core_datalog_engine_new(void) {
   return engine;
 }
 
-static void expression_free(core_datalog_expr_t *expression) {
-  core_datalog_expr_free(expression);
-}
-
 void core_datalog_rule_free(core_datalog_rule_t *rule) {
   if (!rule)
     return;
   core_free(rule->head.arguments);
-  for (size_t i = 0; i < rule->body_count; i++) {
-    core_datalog_goal_t goal = rule->body[i];
-    if (core_variant_is(goal, 1)) {
-      core_free(core_variant_get_1(goal).arguments);
-    } else if (core_variant_is(goal, 2)) {
-      core_datalog_builtin_t builtin = core_variant_get_2(goal);
-      expression_free(builtin.left);
-      expression_free(builtin.right);
-    }
-  }
+  for (size_t i = 0; i < rule->body_count; i++)
+    core_free(rule->body[i].arguments);
   core_free(rule->body);
   *rule = (core_datalog_rule_t){0};
 }
@@ -463,11 +433,7 @@ bool core_datalog_add_rule(core_datalog_engine_t *engine,
       (rule.body_count && !rule.body))
     return false;
   for (size_t i = 0; i < rule.body_count; i++) {
-    if (core_variant_is(rule.body[i], 2))
-      continue;
-    if (!core_variant_is(rule.body[i], 1))
-      return false;
-    core_datalog_literal_t literal = core_variant_get_1(rule.body[i]);
+    core_datalog_literal_t literal = rule.body[i];
     if (literal.relation < 0 ||
         (size_t)literal.relation >= engine->relations.len ||
         literal.arity != engine->relations.data[literal.relation]->arity ||
@@ -492,10 +458,7 @@ static bool stratify(core_datalog_engine_t *engine) {
       core_datalog_rule_t *rule = &engine->rules.data[r];
       int32_t required = 0;
       for (size_t b = 0; b < rule->body_count; b++) {
-        core_datalog_goal_t goal = rule->body[b];
-        if (!core_variant_is(goal, 1))
-          continue;
-        core_datalog_literal_t literal = core_variant_get_1(goal);
+        core_datalog_literal_t literal = rule->body[b];
         int32_t level = engine->relations.data[literal.relation]->stratum;
         if (literal.negated)
           level++;
@@ -534,64 +497,6 @@ static void binding_set(core_list_t(datalog_binding_t) * bindings,
                         core_datalog_symbol_t variable,
                         core_datalog_symbol_t value) {
   core_list_push(*bindings, ((datalog_binding_t){variable, value}));
-}
-
-static bool eval_integer(core_datalog_engine_t *engine,
-                         core_datalog_expr_t *expression,
-                         core_list_t(datalog_binding_t) * bindings,
-                         int64_t *result) {
-  int64_t left, right;
-  if (!expression)
-    return false;
-  switch (expression->kind) {
-  case CORE_DATALOG_EXPR_INTEGER:
-    *result = expression->value.integer;
-    return true;
-  case CORE_DATALOG_EXPR_SYMBOL: {
-    core_datalog_symbol_t symbol = expression->value.symbol;
-    if (core_datalog_is_variable(symbol)) {
-      symbol = binding_get(bindings, symbol);
-      if (symbol == CORE_DATALOG_SYMBOL_INVALID)
-        return false;
-    }
-    core_datalog_int_result_t converted =
-        core_datalog_symbol_integer(engine, symbol);
-    if (!converted.is_ok)
-      return false;
-    *result = converted.result.value;
-    return true;
-  }
-  case CORE_DATALOG_EXPR_NEGATE:
-    if (!eval_integer(engine, expression->value.operand, bindings, &left) ||
-        left == INT64_MIN)
-      return false;
-    *result = -left;
-    return true;
-  default:
-    if (!eval_integer(engine, expression->value.binary.left, bindings, &left) ||
-        !eval_integer(engine, expression->value.binary.right, bindings, &right))
-      return false;
-    switch (expression->kind) {
-    case CORE_DATALOG_EXPR_ADD:
-      return !__builtin_add_overflow(left, right, result);
-    case CORE_DATALOG_EXPR_SUBTRACT:
-      return !__builtin_sub_overflow(left, right, result);
-    case CORE_DATALOG_EXPR_MULTIPLY:
-      return !__builtin_mul_overflow(left, right, result);
-    case CORE_DATALOG_EXPR_DIVIDE:
-      if (!right || (left == INT64_MIN && right == -1))
-        return false;
-      *result = left / right;
-      return true;
-    case CORE_DATALOG_EXPR_MODULO:
-      if (!right || (left == INT64_MIN && right == -1))
-        return false;
-      *result = left % right;
-      return true;
-    default:
-      return false;
-    }
-  }
 }
 
 static bool match_literal(const core_datalog_symbol_t *tuple,
@@ -690,46 +595,6 @@ static void derive_head(core_datalog_engine_t *engine,
          engine->trail.len * sizeof(*tuple->premises));
 }
 
-static bool eval_builtin(core_datalog_engine_t *engine,
-                         core_datalog_builtin_t *builtin,
-                         core_list_t(datalog_binding_t) * bindings,
-                         bool *did_bind) {
-  int64_t left, right;
-  if (builtin->kind == CORE_DATALOG_BUILTIN_IS) {
-    if (!builtin->left || builtin->left->kind != CORE_DATALOG_EXPR_SYMBOL ||
-        !core_datalog_is_variable(builtin->left->value.symbol) ||
-        !eval_integer(engine, builtin->right, bindings, &right))
-      return false;
-    core_datalog_symbol_t variable = builtin->left->value.symbol;
-    core_datalog_symbol_t existing = binding_get(bindings, variable);
-    core_datalog_symbol_t value = core_datalog_integer(engine, right);
-    if (existing != CORE_DATALOG_SYMBOL_INVALID)
-      return existing == value;
-    binding_set(bindings, variable, value);
-    *did_bind = true;
-    return true;
-  }
-  if (!eval_integer(engine, builtin->left, bindings, &left) ||
-      !eval_integer(engine, builtin->right, bindings, &right))
-    return false;
-  switch (builtin->kind) {
-  case CORE_DATALOG_BUILTIN_LESS:
-    return left < right;
-  case CORE_DATALOG_BUILTIN_GREATER:
-    return left > right;
-  case CORE_DATALOG_BUILTIN_LESS_EQUAL:
-    return left <= right;
-  case CORE_DATALOG_BUILTIN_GREATER_EQUAL:
-    return left >= right;
-  case CORE_DATALOG_BUILTIN_EQUAL:
-    return left == right;
-  case CORE_DATALOG_BUILTIN_NOT_EQUAL:
-    return left != right;
-  default:
-    return false;
-  }
-}
-
 static void evaluate_body(core_datalog_engine_t *engine,
                           core_datalog_rule_t *rule, size_t body_index,
                           core_list_t(datalog_binding_t) * bindings,
@@ -739,18 +604,7 @@ static void evaluate_body(core_datalog_engine_t *engine,
     derive_head(engine, rule, bindings, has_recent, first_iteration, head);
     return;
   }
-  core_datalog_goal_t goal = rule->body[body_index];
-  if (core_variant_is(goal, 2)) {
-    core_datalog_builtin_t builtin = core_variant_get_2(goal);
-    size_t mark = bindings->len;
-    bool did_bind = false;
-    if (eval_builtin(engine, &builtin, bindings, &did_bind))
-      evaluate_body(engine, rule, body_index + 1, bindings, has_recent,
-                    first_iteration, head);
-    bindings->len = mark;
-    return;
-  }
-  core_datalog_literal_t literal = core_variant_get_1(goal);
+  core_datalog_literal_t literal = rule->body[body_index];
   datalog_relation_t *relation = engine->relations.data[literal.relation];
   if (literal.negated) {
     bool matched = false;
@@ -843,8 +697,7 @@ bool core_datalog_run(core_datalog_engine_t *engine) {
     core_datalog_rule_t *rule = &engine->rules.data[r];
     engine->last_positive[r] = rule->body_count;
     for (size_t b = 0; b < rule->body_count; b++)
-      if (core_variant_is(rule->body[b], 1) &&
-          !core_variant_get_1(rule->body[b]).negated)
+      if (!rule->body[b].negated)
         engine->last_positive[r] = b;
   }
   int32_t max_stratum = 0;
@@ -956,79 +809,10 @@ void core_datalog_query(const core_datalog_engine_t *engine,
       return;
 }
 
-size_t core_datalog_count(core_datalog_engine_t *engine,
-                          core_datalog_relation_id_t id) {
-  if (!engine || id < 0 || (size_t)id >= engine->relations.len)
-    return 0;
-  return engine->relations.data[id]->tuples.len;
-}
-
-size_t core_datalog_count_by_name(core_datalog_engine_t *engine,
-                                  core_string_t name) {
-  core_option_t(core_datalog_relation_id_t) relation =
-      core_datalog_find_relation(engine, name);
-  return relation.has_value ? core_datalog_count(engine, relation.value) : 0;
-}
-
-int32_t core_datalog_relation_count(const core_datalog_engine_t *engine) {
-  return engine ? (int32_t)engine->relations.len : 0;
-}
-
 int64_t core_datalog_iterations(const core_datalog_engine_t *engine) {
   return engine ? engine->iterations : 0;
 }
 
 int64_t core_datalog_total_facts(const core_datalog_engine_t *engine) {
   return engine ? engine->fact_count : 0;
-}
-
-core_datalog_expr_t *core_datalog_expr_symbol(core_datalog_symbol_t symbol) {
-  core_datalog_expr_t *expression = core_alloc(core_datalog_expr_t);
-  *expression = (core_datalog_expr_t){.kind = CORE_DATALOG_EXPR_SYMBOL,
-                                      .value.symbol = symbol};
-  return expression;
-}
-
-core_datalog_expr_t *core_datalog_expr_integer(int64_t value) {
-  core_datalog_expr_t *expression = core_alloc(core_datalog_expr_t);
-  *expression = (core_datalog_expr_t){.kind = CORE_DATALOG_EXPR_INTEGER,
-                                      .value.integer = value};
-  return expression;
-}
-
-core_datalog_expr_t *core_datalog_expr_binary(core_datalog_expr_kind_t kind,
-                                              core_datalog_expr_t *left,
-                                              core_datalog_expr_t *right) {
-  core_datalog_expr_t *expression = core_alloc(core_datalog_expr_t);
-  *expression = (core_datalog_expr_t){
-      .kind = kind, .value.binary = {.left = left, .right = right}};
-  return expression;
-}
-
-core_datalog_expr_t *core_datalog_expr_negate(core_datalog_expr_t *operand) {
-  core_datalog_expr_t *expression = core_alloc(core_datalog_expr_t);
-  *expression = (core_datalog_expr_t){.kind = CORE_DATALOG_EXPR_NEGATE,
-                                      .value.operand = operand};
-  return expression;
-}
-
-void core_datalog_expr_free(core_datalog_expr_t *expression) {
-  if (!expression)
-    return;
-  switch (expression->kind) {
-  case CORE_DATALOG_EXPR_ADD:
-  case CORE_DATALOG_EXPR_SUBTRACT:
-  case CORE_DATALOG_EXPR_MULTIPLY:
-  case CORE_DATALOG_EXPR_DIVIDE:
-  case CORE_DATALOG_EXPR_MODULO:
-    core_datalog_expr_free(expression->value.binary.left);
-    core_datalog_expr_free(expression->value.binary.right);
-    break;
-  case CORE_DATALOG_EXPR_NEGATE:
-    core_datalog_expr_free(expression->value.operand);
-    break;
-  default:
-    break;
-  }
-  core_free(expression);
 }

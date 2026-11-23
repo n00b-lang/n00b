@@ -28,8 +28,6 @@ ir_func_t    *ir_func_definition(ir_func_t *function);
 uint32_t      ir_call_argument_count(const ir_instr_t *call);
 ir_call_arg_t ir_call_argument(const ir_instr_t *call, uint32_t param);
 bool          ir_call_argument_writes(const ir_call_arg_t *argument);
-bool          ir_call_arguments_positional(const ir_instr_t *call,
-                                           uint32_t through);
 const ir_value_t *ir_value_uncopied(const ir_value_t *value);
 bool              ir_value_stable(const ir_value_t *value);
 bool              ir_block_belongs_to(const ir_func_t *f,

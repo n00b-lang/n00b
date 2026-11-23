@@ -31,8 +31,6 @@ void ir_func_replace_values(ir_func_t *f, core_dict_t *replacements);
 void ir_instr_use_added(ir_instr_t *in, uint32_t o);
 void ir_instr_uses_changed(ir_instr_t *in);
 bool ir_func_uses_consistent(ir_func_t *f);
-bool        ir_instr_inlined_from(ir_instr_t *in, ir_span_t call_site,
-                                  core_string_t agent);
 
 typedef core_string_t (*ir_rename_fn)(ir_ctx_t *ctx, core_string_t local,
                                       uint32_t nth, void *state);
@@ -68,14 +66,8 @@ struct ir_region_t {
     bool             dispatch;
 };
 
-core_string_t ir_region_kind_name(ir_region_kind_t k);
 bool         ir_structure(ir_module_t *m, ir_diags_t *d);
 ir_region_t *ir_region_root(ir_func_t *f);
-ir_region_t *ir_region_of_block(ir_func_t *f, ir_block_t *b);
-bool         ir_region_needs_dispatch(const ir_region_t *r);
-ir_region_t *ir_region_dispatch_site(ir_func_t *f);
-
-core_string_t ir_module_render_nested(ir_module_t *m);
 
 extern const ir_pass_t ir_pass_structure;
 

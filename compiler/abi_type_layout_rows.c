@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "ir/layout.h"
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "field_extent.h"

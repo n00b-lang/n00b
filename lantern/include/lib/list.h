@@ -135,16 +135,6 @@ core_list_reserve_raw(void **data, size_t *capacity, size_t needed,
         _bl_r;                                                                 \
     })
 
-#define core_list_set(x, i, val)                                               \
-    ({                                                                         \
-        auto _bl_lp = &(x);                                                    \
-        size_t _bl_i = (i);                                                    \
-        if (_bl_i >= _bl_lp->len) {                                            \
-            abort();                                                           \
-        }                                                                      \
-        _bl_lp->data[_bl_i] = (val);                                           \
-    })
-
 #define core_list_push(x, val)                                                 \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \

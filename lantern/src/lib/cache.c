@@ -75,18 +75,6 @@ core_cache_free(core_cache_t *c)
 }
 
 void
-core_cache_clear(core_cache_t *c)
-{
-    if (!c || !c->entries) {
-        return;
-    }
-
-    free_entries(c);
-    c->entries = entries_new();
-    c->gen++;
-}
-
-void
 core_cache_invalidate(core_cache_t *c)
 {
     if (c) {

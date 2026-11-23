@@ -55,9 +55,7 @@ modules)
     case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*) expected=zlib.show-ffi.llp64.expected ;;
     esac
-    grep -v 'ZLIB_VER' "$expected" >"$tmp/show-ffi.expected"
-    grep -v 'ZLIB_VER' "$tmp/show-ffi" >"$tmp/show-ffi.actual"
-    diff -u "$tmp/show-ffi.expected" "$tmp/show-ffi.actual"
+    diff -u "$expected" "$tmp/show-ffi"
     test ! -s "$tmp/show-ffi.log"
     test ! -e zlib_const
 
@@ -77,11 +75,15 @@ modules)
         exit 1
     }
     shim=n00b_ffi_zlib___ffi___init___ffi_literal_1
+    line() { grep -n -m 1 "$1" "$tmp/show-ffi" | cut -d: -f1; }
     "$register_object" "$tmp/zlib.n00bm" '>=2' \
         --ffi-module zlib.__ffi___init___ffi_literal_1 \
-        Stream@2 Deflate_Outcome Inflate_Outcome@103 Z_OK@32 Z_BUF_ERROR \
-        ZLIB_VERSION deflate deflate_end inflate inflate_end compress@152 \
-        compress_bound uncompress@173 adler32 crc32 deflate_init inflate_init \
+        "Stream@$(line '^record Stream ')" Deflate_Outcome \
+        "Inflate_Outcome@$(line '^enum Inflate_Outcome ')" \
+        "Z_OK@$(line '^const Z_OK:')" Z_BUF_ERROR \
+        ZLIB_VERSION deflate deflate_end inflate inflate_end \
+        "compress@$(line '^func compress(')" compress_bound \
+        "uncompress@$(line '^func uncompress(')" adler32 crc32 deflate_init inflate_init \
         __ffi_take_bytes \
         "__deflate=${shim}_n00b_deflate" "__deflateEnd=${shim}_n00b_deflateEnd" \
         "__inflate=${shim}_n00b_inflate" "__inflateEnd=${shim}_n00b_inflateEnd" \

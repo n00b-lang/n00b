@@ -22,7 +22,6 @@ core_list_decl(scan_lex_heredoc_t);
 core_list_decl(scan_lex_embed_t);
 core_list_decl(scan_lex_fence_t);
 core_list_decl(scan_lex_directive_t);
-core_list_decl(scan_lex_literal_hook_t);
 core_list_decl(scan_lex_recovery_t);
 core_list_decl(scan_lex_declaration_t);
 core_list_decl(scan_lex_identifier_profile_t);
@@ -75,7 +74,6 @@ typedef struct {
     core_list_t(scan_lex_embed_t)      embeds;
     core_list_t(scan_lex_fence_t)      fences;
     core_list_t(scan_lex_directive_t)  directives;
-    core_list_t(scan_lex_literal_hook_t) literal_hooks;
     core_list_t(scan_lex_recovery_t)     recoveries;
     core_list_t(scan_lex_declaration_t)  declarations;
     core_list_t(scan_lex_identifier_profile_t) identifier_profiles;
@@ -222,7 +220,6 @@ lex_build_free(lex_build_t *b)
     core_list_free(b->embeds);
     core_list_free(b->fences);
     core_list_free(b->directives);
-    core_list_free(b->literal_hooks);
     core_list_free(b->recoveries);
     core_list_free(b->declarations);
     core_list_free(b->identifier_profiles);
@@ -2094,53 +2091,6 @@ build_directive(lex_build_t *b, const scan_lex_decl_t *a)
 }
 
 static void
-build_literal_hook(lex_build_t *b, const scan_lex_decl_t *a)
-{
-    scan_lex_literal_hook_t item = {
-        .token = positional(&a->lex_opts, 0),
-    };
-    core_list_t(core_string_t) outputs = core_list_new(core_string_t);
-    core_list_t(core_string_t) types   = core_list_new(core_string_t);
-
-    for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
-        const scan_lex_opt_t *o = &a->lex_opts.data[i];
-
-        if (!o->name.data) {
-            continue;
-        }
-        if (named(o, "hook") && core_list_len(o->args) == 1) {
-            item.hook = arg(o, 0);
-        }
-        else if (named(o, "modifier") && core_list_len(o->args) == 1) {
-            item.modifier = arg(o, 0);
-        }
-        else if (named(o, "outputs") && core_list_len(o->args)) {
-            for (size_t j = 0; j < core_list_len(o->args); j++) {
-                core_list_push(outputs, o->args.data[j]);
-            }
-        }
-        else if (named(o, "types") && core_list_len(o->args)) {
-            for (size_t j = 0; j < core_list_len(o->args); j++) {
-                core_list_push(types, o->args.data[j]);
-            }
-        }
-        else {
-            oops(b, "literal-hook", o->name);
-        }
-    }
-
-    if ((!item.token.data || !item.hook.data) && !b->err.data) {
-        set_errf(b,
-                 "@lex-literal-hook: requires a token and hook()");
-    }
-    item.outputs = own_string_array(b, &outputs);
-    item.types   = own_string_array(b, &types);
-    core_list_free(outputs);
-    core_list_free(types);
-    core_list_push(b->literal_hooks, item);
-}
-
-static void
 build_recovery(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_recovery_t item = {
@@ -2944,7 +2894,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
         size_t embeds_before = b->embeds.len;
         size_t fences_before = b->fences.len;
         size_t directives_before = b->directives.len;
-        size_t hooks_before = b->literal_hooks.len;
         size_t recoveries_before = b->recoveries.len;
         size_t numbers_before = b->number_forms.len;
         size_t soft_before = b->soft_keywords.len;
@@ -2972,7 +2921,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
         case SCAN_LEX_FALLBACK: build_fallback(b, a); break;
         case SCAN_LEX_BIDI: build_bidi(b, a); break;
         case SCAN_LEX_DIRECTIVE: build_directive(b, a); break;
-        case SCAN_LEX_LITERAL_HOOK: build_literal_hook(b, a); break;
         case SCAN_LEX_RECOVER: build_recovery(b, a); break;
         case SCAN_LEX_SOFT_KEYWORDS:
             build_soft_keywords(b, g, a);
@@ -3014,11 +2962,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
         for (size_t j = directives_before; j < b->directives.len; j++) {
             record_declaration(b, SCAN_LEX_DECL_DIRECTIVE,
                                b->directives.data[j].open, a->source_origin);
-        }
-        for (size_t j = hooks_before; j < b->literal_hooks.len; j++) {
-            record_declaration(b, SCAN_LEX_DECL_LITERAL_HOOK,
-                               b->literal_hooks.data[j].token,
-                               a->source_origin);
         }
         for (size_t j = recoveries_before; j < b->recoveries.len; j++) {
             record_declaration(b, SCAN_LEX_DECL_RECOVERY,
@@ -3132,10 +3075,6 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
     if (core_list_len(b->directives)) {
         core_list_push(b->directives, ((scan_lex_directive_t){0}));
         b->spec.directives = b->directives.data;
-    }
-    if (core_list_len(b->literal_hooks)) {
-        core_list_push(b->literal_hooks, ((scan_lex_literal_hook_t){0}));
-        b->spec.literal_hooks = b->literal_hooks.data;
     }
     if (core_list_len(b->recoveries)) {
         core_list_push(b->recoveries, ((scan_lex_recovery_t){0}));

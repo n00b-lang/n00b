@@ -143,13 +143,6 @@ ir_interval_of_integer_type(ir_module_t *module, th_type *type,
     return true;
 }
 
-bool
-ir_interval_fits(ir_interval_t range, uint64_t width, bool is_signed)
-{
-    return ir_interval_contains(ir_interval_of_width(width, is_signed),
-                                range);
-}
-
 ir_interval_t
 ir_interval_apply(ir_op_t op, ir_interval_t a, ir_interval_t b)
 {

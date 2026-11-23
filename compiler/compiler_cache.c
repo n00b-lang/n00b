@@ -685,6 +685,7 @@ struct n00bb_cache_t {
     th_type_writer_t *recording_types;
     core_buffer_t unstored;
     core_buffer_t libraries;
+    core_dict_t *types_by_hash;
 };
 
 static bool
@@ -1605,6 +1606,10 @@ n00bb_cache_free(n00bb_cache_t *cache)
 {
     if (!cache) return;
     core_dict_free(&cache->loaded_members);
+    if (cache->types_by_hash) {
+        core_dict_free(cache->types_by_hash);
+        core_free(cache->types_by_hash);
+    }
     for (size_t e = 0; e < cache->entries.len; e++)
         entry_release(&cache->entries.data[e]);
     core_list_free(cache->entries);
@@ -1893,6 +1898,34 @@ n00bb_cache_module(const n00bb_cache_t *cache, core_string_t module)
 {
     const cache_member_t *member = loaded_member(cache, module, nullptr);
     return member ? member->module : nullptr;
+}
+
+const th_type *
+n00bb_cache_type(n00bb_cache_t *cache, uint64_t hash)
+{
+    if (!cache) return nullptr;
+    th_ctx *ctx = ir_ctx_types(cache->ir_context);
+    if (!cache->types_by_hash) {
+        cache->types_by_hash = core_alloc(core_dict_t);
+        core_dict_init(cache->types_by_hash, nullptr, nullptr);
+        for (size_t e = 0; e < cache->entries.len; e++) {
+            cache_entry_t *entry = &cache->entries.data[e];
+            if (entry->load != ENTRY_VALID) continue;
+            const cache_section_t *types = phase_section(entry,
+                CORE_STRING_STATIC("types"), (core_string_t){0});
+            if (types && !entry->types)
+                entry->types = th_type_reader_open(ctx, types->data,
+                                                   types->length, nullptr);
+            th_type *type;
+            for (uint32_t i = 1;
+                 (type = th_type_reader_get(entry->types, i)); i++)
+                if (th_is_closed(ctx, type))
+                    core_dict_add(cache->types_by_hash,
+                                  (void *)(uintptr_t)th_hash(ctx, type), type);
+        }
+    }
+    return core_dict_get(cache->types_by_hash, (void *)(uintptr_t)hash,
+                         nullptr);
 }
 
 bool
@@ -2444,6 +2477,15 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                            manifest.data, manifest.byte_len)
         && sections_set(&sections, CORE_STRING_STATIC("ir"), ir->data,
                         ir->byte_len);
+    th_ctx *types = ir_ctx_types(cache->ir_context);
+    for (size_t m = 0; m < snapshot->modules.len; m++) {
+        ir_module_t *module = snapshot->modules.data[m];
+        for (size_t i = 0; i < ir_type_count(module); i++) {
+            th_type *type = ir_type_at(module, i);
+            if (type && th_is_closed(types, type))
+                (void)th_type_writer_add(snapshot->types, type);
+        }
+    }
     core_buffer_t table = {0};
     ok = ok && th_type_writer_finish(snapshot->types, &table)
         && sections_set(&sections, CORE_STRING_STATIC("types"), table.data,

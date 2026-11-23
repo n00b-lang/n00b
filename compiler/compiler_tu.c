@@ -1689,7 +1689,6 @@ n00bb_atomic_element_type(th_type *type)
         ? argument->type : nullptr;
 }
 
-
 parse_tree_t *
 member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
@@ -1713,25 +1712,6 @@ referent_access_node(parse_grammar_t *grammar, parse_tree_t *node)
         first_token_text(core_tree_child(member, 2))) ? member : nullptr;
 }
 
-static parse_tree_t *
-index_assignment_statement(parse_grammar_t *grammar, parse_tree_t *node,
-                           bool *through_receiver)
-{
-    *through_receiver = false;
-    parse_tree_t *at = node;
-    for (parse_tree_t *parent = parse_tree_parent(at); parent;
-         at = parent, parent = parse_tree_parent(at)) {
-        if ((NT_IS(grammar, parent, "assign-stmt")
-             || NT_IS(grammar, parent, "binop-assign-stmt"))
-            && core_tree_child(parent, 0) == at) return parent;
-        if (n00bb_postfix_node(grammar, parent)
-            && core_tree_child(parent, 0) == at)
-            *through_receiver = true;
-        else if (core_tree_num_children(parent) != 1) return nullptr;
-    }
-    return nullptr;
-}
-
 bool
 n00bb_index_node(parse_grammar_t *grammar, parse_tree_t *node, bool *slice)
 {
@@ -1742,82 +1722,6 @@ n00bb_index_node(parse_grammar_t *grammar, parse_tree_t *node, bool *slice)
     *slice = NT_IS(grammar, core_tree_child(node, 2), "slice-contents");
     return true;
 }
-
-bool
-index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
-                        core_string_t *trait, core_string_t *method)
-{
-    if (!n00bb_postfix_node(grammar, node)
-        || core_tree_num_children(node) < 4
-        || !parse_tree_leaf_is(core_tree_child(node, 1),
-                               CORE_STRING_STATIC("["))) return false;
-    if (NT_IS(grammar, core_tree_child(node, 2), "slice-contents")) {
-        *trait = CORE_STRING_STATIC("Index_Slice");
-        *method = CORE_STRING_STATIC("__slice");
-    }
-    else {
-        *trait = CORE_STRING_STATIC("Index_Read");
-        *method = CORE_STRING_STATIC("__read");
-    }
-
-    bool through_receiver = false;
-    parse_tree_t *statement = index_assignment_statement(grammar, node,
-                                                         &through_receiver);
-    if (!through_receiver && NT_IS(grammar, statement, "assign-stmt")) {
-        bool slice_write = NT_IS(grammar, core_tree_child(node, 2),
-                                 "slice-contents");
-        *trait = slice_write ? CORE_STRING_STATIC("Index_Slice_Write")
-                             : CORE_STRING_STATIC("Index_Write");
-        *method = slice_write ? CORE_STRING_STATIC("__write_slice")
-                              : CORE_STRING_STATIC("__write");
-        return true;
-    }
-    return true;
-}
-
-
-bool
-n00bb_index_reference_storage(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    core_string_t trait = {0}, method = {0};
-    if (!index_dispatch_for_node(grammar, node, &trait, &method)
-        || core_string_eq(trait, CORE_STRING_STATIC("Index_Slice")))
-        return false;
-    for (parse_tree_t *at = node; at;
-         at = parse_tree_parent(at)) {
-        parse_tree_t *parent = parse_tree_parent(at);
-        if (!parent) break;
-        if (NT_IS(grammar, parent, "index-contents")
-            || NT_IS(grammar, parent, "slice-contents")) return false;
-        if (n00bb_postfix_node(grammar, parent)
-            && core_tree_child(parent, 0) != at) return false;
-        if (!NT_IS(grammar, parent, "unary-expr")) continue;
-        const parse_rule_t *rule = parse_tree_rule(grammar, parent);
-        parse_annotation_t *operator = rule
-            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
-            : nullptr;
-        if (!operator && core_tree_num_children(parent) == 1) continue;
-        return operator && core_string_eq(operator->op_kind,
-            CORE_STRING_STATIC("ref"));
-    }
-    return false;
-}
-
-parse_tree_t *
-n00bb_index_expression_node(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    while (node && !core_tree_is_leaf(node)) {
-        core_string_t trait = {0}, method = {0};
-        if (index_dispatch_for_node(grammar, node, &trait, &method)
-            && !core_string_eq(trait, CORE_STRING_STATIC("Index_Slice")))
-            return node;
-        if (core_tree_num_children(node) != 1) return nullptr;
-        node = core_tree_child(node, 0);
-    }
-    return nullptr;
-}
-
-
 
 static const struct {
     core_string_t source;
@@ -8013,15 +7917,6 @@ n00bb_flagset_type(core_translation_unit_t *unit, n00bb_tu_state_t *state,
     if (symbol_out) *symbol_out = symbol;
     return scope && core_string_eq(scope->scope_tag,
                                    CORE_STRING_STATIC("flagset"));
-}
-
-bool
-index_is_compound_target(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    bool through_receiver = false;
-    return NT_IS(grammar, index_assignment_statement(grammar, node,
-                                                     &through_receiver),
-                 "binop-assign-stmt");
 }
 
 static th_type *

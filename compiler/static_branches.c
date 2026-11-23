@@ -2,7 +2,6 @@
 
 #include "ir/doms.h"
 #include "ir/pass.h"
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "th/environment.h"
 

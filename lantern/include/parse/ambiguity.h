@@ -53,26 +53,11 @@ typedef struct {
     void                  *disambiguator_ud;
 } parse_ambiguity_options_t;
 
-typedef parse_token_stream_t *(*parse_ambiguity_tokenize_fn)(
-    parse_grammar_t *grammar,
-    const parse_ambiguity_finding_t *finding,
-    void *user_data);
-
 parse_ambiguity_list_t
 parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
                               const parse_ambiguity_options_t *options);
 
 void parse_ambiguity_list_free(parse_ambiguity_list_t *findings);
 
-bool parse_ambiguity_confirm_finding(parse_grammar_t *grammar,
-                                     parse_ambiguity_finding_t *finding,
-                                     parse_ambiguity_tokenize_fn tokenize,
-                                     void *user_data);
-
 core_string_t parse_ambiguity_kind_name(parse_ambiguity_kind_t kind);
 core_string_t parse_ambiguity_severity_name(parse_ambiguity_severity_t severity);
-
-core_string_t parse_ambiguity_format_json(
-    const parse_ambiguity_list_t *findings);
-
-int parse_ambiguity_cli(int argc, char **argv, FILE *out, FILE *err);

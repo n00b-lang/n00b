@@ -70,7 +70,6 @@ void th_ctx_free(th_ctx *ctx)
     free_index(ctx->generic_type_heads);
     free_index(ctx->implements_memo);
     free_index(ctx->method_memo);
-    core_list_free(ctx->errors);
     core_arena_free(&ctx->arena);
     core_arena_free(&ctx->memo_arena);
     core_buffer_release(&ctx->scratch);
@@ -311,24 +310,6 @@ th_type_clone_fresh(th_ctx *destination, const th_type *source)
     return copy;
 }
 
-bool
-th_type_clone_many(th_ctx *destination, const th_type *const *sources,
-                   th_type **copies, size_t count)
-{
-    if (!destination || (count && (!sources || !copies))) return false;
-    core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
-    bool ok = true;
-    for (size_t i = 0; i < count; i++) {
-        copies[i] = clone_type_graph(destination, sources[i], &seen);
-        if (sources[i] && !copies[i]) {
-            ok = false;
-            break;
-        }
-    }
-    core_list_free(seen);
-    return ok;
-}
-
 struct th_type_cloner {
     th_ctx *destination;
     core_list_t(th_clone_entry_t) seen;
@@ -418,11 +399,6 @@ void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state)
     ctx->norm_state = state;
 }
 
-core_string_t th_last_error(const th_ctx *ctx)
-{
-    return ctx->err;
-}
-
 th_kind th_kind_of(const th_type *t)
 {
     return t->kind;
@@ -499,9 +475,6 @@ bool th_name_syntax_valid(core_string_t s)
 static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
 {
     if (!th_name_syntax_valid(s)) {
-        th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-               CORE_STRING_STATIC("not a valid type name"));
-
         return false;
     }
 
@@ -509,10 +482,6 @@ static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
         core_string_t o;
 
         if (!ctx->norm(ctx->norm_state, s, &o)) {
-            th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-                   CORE_STRING_STATIC(
-                       "the name is not in Unicode normal form C"));
-
             return false;
         }
 
@@ -523,11 +492,6 @@ static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
 
     for (size_t i = 0; i < s.u8_bytes; i++) {
         if ((unsigned char)s.data[i] >= 0x80) {
-            th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-                   CORE_STRING_STATIC(
-                       "a non-ASCII type name cannot be checked without "
-                       "Unicode normalization"));
-
             return false;
         }
     }
@@ -674,10 +638,6 @@ static bool enc_plan(th_enc *e, eframe *f)
                 u8(&s->pre, 1);
                 u64(&s->pre, a->u);
                 break;
-            case TH_ARG_SINT:
-                u8(&s->pre, 2);
-                u64(&s->pre, (uint64_t)a->s);
-                break;
             case TH_ARG_STR:
                 u8(&s->pre, 3);
                 str(&s->pre, a->str);
@@ -812,12 +772,6 @@ static bool enc_plan(th_enc *e, eframe *f)
             u64(&s->pre, 0);
         }
         else if (!t->var.has_index) {
-            th_err(e->ctx, TH_ERR_FREE_VAR, (core_string_t){}, nullptr,
-                   (th_type *)t,
-                   CORE_STRING_STATIC(
-                       "a type still contains an unresolved type "
-                       "variable"));
-
             return false;
         }
         else {
@@ -983,29 +937,23 @@ static void enc_node(th_enc *e, core_buffer_t *b, const th_type *t)
 }
 
 typedef struct {
-    core_dict_t seen;
-    th_path    path;
-    th_ctx    *ctx;
+    th_path  path;
+    th_ctx  *ctx;
+    void   (*visit)(void *state, th_type *var);
+    void    *state;
 } th_norm;
 
 static void norm_walk(th_norm *s, th_type *t);
 
-void th_erase_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out)
+bool th_encode_to(th_ctx *ctx, const th_type *t, core_buffer_t *out,
+                  bool erase)
 {
-    th_enc e = {.ctx = ctx, .erase = true, .ok = true};
+    th_enc e = {.ctx = ctx, .erase = erase, .ok = true};
 
     pm_init(&e.path);
     enc_node(&e, out, t);
     pm_free(&e.path);
-}
-
-void th_full_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out)
-{
-    th_enc e = {.ctx = ctx, .ok = true};
-
-    pm_init(&e.path);
-    enc_node(&e, out, t);
-    pm_free(&e.path);
+    return e.ok;
 }
 
 typedef struct {
@@ -1020,14 +968,15 @@ static int cmp_armkey(const void *a, const void *b)
     return th_cmp_slice(&x->key, &y->key);
 }
 
-th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n)
+th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n,
+                       bool erase)
 {
     th_armkey    *ak = core_alloc_array(th_armkey, n);
     core_buffer_t *tb = core_alloc_array(core_buffer_t, n);
     th_type     **ar = core_alloc_array(th_type *, n);
 
     for (size_t i = 0; i < n; i++) {
-        th_erase_encode(ctx, arms[i], &tb[i]);
+        th_encode_to(ctx, arms[i], &tb[i], erase);
         ak[i].key.p = (uint8_t *)tb[i].data;
         ak[i].key.n = tb[i].byte_len;
         ak[i].arm   = arms[i];
@@ -1043,6 +992,13 @@ th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n)
     core_free(ak);
 
     return ar;
+}
+
+static th_type **norm_children_sum(th_norm *s, th_type *t, size_t *out)
+{
+    *out = t->sum.n;
+
+    return th_sort_arms(s->ctx, t->sum.arms, t->sum.n, true);
 }
 
 static int cmp_length_first(core_string_t x, core_string_t y)
@@ -1079,7 +1035,7 @@ typedef struct {
 core_option_decl(th_nframe);
 core_list_decl(th_nframe);
 
-th_type **th_children(th_ctx *ctx, th_type *t, size_t *out)
+static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
 {
     th_type **kids = nullptr;
     size_t    n    = 0;
@@ -1087,6 +1043,10 @@ th_type **th_children(th_ctx *ctx, th_type *t, size_t *out)
     *out = 0;
 
     switch (t->kind) {
+    case TH_VAR:
+        s->visit(s->state, t);
+        return nullptr;
+
     case TH_NAMED:
         kids = core_alloc_array(th_type *, t->named.nargs);
 
@@ -1169,9 +1129,7 @@ th_type **th_children(th_ctx *ctx, th_type *t, size_t *out)
         break;
 
     case TH_SUM:
-        *out = t->sum.n;
-
-        return th_sort_arms(ctx, t->sum.arms, t->sum.n);
+        return norm_children_sum(s, t, out);
 
     default:
         return nullptr;
@@ -1180,24 +1138,6 @@ th_type **th_children(th_ctx *ctx, th_type *t, size_t *out)
     *out = n;
 
     return kids;
-}
-
-static th_type **norm_children(th_norm *s, th_type *t, size_t *out)
-{
-    if (t->kind != TH_VAR) {
-        return th_children(s->ctx, t, out);
-    }
-
-    *out = 0;
-
-    if (!core_dict_contains(&s->seen, t)) {
-        t->var.index     = core_dict_len(&s->seen);
-        t->var.has_index = true;
-
-        core_dict_put(&s->seen, t, t);
-    }
-
-    return nullptr;
 }
 
 static void norm_walk(th_norm *s, th_type *root)
@@ -1242,6 +1182,24 @@ static void norm_walk(th_norm *s, th_type *root)
     core_list_free(st);
 }
 
+void th_walk_vars(th_ctx *ctx, th_type *t,
+                  void (*visit)(void *state, th_type *var), void *state)
+{
+    th_norm s = {.ctx = ctx, .visit = visit, .state = state};
+
+    pm_init(&s.path);
+    norm_walk(&s, t);
+    pm_free(&s.path);
+}
+
+static void index_var(void *seen, th_type *t)
+{
+    if (core_dict_contains(seen, t)) return;
+    t->var.index     = core_dict_len(seen);
+    t->var.has_index = true;
+    core_dict_put(seen, t, t);
+}
+
 void th_normalize(th_type *t)
 {
     th_type *resolved = th_resolve(t);
@@ -1250,14 +1208,12 @@ void th_normalize(th_type *t)
         || (resolved->kind == TH_NAMED && !resolved->named.nargs))
         return;
 
-    th_ctx  tmp = {0};
-    th_norm s   = {.ctx = &tmp};
+    th_ctx      tmp = {0};
+    core_dict_t seen;
 
-    core_dict_init(&s.seen, nullptr, nullptr);
-    pm_init(&s.path);
-    norm_walk(&s, t);
-    core_dict_free(&s.seen);
-    pm_free(&s.path);
+    core_dict_init(&seen, nullptr, nullptr);
+    th_walk_vars(&tmp, t, index_var, &seen);
+    core_dict_free(&seen);
 }
 
 bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
@@ -1265,42 +1221,7 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
     th_normalize(t);
     ctx->scratch.byte_len = 0;
 
-    th_type *resolved = th_resolve(t);
-    if (resolved && (resolved->kind == TH_BITINT
-                     || resolved->kind == TH_BOUND
-                     || (resolved->kind == TH_NAMED
-                         && !resolved->named.nargs))) {
-        core_buffer_t *encoded = &ctx->scratch;
-        u8(encoded, (uint8_t)(resolved->kind + 1));
-        switch (resolved->kind) {
-        case TH_NAMED:
-            u8(encoded, resolved->named.is_variant ? 1 : 0);
-            if (!name(ctx, encoded, resolved->named.name)) return false;
-            u64(encoded, 0);
-            break;
-        case TH_BITINT:
-            u64(encoded, resolved->bitint.width);
-            u8(encoded, resolved->bitint.flavor);
-            break;
-        case TH_BOUND:
-            u64(encoded, resolved->bound.distance);
-            u64(encoded, resolved->bound.position);
-            break;
-        default:
-            break;
-        }
-        *out = (const uint8_t *)encoded->data;
-        *len = encoded->byte_len;
-        return true;
-    }
-
-    th_enc e = {.ctx = ctx, .ok = true};
-
-    pm_init(&e.path);
-    enc_node(&e, &ctx->scratch, t);
-    pm_free(&e.path);
-
-    if (!e.ok) {
+    if (!th_encode_to(ctx, t, &ctx->scratch, false)) {
         return false;
     }
     *out = (const uint8_t *)ctx->scratch.data;
@@ -1428,40 +1349,6 @@ uint64_t th_arm_tag(core_string_t n)
     return t ? t : 1;
 }
 
-core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
-                           uint64_t col)
-{
-    size_t       plen = path.u8_bytes;
-    uint8_t      head[8];
-    XXH3_state_t st;
-
-    for (int i = 0; i < 8; i++) {
-        head[i] = (uint8_t)(plen >> (56 - 8 * i));
-    }
-
-    XXH3_128bits_reset(&st);
-    XXH3_128bits_update(&st, head, sizeof head);
-    XXH3_128bits_update(&st, path.data, plen);
-
-    uint64_t at[2] = {line, col};
-
-    for (int k = 0; k < 2; k++) {
-        for (int i = 0; i < 8; i++) {
-            head[i] = (uint8_t)(at[k] >> (56 - 8 * i));
-        }
-        XXH3_128bits_update(&st, head, sizeof head);
-    }
-
-    uint64_t d = XXH3_128bits_digest(&st).low64;
-
-    d = d ? d : 1;
-
-    char *s = th_alloc(ctx, 32);
-    int   n = snprintf(s, 32, "_anon_%016llx", (unsigned long long)d);
-
-    return core_string_borrow(s, n > 0 ? (size_t)n : 0);
-}
-
 static th_type *node(th_ctx *ctx, th_kind k)
 {
     th_type *t = th_alloc(ctx, sizeof(th_type));
@@ -1546,39 +1433,11 @@ th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *r)
     return t;
 }
 
-bool th_indirection_attrs(core_string_t name, uint8_t *attrs)
-{
-    if (!name.data || !attrs) return false;
-    if (core_string_eq(name, CORE_STRING_STATIC("ref"))) *attrs = 0;
-    else if (core_string_eq(name, CORE_STRING_STATIC("ptr")))
-        *attrs = TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
-    else if (core_string_eq(name, CORE_STRING_STATIC("mutref")))
-        *attrs = TH_EXCLUSIVE;
-    else if (core_string_eq(name, CORE_STRING_STATIC("own")))
-        *attrs = TH_OWNING;
-    else if (core_string_eq(name, CORE_STRING_STATIC("gcref")))
-        *attrs = TH_NULLABLE | TH_RESEATABLE;
-    else if (core_string_eq(name, CORE_STRING_STATIC("tmpref")))
-        *attrs = TH_TEMPORARY;
-    else return false;
-    return true;
-}
-
 th_type *th_array(th_ctx *ctx, th_type *e)
 {
     th_type *t = node(ctx, TH_SEQUENCE);
 
     t->seq.elem = e;
-
-    return t;
-}
-
-th_type *th_array_n(th_ctx *ctx, th_type *e, uint64_t n)
-{
-    th_type *t = th_array(ctx, e);
-
-    t->seq.has_extent = true;
-    t->seq.extent     = n;
 
     return t;
 }
@@ -1593,7 +1452,16 @@ th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)
 {
     th_type *t = node(ctx, TH_RECORD);
 
-    th_record_fill(ctx, t, m, n);
+    t->record.n = n;
+
+    if (n) {
+        t->record.members = th_alloc(ctx, n * sizeof(th_member));
+
+        for (size_t i = 0; i < n; i++) {
+            t->record.members[i].name = th_strdup(ctx, m[i].name);
+            t->record.members[i].type = m[i].type;
+        }
+    }
 
     return t;
 }
@@ -1697,28 +1565,6 @@ th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
         if (!valid) return nullptr;
     }
     return t;
-}
-
-th_type *th_record_stub(th_ctx *ctx)
-{
-    return node(ctx, TH_RECORD);
-}
-
-void th_record_fill(th_ctx *ctx, th_type *stub, const th_member *m, size_t n)
-{
-    stub->ground = 0;
-    stub->hashed = false;
-    stub->record.n       = n;
-    stub->record.members = nullptr;
-
-    if (n) {
-        stub->record.members = th_alloc(ctx, n * sizeof(th_member));
-
-        for (size_t i = 0; i < n; i++) {
-            stub->record.members[i].name = th_strdup(ctx, m[i].name);
-            stub->record.members[i].type = m[i].type;
-        }
-    }
 }
 
 th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
@@ -1890,7 +1736,7 @@ th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n)
     core_dict_init(&seen, enc_hash, enc_eq);
 
     for (size_t i = 0; i < fn; i++) {
-        th_erase_encode(ctx, flat.data[i], &enc[un]);
+        th_encode_to(ctx, flat.data[i], &enc[un], true);
 
         if (core_dict_contains(&seen, &enc[un])) {
             core_buffer_release(&enc[un]);

@@ -36,7 +36,6 @@ typedef struct {
     size_t size;
     uint32_t alignment;
     uint64_t typehash;
-    core_string_t type_name;
     uint32_t flags;
 } frozen_node_t;
 
@@ -58,7 +57,6 @@ typedef struct {
     uint32_t table;
     uint32_t kind;
     uint64_t typehash;
-    core_string_t type_name;
     core_string_t module;
     core_string_t function;
     core_string_t native;
@@ -82,6 +80,8 @@ typedef struct {
     core_list_t(frozen_edge_t) edges;
     core_list_t(frozen_root_t) roots;
     core_list_t(frozen_slot_t) slots;
+    core_dict_t types;
+    bool types_ready;
     n00bb_abi_graph_source_t source;
 } frozen_graph_t;
 
@@ -229,14 +229,12 @@ read_graph(reader_t *reader, frozen_graph_t *graph)
         frozen_node_t node = {0};
         ok = read_word(reader, 8, &size) && read_word(reader, 4, &alignment)
             && read_word(reader, 8, &typehash)
-            && read_text(reader, &node.type_name)
             && read_word(reader, 4, &flags)
             && read_bytes(reader, size, &node.bytes);
         node.size = size;
         node.alignment = (uint32_t)alignment;
         node.typehash = typehash;
         node.flags = (uint32_t)flags;
-        if (!node.type_name.u8_bytes) node.type_name = (core_string_t){0};
         if (ok) core_list_push(graph->nodes, node);
     }
     ok = ok && read_word(reader, 8, &count);
@@ -273,8 +271,7 @@ read_graph(reader_t *reader, frozen_graph_t *graph)
             && read_word(reader, 4, &table) && read_word(reader, 4, &kind)
             && node < graph->nodes.len;
         if (ok && table == N00B_ABI_TABLE_TYPE)
-            ok = read_word(reader, 8, &slot.typehash)
-                && read_text(reader, &slot.type_name);
+            ok = read_word(reader, 8, &slot.typehash);
         else if (ok && table == N00B_ABI_TABLE_NATIVE_BINDING)
             ok = read_external(graph, reader, kind, &slot);
         else if (ok)
@@ -336,11 +333,35 @@ graph_flags(void *context, size_t index)
     return graph->nodes.data[index].flags;
 }
 
-static core_string_t
-graph_type_name(void *context, size_t index)
+static void
+index_unit_types(frozen_graph_t *graph, ir_module_t *module)
+{
+    n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(module);
+    if (index && n00bb_abi_type_index_collect_module_types(index, module))
+        for (size_t row = 1; row < n00bb_abi_type_index_count(index); row++) {
+            th_type *type = n00bb_abi_type_index_at(index, (uint32_t)row);
+            uint64_t hash = type ? th_hash(ir_module_types(module), type) : 0;
+            if (hash) core_dict_put(&graph->types, (void *)(uintptr_t)hash,
+                                    type);
+        }
+    n00bb_abi_type_index_free(index);
+}
+
+static th_type *
+graph_type(void *context, uint64_t typehash)
 {
     frozen_graph_t *graph = context;
-    return graph->nodes.data[index].type_name;
+    if (!graph->types_ready) {
+        core_dict_init(&graph->types, nullptr, nullptr);
+        graph->types_ready = true;
+        for (size_t i = 0; i < graph->analysis->units.len; i++) {
+            ir_module_t *module = tu_state(graph->analysis->units.data[i])
+                ->ir_module;
+            if (module) index_unit_types(graph, module);
+        }
+    }
+    return core_dict_get(&graph->types, (void *)(uintptr_t)typehash,
+                         nullptr);
 }
 
 static ir_func_t *
@@ -381,7 +402,6 @@ graph_slot(void *context, size_t index, n00bb_abi_graph_slot_t *out)
         .table = slot->table,
         .kind = slot->kind,
         .typehash = slot->typehash,
-        .type_name = slot->type_name,
         .module = type ? (core_string_t){0} : slot->module,
         .function = type ? (core_string_t){0} : slot->function,
         .function_type = function ? function->type : nullptr,
@@ -448,7 +468,7 @@ adopt_graph(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         .edge_count = graph->edges.len,
         .slot_count = graph->slots.len,
         .root = graph_root, .node = graph_node, .edge = graph_edge,
-        .flags = graph_flags, .type_name = graph_type_name,
+        .flags = graph_flags, .type = graph_type,
         .slot = graph_slot,
     };
     if (!frozen_graphs_ready) {

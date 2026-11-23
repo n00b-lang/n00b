@@ -72,8 +72,6 @@ core_string_t n00bb_call_plan_parameter_name(const n00bb_call_plan_t *plan,
 size_t n00bb_call_plan_argument_count(const n00bb_call_plan_t *plan);
 parse_tree_t *n00bb_call_plan_argument(const n00bb_call_plan_t *plan,
                                        size_t position, size_t *index);
-parse_tree_t *n00bb_call_plan_parameter_argument(const n00bb_call_plan_t *plan,
-                                                 size_t index);
 void n00bb_call_plan_report(const n00bb_call_plan_t *plan,
                             const core_translation_unit_t *unit,
                             core_diagnostics_t *diagnostics,

@@ -8,13 +8,9 @@
 #include <stdint.h>
 
 #define TH_VERSION       0
-#define TH_RESERVED      "__ty."
 #define TH_TUPLE         "__ty.tuple"
 #define TH_OPTION        "Option"
 #define TH_NIL           "nil"
-#define TH_UNTYPED       "__ty.untyped"
-#define TH_ERASED        "__ty.erased"
-#define TH_BOTTOM        "__ty.bottom"
 #define TH_POISON        "__ty.poison"
 
 typedef enum : uint8_t {
@@ -89,8 +85,7 @@ typedef enum : uint8_t {
 typedef enum : uint8_t {
     TH_ARG_TYPE = 0,
     TH_ARG_UINT,
-    TH_ARG_SINT,
-    TH_ARG_STR,
+    TH_ARG_STR = 3,
 } th_argkind;
 
 typedef struct th_ctx  th_ctx;
@@ -109,42 +104,6 @@ typedef struct {
     bool             source_spelling;
 } th_print_options_t;
 
-typedef struct {
-    core_string_t file;
-    uint32_t    start_line;
-    uint32_t    start_col;
-    uint32_t    end_line;
-    uint32_t    end_col;
-} th_span_t;
-
-typedef enum : uint8_t {
-    TH_ERR_UNIFY = 0,
-    TH_ERR_CONSTRAINT,
-    TH_ERR_OCCURS,
-    TH_ERR_NO_SUCH_FIELD,
-    TH_ERR_PARAM_MISMATCH,
-    TH_ERR_ARITY_MISMATCH,
-    TH_ERR_MISSING_KEYWORD,
-    TH_ERR_UNKNOWN_KEYWORD,
-    TH_ERR_NON_EXHAUSTIVE,
-    TH_ERR_UNREACHABLE_PATTERN,
-    TH_ERR_DUPLICATE_VARIANT,
-    TH_ERR_NO_MATCHING_RULE,
-    TH_ERR_BAD_NAME,
-    TH_ERR_FREE_VAR,
-    TH_ERR_KIND_COUNT,
-} th_err_kind;
-
-typedef struct {
-    th_err_kind kind;
-    core_string_t message;
-    core_string_t constraint;
-    th_type    *expected;
-    th_type    *got;
-    th_span_t   span;
-    th_span_t   related;
-    bool        has_related;
-} th_error_t;
 
 typedef enum : uint8_t {
     TH_CON_UNIFIES = 0,
@@ -168,7 +127,6 @@ typedef struct {
     core_string_t scope_module;
     core_string_t scope_package;
     bool has_scope;
-    th_span_t span;
     union {
         th_kind type_kind;
         struct {
@@ -212,7 +170,6 @@ typedef struct {
     union {
         th_type *type;
         uint64_t u;
-        int64_t  s;
         core_string_t str;
     };
 } th_arg;
@@ -244,8 +201,6 @@ th_type_cloner_t *th_type_cloner_new(th_ctx *destination,
 th_type *th_type_cloner_clone(th_type_cloner_t *cloner,
                               const th_type *source);
 void th_type_cloner_free(th_type_cloner_t *cloner);
-bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
-                        th_type **copies, size_t count);
 
 typedef struct th_type_writer th_type_writer_t;
 typedef struct th_type_reader th_type_reader_t;
@@ -278,17 +233,12 @@ th_type *th_variant(th_ctx *ctx, core_string_t name, const th_arg *args,
 th_type *th_bitint(th_ctx *ctx, uint64_t width, bool is_signed);
 th_type *th_bits(th_ctx *ctx, uint64_t width);
 th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *referent);
-bool     th_indirection_attrs(core_string_t name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
-th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
 th_type *th_record_sorted(th_ctx *ctx, th_member *members, size_t n);
 th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
                   const th_member *methods, size_t n,
                   const th_trait_requirement *requirements, size_t nr);
-th_type *th_record_stub(th_ctx *ctx);
-void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
-                        size_t n);
 typedef enum : uint8_t {
     TH_BUILTIN_NONE,
     TH_BUILTIN_SCALAR,
@@ -297,8 +247,6 @@ typedef enum : uint8_t {
     TH_BUILTIN_ATOMIC,
     TH_BUILTIN_ARRAY,
     TH_BUILTIN_LIST,
-    TH_BUILTIN_SET,
-    TH_BUILTIN_DICT,
     TH_BUILTIN_CONTAINER_LIST,
     TH_BUILTIN_CONTAINER_DICT,
     TH_BUILTIN_SLICE,
@@ -368,23 +316,9 @@ core_string_t th_print(th_ctx *ctx, th_type *type);
 core_string_t th_print_with_options(th_ctx *ctx, th_type *type,
                                     const th_print_options_t *options);
 uint64_t th_arm_tag(core_string_t name);
-core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
-                           uint64_t col);
 
 th_kind th_kind_of(const th_type *type);
 bool    th_is_scheme(const th_type *type);
-core_string_t th_last_error(const th_ctx *ctx);
-
-void      th_ctx_set_span(th_ctx *ctx, th_span_t span);
-void      th_ctx_set_source_file(th_ctx *ctx, core_string_t file);
-void      th_ctx_set_related(th_ctx *ctx, th_span_t span);
-void      th_ctx_clear_related(th_ctx *ctx);
-th_span_t th_ctx_span(const th_ctx *ctx);
-
-size_t      th_error_count(const th_ctx *ctx);
-bool        th_error_at(const th_ctx *ctx, size_t i, th_error_t *out);
-void        th_errors_clear(th_ctx *ctx);
-core_string_t th_err_kind_name(th_err_kind kind);
 
 bool   th_named_info(const th_type *type, core_string_t *name,
                      bool *is_variant, size_t *nargs);
@@ -423,14 +357,11 @@ const th_kwparam *th_func_kw_lookup(const th_type *type, core_string_t name);
 bool     th_binder_arity(const th_type *type, uint64_t *arity);
 th_type *th_binder_body(const th_type *type);
 
-bool th_bound_info(const th_type *type, uint64_t *distance,
-                   uint64_t *position);
 
 bool     th_sum_comb(const th_type *type, th_comb *comb);
 size_t   th_sum_len(const th_type *type);
 th_type *th_sum_arm(const th_type *type, size_t i);
 
-bool th_var_index(const th_type *type, uint64_t *index);
 core_string_t th_var_name(const th_type *type);
 
 typedef struct {
@@ -448,7 +379,6 @@ typedef enum : uint8_t {
     TH_COERCE_RECORD_CONSTRUCT = 1 << 5,
 } th_coerce_flag;
 
-bool   th_implements(th_ctx *ctx, th_type *type, core_string_t iface);
 
 th_type *th_resolve(th_type *type);
 th_type *th_var_ref(const th_type *var);
@@ -458,8 +388,6 @@ size_t   th_child_count(const th_type *type);
 th_type *th_child(const th_type *type, size_t i);
 bool     th_same_shape(const th_type *a, const th_type *b);
 
-bool     th_is_erased(const th_type *type);
-bool     th_is_bottom(const th_type *type);
 th_type *th_poison(th_ctx *ctx);
 bool     th_is_poison(const th_type *type);
 bool     th_mentions_poison(th_type *type);
@@ -477,12 +405,8 @@ bool     th_same_type(th_type *a, th_type *b);
 th_type *th_fill(th_type *placeholder, th_type *type);
 bool     th_compatible(th_type *a, th_type *b);
 bool     th_match_pair(th_type *a, th_type *b);
-th_type *th_meet(th_ctx *ctx, th_type *a, th_type *b);
 bool     th_type_widens_to(const th_type *from, const th_type *to);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);
 th_type *th_generalize(th_ctx *ctx, th_type *type);
-th_type *th_generalize_excluding(th_ctx *ctx, th_type *type,
-                                 th_type *const *environment,
-                                 size_t environment_count);
 
 #endif

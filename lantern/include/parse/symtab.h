@@ -126,8 +126,6 @@ struct parse_symtab_t {
     core_dict_t       *nominal_types;
 };
 
-typedef bool (*parse_symtab_scope_visitor_fn)(parse_scope_t *scope,
-                                             void *context);
 typedef bool (*parse_symtab_symbol_visitor_fn)(parse_sym_entry_t *symbol,
                                                void *context);
 
@@ -137,15 +135,10 @@ void parse_symtab_set_owner_unit(parse_symtab_t *st,
                                  core_translation_unit_t *unit);
 
 parse_namespace_t *parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name);
-bool parse_symtab_visit_namespace_scopes(
-    parse_symtab_t *st, core_string_t ns_name,
-    parse_symtab_scope_visitor_fn visitor, void *context);
 bool parse_symtab_visit_name_across_namespaces(
     parse_symtab_t *st, parse_scope_t *scope, core_string_t name,
     parse_symtab_symbol_visitor_fn visitor, void *context);
 
-void parse_symtab_push_scope(parse_symtab_t *st, core_string_t ns_name,
-                           core_string_t scope_name);
 void parse_symtab_pop_scope(parse_symtab_t *st, core_string_t ns_name);
 void parse_symtab_push_scope_all(parse_symtab_t *st,
                                  core_string_t scope_name);
@@ -153,7 +146,6 @@ void parse_symtab_pop_scope_all(parse_symtab_t *st);
 
 void parse_symtab_enter_scope(parse_symtab_t *st, core_string_t ns_name,
                             parse_scope_t *scope);
-void parse_symtab_leave_scope(parse_symtab_t *st, core_string_t ns_name);
 void parse_symtab_enter_scope_all(parse_symtab_t *st, parse_scope_t *scope);
 void parse_symtab_leave_scope_all(parse_symtab_t *st);
 parse_scope_t *parse_symtab_scope_in_namespace(parse_symtab_t *st,
@@ -183,8 +175,6 @@ void parse_sym_set_storage_duration(
 core_string_t parse_sym_storage_duration_name(
     parse_sym_storage_duration_t duration);
 
-parse_sym_entry_t *parse_symtab_lookup(parse_symtab_t *st, core_string_t ns_name,
-                                   core_string_t name);
 
 parse_sym_entry_t *parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t *scope,
                                           core_string_t ns_name,
@@ -207,13 +197,9 @@ parse_sym_entry_t *parse_symtab_resolve_node(parse_symtab_t *st,
                                              parse_tree_t *node,
                                              core_string_t ns_name);
 
-void         parse_symtab_set_scope_node(parse_symtab_t *st, core_string_t ns_name,
-                                       parse_tree_t *node);
 void         parse_symtab_set_scope_node_all(parse_symtab_t *st,
                                              parse_tree_t *node);
 parse_scope_t *parse_symtab_scope_for_node(parse_symtab_t     *st,
                                        parse_tree_t *node);
 
-bool         parse_symtab_is_typedef(parse_symtab_t *st, core_string_t name);
-int32_t      parse_symtab_depth(parse_symtab_t *st, core_string_t ns_name);
 parse_scope_t *parse_symtab_current_scope(parse_symtab_t *st, core_string_t ns_name);

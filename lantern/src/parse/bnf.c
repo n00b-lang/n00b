@@ -815,41 +815,9 @@ static const parse_match_set_t bnf_arg_set = {
 static _Thread_local core_string_t bnf_src;
 static _Thread_local bnf_short_text_t bnf_bad_annot;
 static _Thread_local bnf_long_text_t bnf_error;
-static _Thread_local parse_bnf_error_info_t bnf_error_location;
 
 core_string_t parse_bnf_error(void) {
   return bnf_error.len ? BNF_TEXT_STRING(bnf_error) : (core_string_t){};
-}
-
-bool parse_bnf_error_info(parse_bnf_error_info_t *out) {
-  if (!out || !bnf_error.len) {
-    return false;
-  }
-
-  *out = bnf_error_location;
-  out->message = BNF_TEXT_STRING(bnf_error);
-
-  return true;
-}
-
-static void bnf_error_at_token(parse_token_info_t *tok) {
-  bnf_error_location = (parse_bnf_error_info_t){0};
-
-  if (!tok) {
-    return;
-  }
-
-  uint32_t line = parse_token_line(tok);
-  uint32_t column = parse_token_column(tok);
-  uint32_t endline = parse_token_endline(tok);
-  uint32_t endcol = parse_token_endcol(tok);
-
-  bnf_error_location.start_byte = parse_token_start_byte(tok);
-  bnf_error_location.end_byte = parse_token_end_byte(tok);
-  bnf_error_location.start_line = line;
-  bnf_error_location.start_col = column;
-  bnf_error_location.end_line = endline ? endline : line;
-  bnf_error_location.end_col = endcol ? endcol : column + 1;
 }
 
 static void *bnf_walk_arg_ignore(parse_nt_node_t *pn, void *children,
@@ -1266,8 +1234,6 @@ size_t parse_bnf_declare_terminals(parse_grammar_t *g, core_string_t raw) {
   core_free(bnf_text.data);
   return n;
 }
-
-int32_t parse_bnf_last_unit(void) { return bnf_load_unit; }
 
 typedef struct {
   int32_t unit;
@@ -1802,7 +1768,6 @@ static bool parse_bnf_load_impl(core_string_t bnf_text,
   static _Atomic int32_t next_unit = 1;
 
   bnf_error.len = 0;
-  bnf_error_location = (parse_bnf_error_info_t){0};
 
   bnf_load_t saved = {
       .unit = bnf_load_unit,
@@ -1854,25 +1819,13 @@ static bool parse_bnf_load_impl(core_string_t bnf_text,
       scan_token_stream_from_array(raw_ptrs, bnf_n);
 
   parse_grammar_t *meta_g = build_bnf_grammar();
-  int32_t error_pos = -1;
   parse_nt_id_t meta_start = parse_nonterm_id(
       parse_find_nonterm(meta_g, CORE_STRING_STATIC("syntax")));
   parse_forest_t forest =
-      parse_pwz_parse_grammar_at(meta_g, meta_start, parse_ts, &error_pos);
+      parse_pwz_parse_grammar_at(meta_g, meta_start, parse_ts, nullptr);
 
   if (parse_forest_count(&forest) < 1) {
     BNF_TEXT_SET(bnf_error, "the grammar is not valid BNF");
-
-    parse_token_info_t *at = nullptr;
-
-    if (bnf_n > 0) {
-      int32_t ix = error_pos < 0       ? 0
-                   : error_pos < bnf_n ? error_pos
-                                       : bnf_n - 1;
-
-      at = raw_ptrs[ix];
-    }
-    bnf_error_at_token(at);
     parse_forest_free(&forest);
     core_free(raw_ptrs);
     scan_token_stream_free(parse_ts);

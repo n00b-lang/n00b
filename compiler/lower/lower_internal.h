@@ -162,7 +162,6 @@ double n00bb_profile_seconds(void);
 
 #include "ir/layout.h"
 
-#include "ir/typelang.h"
 
 #include "th/environment.h"
 
@@ -1350,11 +1349,6 @@ typedef struct {
 
 core_list_decl(n00bb_element_writeback_t);
 
-ir_value_t *
-n00bb_place_for_write(ir_lower_context_t *context, ir_value_t *value,
-                      ir_span_t span,
-                      core_list_t(n00bb_element_writeback_t) *writebacks);
-
 bool
 n00bb_emit_writebacks(ir_lower_context_t *context,
                       core_list_t(n00bb_element_writeback_t) *writebacks,
@@ -1857,10 +1851,6 @@ build_program_graph(n00bb_link_analysis_t *analysis,
 void
 release_program_graph(n00bb_link_analysis_t *analysis,
                       n00bb_runtime_init_analysis_t *runtime);
-
-bool
-runtime_reaches(n00bb_runtime_init_analysis_t *runtime,
-                const ir_func_t *function);
 
 bool
 report_bookkeeping_writes(n00bb_link_analysis_t *analysis);

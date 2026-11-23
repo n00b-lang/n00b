@@ -6,13 +6,11 @@
 
 #include "lower_internal.h"
 #include "walk.h"
-#include "ir/typelang.h"
 
 #define lower_failure(context, code, span, literal) \
     ((context) && ir_diags_failed((context)->diagnostics) \
         ? (ir_lower_result_t){.status = IR_LOWER_FAILED} \
         : ir_lower_fail((context), (code), (span), CORE_STRING_STATIC(literal)))
-#include "ir/typelang.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
 #include "parse/symtab.h"

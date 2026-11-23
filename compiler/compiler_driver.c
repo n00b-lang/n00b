@@ -82,7 +82,6 @@ double n00bb_profile_seconds(void);
 #include "ir/doms.h"
 #include "ir/analyze.h"
 #include "ir/layout.h"
-#include "ir/typelang.h"
 #include "th/environment.h"
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
@@ -885,8 +884,6 @@ dump_link_unit(core_link_unit_t *link)
             ? core_link_declaration_key(target)
             : core_link_reference_key(reference);
         core_string_t state = target ? CORE_STRING_STATIC("resolved")
-            : core_link_reference_is_deferred(reference)
-            ? CORE_STRING_STATIC("deferred")
             : CORE_STRING_STATIC("unresolved");
         printf("    %.*s %.*s -> %.*s:%.*s", TEXT_ARGS(state),
                (int)(referrer ? referrer->module.identifier.u8_bytes : 0),
@@ -899,12 +896,6 @@ dump_link_unit(core_link_unit_t *link)
         if (core_link_reference_source_info(reference, &location, nullptr)
             && location.has_location)
             printf(" at %u:%u", location.line, location.column);
-        if (core_link_reference_is_deferred(reference)) {
-            core_string_t reason =
-                core_link_reference_deferral_reason(reference);
-            if (reason.data)
-                printf(" (%.*s)", (int)reason.u8_bytes, reason.data);
-        }
         putchar('\n');
     }
     puts("  dependencies:");

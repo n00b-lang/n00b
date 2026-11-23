@@ -226,16 +226,6 @@ release_program_graph(n00bb_link_analysis_t *analysis,
     core_dict_init(&runtime->reachable, nullptr, nullptr);
 }
 
-bool
-runtime_reaches(n00bb_runtime_init_analysis_t *runtime,
-                const ir_func_t *function)
-{
-    ir_func_t *body = function ? n00bb_cached_body((ir_func_t *)function)
-                               : nullptr;
-    return core_dict_contains(&runtime->reachable,
-                              body ? body : (ir_func_t *)function);
-}
-
 static uint32_t
 n00bb_summary_adjust(void *context, const ir_func_t *function, uint32_t flags)
 {

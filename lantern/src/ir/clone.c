@@ -175,15 +175,6 @@ static bool clone_operand(clone_t *c, ir_operand_t *operand)
     }
 }
 
-ir_func_t *ir_func_clone_replacing(ir_func_t *source, core_string_t name,
-                                  const th_type *const *from,
-                                  th_type *const *to, size_t count,
-                                  core_string_t *failure)
-{
-    return ir_func_clone_into(source, source ? source->owner : nullptr, name,
-                              from, to, count, failure);
-}
-
 static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
                                  core_string_t name, th_type_cloner_t *cloner,
                                  core_string_t *failure)

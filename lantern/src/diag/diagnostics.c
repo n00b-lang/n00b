@@ -16,8 +16,6 @@ core_list_decl(core_diagnostic_t);
 
 struct core_diagnostics_t {
     core_list_t(core_diagnostic_t) items;
-    core_diag_policy_fn policy;
-    void *policy_context;
     core_diag_filter_fn filter;
     void *filter_context;
     const core_translation_unit_t *unit;
@@ -62,15 +60,6 @@ core_diagnostics_set_unit(core_diagnostics_t *d,
                           const core_translation_unit_t *unit)
 {
     if (d) d->unit = unit;
-}
-
-void
-core_diagnostics_set_policy(core_diagnostics_t *d, core_diag_policy_fn policy,
-                            void *context)
-{
-    if (!d) return;
-    d->policy = policy;
-    d->policy_context = context;
 }
 
 void
@@ -128,8 +117,6 @@ core_diagnostics_report_at(core_diagnostics_t *d,
 {
     if (!d || !code.data || !message.data) return false;
     d->has_open = false;
-    if (d->policy && !d->policy(d->policy_context, &severity, code))
-        return true;
     if (already_reported(d, unit ? unit : d->unit, severity, code, message,
                          location))
         return true;
@@ -296,12 +283,8 @@ core_diagnostics_append(core_diagnostics_t *dst, const core_diagnostic_t *from)
 {
     if (!dst || !from) return false;
     dst->has_open = false;
-    core_diag_severity_t severity = from->severity;
-    if (dst->policy
-        && !dst->policy(dst->policy_context, &severity, from->code))
-        return true;
     core_diagnostic_t copy = {
-        .severity = severity,
+        .severity = from->severity,
         .code = dup_or_empty(from->code),
         .message = dup_or_empty(from->message),
         .label = dup_or_empty(from->label),
@@ -1191,83 +1174,6 @@ core_diagnostics_render(const core_diagnostics_t *d, core_diag_render_t options)
         render_item(out, &state, item);
     }
     state_release(&state);
-    core_free(order);
-    return core_buffer_take_string(out);
-}
-
-static void
-json_text(core_buffer_t *out, core_string_t text)
-{
-    if (text.data) core_buffer_append_quoted(out, text);
-    else core_buffer_puts(out, "null");
-}
-
-static void
-json_location(core_buffer_t *out, core_diag_location_t location)
-{
-    if (!location.has_location) {
-        core_buffer_puts(out, "null");
-        return;
-    }
-    core_buffer_printf(out, "{\"line\":%u,\"column\":%u,\"end_line\":%u,"
-                       "\"end_column\":%u}", location.line, location.column,
-                       location.end_line, location.end_column);
-}
-
-core_string_t
-core_diagnostics_render_json(const core_diagnostics_t *d)
-{
-    static const core_string_t severities[] = {
-        [CORE_DIAG_FATAL] = CORE_STRING_STATIC("fatal"),
-        [CORE_DIAG_ERROR] = CORE_STRING_STATIC("error"),
-        [CORE_DIAG_WARNING] = CORE_STRING_STATIC("warning"),
-        [CORE_DIAG_NOTE] = CORE_STRING_STATIC("note"),
-        [CORE_DIAG_HELP] = CORE_STRING_STATIC("help"),
-        [CORE_DIAG_INFO] = CORE_STRING_STATIC("info"),
-        [CORE_DIAG_INTERNAL] = CORE_STRING_STATIC("internal"),
-    };
-    static const core_string_t kinds[] = {
-        [CORE_DIAG_PART_SPAN] = CORE_STRING_STATIC("span"),
-        [CORE_DIAG_PART_NOTE] = CORE_STRING_STATIC("note"),
-        [CORE_DIAG_PART_HELP] = CORE_STRING_STATIC("help"),
-        [CORE_DIAG_PART_MARK] = CORE_STRING_STATIC("mark"),
-        [CORE_DIAG_PART_FIX] = CORE_STRING_STATIC("fix"),
-    };
-    size_t *order = d ? render_order(d, true) : nullptr;
-    core_buffer_t *out = core_buffer_empty();
-    core_buffer_puts(out, "[");
-    for (size_t i = 0; order && i < d->items.len; i++) {
-        const core_diagnostic_t *item = &d->items.data[order[i]];
-        if (i) core_buffer_puts(out, ",");
-        core_buffer_puts(out, "\n  {\"severity\":");
-        core_buffer_append_quoted(out, severities[item->severity]);
-        core_buffer_puts(out, ",\"code\":");
-        json_text(out, item->code);
-        core_buffer_puts(out, ",\"message\":");
-        json_text(out, item->message);
-        core_buffer_puts(out, ",\"path\":");
-        json_text(out, item->path.u8_bytes ? item->path : (core_string_t){});
-        core_buffer_puts(out, ",\"location\":");
-        json_location(out, item->location);
-        core_buffer_puts(out, ",\"label\":");
-        json_text(out, item->label.u8_bytes ? item->label : (core_string_t){});
-        core_buffer_puts(out, ",\"parts\":[");
-        for (size_t p = 0; p < item->parts.len; p++) {
-            const core_diag_part_t *part = &item->parts.data[p];
-            if (p) core_buffer_puts(out, ",");
-            core_buffer_puts(out, "{\"kind\":");
-            core_buffer_append_quoted(out, kinds[part->kind]);
-            core_buffer_puts(out, ",\"text\":");
-            json_text(out, part->text);
-            core_buffer_puts(out, ",\"path\":");
-            json_text(out, part->path.u8_bytes ? part->path : (core_string_t){});
-            core_buffer_puts(out, ",\"location\":");
-            json_location(out, part->location);
-            core_buffer_puts(out, "}");
-        }
-        core_buffer_puts(out, "]}");
-    }
-    core_buffer_puts(out, "\n]\n");
     core_free(order);
     return core_buffer_take_string(out);
 }

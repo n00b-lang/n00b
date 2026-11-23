@@ -4,7 +4,6 @@
 #include "ir/ir.h"
 #include "ir/layout.h"
 #include "ir/shape.h"
-#include "ir/typelang.h"
 
 static inline uint64_t
 n00bb_inline_global_count(ir_module_t *module, const ir_global_t *global)

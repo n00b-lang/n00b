@@ -19,7 +19,6 @@ typedef struct {
 
 struct core_source_snapshot_t {
     core_source_file_t source;
-    uint64_t revision;
     size_t references;
 };
 
@@ -38,10 +37,8 @@ struct core_snapshot_inventory_t {
     core_snapshot_inventory_accept_fn accept;
     void *context;
     uint64_t generation;
-    uint64_t next_revision;
     core_string_t cache_root;
     uint64_t filter_revision;
-    core_snapshot_inventory_stats_t stats;
     core_list_t(core_string_t) skipped;
 };
 
@@ -144,12 +141,6 @@ size_t
 core_source_snapshot_size(const core_source_snapshot_t *snapshot)
 {
     return snapshot ? core_source_file_size(&snapshot->source) : 0;
-}
-
-uint64_t
-core_source_snapshot_revision(const core_source_snapshot_t *snapshot)
-{
-    return snapshot ? snapshot->revision : 0;
 }
 
 static void
@@ -289,7 +280,6 @@ add_file(refresh_context_t *refresh, size_t root_index,
         core_os_kind_t kind = CORE_OS_KIND_OTHER;
         bool stable = false;
         for (unsigned attempt = 0; attempt < 3; attempt++) {
-            refresh->inventory->stats.source_reads++;
             if (!core_os_read_file(path, &bytes, &size)) {
                 if (attempt == 0) {
                     core_free(name.data);
@@ -319,7 +309,6 @@ add_file(refresh_context_t *refresh, size_t root_index,
         else {
             snapshot = core_alloc(core_source_snapshot_t);
             snapshot->references = 1;
-            snapshot->revision = ++refresh->inventory->next_revision;
             if (!core_source_file_init(&snapshot->source, path,
                                        core_string_borrow(bytes, size))) {
                 core_free(snapshot);
@@ -584,7 +573,6 @@ add_cached_file(refresh_context_t *refresh, size_t root_index,
         core_string_t path = core_os_path_join(root, relative);
         snapshot = core_alloc(core_source_snapshot_t);
         snapshot->references = 1;
-        snapshot->revision = ++refresh->inventory->next_revision;
         bool ok = core_source_file_init(&snapshot->source, path,
                                         cached->contents);
         core_free(path.data);
@@ -799,11 +787,9 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
     size_t first_entry = refresh->entries.len;
     if (load_package_cache(refresh, root_index, group, recursive,
                            group_path)) {
-        refresh->inventory->stats.package_cache_hits++;
         core_free(group_path.data);
         return true;
     }
-    refresh->inventory->stats.package_scans++;
     while (refresh->entries.len > first_entry) {
         inventory_entry_t *entry = &refresh->entries.data[--refresh->entries.len];
         core_free(entry->relative.data);
@@ -1000,7 +986,6 @@ bool
 core_snapshot_inventory_refresh(core_snapshot_inventory_t *inventory)
 {
     if (!inventory) return false;
-    inventory->stats = (core_snapshot_inventory_stats_t){0};
     refresh_context_t refresh = {
         .inventory = inventory,
         .entries = core_list_new(inventory_entry_t),
@@ -1027,18 +1012,6 @@ uint64_t
 core_snapshot_inventory_generation(const core_snapshot_inventory_t *inventory)
 {
     return inventory ? inventory->generation : 0;
-}
-
-core_snapshot_inventory_stats_t
-core_snapshot_inventory_stats(const core_snapshot_inventory_t *inventory)
-{
-    return inventory ? inventory->stats : (core_snapshot_inventory_stats_t){0};
-}
-
-size_t
-core_snapshot_inventory_count(const core_snapshot_inventory_t *inventory)
-{
-    return inventory ? inventory->entries.len : 0;
 }
 
 const core_source_snapshot_t *

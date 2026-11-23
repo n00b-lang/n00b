@@ -99,7 +99,7 @@ static void test_the_parts_load_in_either_order(void)
     for (size_t i = 0; i < sizeof(orders) / sizeof(orders[0]); i++) {
         parse_grammar_t *g = compose(orders[i].first, orders[i].second, "decls");
 
-        if (!parse_grammar_report_undefined(g, stdout)) {
+        if (parse_grammar_undefined(g, nullptr, 0)) {
             printf("FAIL  %.*s leaves nonterminals undefined\n",
                    (int)orders[i].what.u8_bytes, orders[i].what.data);
             fails++;
@@ -333,8 +333,6 @@ static void test_a_visitor_can_stop_a_reduce(void)
     void *out = parse_tree_walk_reduce(w, parse_pwz_get_tree(p));
 
     check("stopping in a visitor halts the reduce", reduced < whole);
-    check("and the reduce reports that it stopped",
-          parse_tree_walk_stopped(w));
     check("and yields nothing rather than a half-built result",
           out == nullptr);
     parse_tree_walk_free(w);
@@ -514,11 +512,6 @@ static void test_named_child_lookup_distinguishes_group_wrappers(void)
               CORE_STRING_STATIC("name")) == name
               && parse_tree_find_flat_child_by_nt_name(grammar, root,
                   CORE_STRING_STATIC("decl")) == decl);
-    check("nth child uses the same flattened order",
-          parse_tree_get_nth_nt_child(root, 0) == type
-              && parse_tree_get_nth_nt_child(root, 1) == name
-              && parse_tree_get_nth_nt_child(root, 2) == decl
-              && parse_tree_get_nth_nt_child(root, 3) == nullptr);
     parse_tree_free(root);
     parse_grammar_free(grammar);
 }

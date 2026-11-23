@@ -40,50 +40,8 @@ static const scan_lex_spec_t COMPILED = {
     .brackets = S("()[]{}"),
 };
 
-static bool
-hand_scan(parse_scanner_t *s)
-{
-restart:
-    scan_skip_whitespace(s);
-    if (scan_at_eof(s)) {
-        return false;
-    }
-
-    if (scan_peek_byte(s, 0) == '/' && scan_peek_byte(s, 1) == '/') {
-        scan_mark(s);
-        scan_skip_line_comment(s);
-        goto restart;
-    }
-
-    scan_mark(s);
-    core_codepoint_t c = scan_peek(s, 0);
-
-    if (c == '"') {
-        scan_emit_owned(s, scan_terminal_id(s, S("STRING")),
-                        scan_string_double(s));
-        return true;
-    }
-
-    if (unicode_cp_is_ascii_digit(c)) {
-        if (scan_number(s, scan_terminal_id(s, S("INTEGER")),
-                       scan_terminal_id(s, S("FLOAT")))) {
-            return true;
-        }
-    }
-
-    if (unicode_is_id_start(c)) {
-        scan_emit_owned(s, scan_terminal_id(s, S("IDENTIFIER")),
-                        scan_identifier(s));
-        return true;
-    }
-
-    scan_advance(s);
-    scan_emit_marked(s, (int32_t)c);
-    return true;
-}
-
 static parse_grammar_t *
-grammar(bool compiled)
+grammar(void)
 {
     parse_grammar_t *g = parse_grammar_new();
     static const core_string_t names[] = {
@@ -93,15 +51,7 @@ grammar(bool compiled)
     for (size_t i = 0; names[i].data; i++) {
         parse_register_terminal(g, names[i]);
     }
-
-    if (compiled) {
-        scan_grammar_set_lex(g, &COMPILED);
-    }
-    else {
-        scan_tokenizer_register(S("perf-handwritten"), hand_scan);
-        scan_grammar_set_tokenizer(g, S("perf-handwritten"));
-    }
-
+    scan_grammar_set_lex(g, &COMPILED);
     return g;
 }
 
@@ -160,36 +110,23 @@ run(parse_grammar_t *g, core_buffer_t *source, size_t repetitions)
 int
 main(void)
 {
-    parse_grammar_t *compiled = grammar(true);
-    parse_grammar_t *handwritten = grammar(false);
+    parse_grammar_t *compiled = grammar();
     core_buffer_t *small = source_of_size(1 << 20);
     core_buffer_t *large = source_of_size(2 << 20);
 
-    run_t warm_compiled = run(compiled, small, 1);
-    run_t warm_hand = run(handwritten, small, 1);
+    run(compiled, small, 1);
     run_t compiled_small = run(compiled, small, 3);
     run_t compiled_large = run(compiled, large, 3);
-    run_t hand_large = run(handwritten, large, 3);
 
-    check("compiled and handwritten lexers produce the same token count",
-          warm_compiled.tokens == warm_hand.tokens);
-    check("compiled and handwritten lexers produce the same token kinds",
-          warm_compiled.checksum == warm_hand.checksum);
     check("compiled lexer throughput scales linearly with source size",
           compiled_large.seconds < compiled_small.seconds * 2.8);
-    check("compiled dispatch stays within 4x of a direct handwritten scanner",
-          compiled_large.seconds < hand_large.seconds * 4.0);
-    printf("      compiled %.1f MiB/s, handwritten %.1f MiB/s, "
-           "ratio %.2fx, 2x scaling %.2fx\n",
+    printf("      compiled %.1f MiB/s, 2x scaling %.2fx\n",
            (3.0 * large->byte_len / (1024.0 * 1024.0))
                / compiled_large.seconds,
-           (3.0 * large->byte_len / (1024.0 * 1024.0)) / hand_large.seconds,
-           compiled_large.seconds / hand_large.seconds,
            compiled_large.seconds / compiled_small.seconds);
 
     core_buffer_free(small);
     core_buffer_free(large);
     parse_grammar_free(compiled);
-    parse_grammar_free(handwritten);
     return report("lexer performance");
 }

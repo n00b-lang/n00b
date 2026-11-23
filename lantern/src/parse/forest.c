@@ -31,12 +31,6 @@ parse_forest_count(parse_forest_t *f)
     return (int32_t)f->trees.len;
 }
 
-bool
-parse_forest_is_ambiguous(parse_forest_t *f)
-{
-    return parse_forest_count(f) > 1;
-}
-
 parse_tree_t *
 parse_forest_tree(parse_forest_t *f, int32_t ix)
 {

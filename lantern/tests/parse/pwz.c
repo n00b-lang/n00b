@@ -212,7 +212,7 @@ test_forest(void)
     parse_token_stream_t *ts = scan_token_stream_from_codepoints(input);
 
     parse_forest_t forest
-        = parse_pwz_parse_grammar(g, parse_nonterm_id(S), ts);
+        = parse_pwz_parse_grammar_at(g, parse_nonterm_id(S), ts, nullptr);
 
     int32_t count = parse_forest_count(&forest);
     assert(count >= 1 && "should have at least one parse");

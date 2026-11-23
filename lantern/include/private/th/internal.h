@@ -180,7 +180,6 @@ struct th_type {
   };
 };
 
-core_list_decl(th_error_t);
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 
@@ -189,7 +188,6 @@ struct th_ctx {
   core_buffer_t scratch;
   th_normalizer norm;
   void *norm_state;
-  core_string_t err;
   uint64_t next_var;
   const th_builtin_type_t *builtin_types;
   size_t builtin_count;
@@ -198,11 +196,6 @@ struct th_ctx {
   core_dict_t *closed_type_records;
   core_dict_t *open_type_records;
   core_dict_t *generic_type_heads;
-  core_list_t(th_error_t) errors;
-  th_span_t span;
-  core_string_t source_file;
-  th_span_t related;
-  bool has_related;
   const th_env *environment;
   core_string_t module;
   core_string_t package;
@@ -241,9 +234,6 @@ struct th_env {
 };
 
 
-void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
-            th_type *expected, th_type *got, core_string_t message);
-
 void *th_alloc(th_ctx *ctx, size_t n);
 uint64_t th_var_fresh_origin(void);
 core_string_t th_strdup(th_ctx *ctx, core_string_t s);
@@ -251,10 +241,12 @@ core_string_t th_cursor_text(core_byte_cursor_t *cursor, th_ctx *ctx);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);
-void th_erase_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
-th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n);
-th_type **th_children(th_ctx *ctx, th_type *t, size_t *out);
-void th_full_encode(th_ctx *ctx, const th_type *t, core_buffer_t *out);
+bool th_encode_to(th_ctx *ctx, const th_type *t, core_buffer_t *out,
+                  bool erase);
+th_type **th_sort_arms(th_ctx *ctx, th_type *const *arms, size_t n,
+                       bool erase);
+void th_walk_vars(th_ctx *ctx, th_type *t,
+                  void (*visit)(void *state, th_type *var), void *state);
 void th_env_release_contents(th_env *env);
 
 static inline const th_type *th_resolve_c(const th_type *t) {

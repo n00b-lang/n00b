@@ -46,8 +46,7 @@ bool core_os_set_mode(int fd, unsigned mode);
 bool core_os_rename_replace(core_string_t from, core_string_t to);
 bool core_os_is_executable(core_string_t path);
 bool core_os_is_regular_file(core_string_t path);
-void *core_os_map(int fd, size_t size, bool writable, bool private_copy,
-                  void *requested);
+void *core_os_map(int fd, size_t size, bool writable, bool private_copy);
 bool core_os_unmap(void *mapping, size_t size);
 long long core_os_read_at(int fd, void *data, size_t bytes, size_t offset);
 bool core_os_sync(void *mapping, size_t size, int fd);

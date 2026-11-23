@@ -2,7 +2,6 @@
 #include "ir/pass.h"
 #include "ir/doms.h"
 #include "ir/pdg.h"
-#include "ir/typelang.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
 #include "lib/list.h"

@@ -1,10 +1,10 @@
 #include "abi_semantics.h"
 #include "abi_type_index.h"
+#include "compiler_cache.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "qualified_names.h"
@@ -530,22 +530,20 @@ n00bb_abi_link_semantic_rows(
         for (uint32_t r = 1; valid && rows && r < rows->record_count; r++) {
             const n00b_abi_type_v1 *row = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_TYPE, r);
-            n00bb_abi_string_view_t name = {0};
             uint32_t linked = row ? type_index(&link, row->typehash) : 0;
             if (!receivable(&link, linked)
                 || core_dict_contains(&seen_receivers,
-                                      (void *)(uintptr_t)linked)
-                || !n00bb_abi_object_string(view, &row->canonical_name,
-                                            &name)) continue;
+                                      (void *)(uintptr_t)linked)) continue;
             bool known = false;
             th_type *type = core_dict_get(&interned,
                 (void *)(uintptr_t)row->typehash, &known);
-            core_string_t error = {0};
-            if (!known) type = ir_typelang_parse(ctx, core_string_borrow(
-                (const char *)name.bytes, name.length), &error);
-            if (!known) core_dict_add(&interned,
-                (void *)(uintptr_t)row->typehash, type);
-            core_free(error.data);
+            if (!known) {
+                const th_type *cached = n00bb_cache_type(facts->cache,
+                                                         row->typehash);
+                type = cached ? th_type_clone(ctx, cached) : nullptr;
+                core_dict_add(&interned, (void *)(uintptr_t)row->typehash,
+                              type);
+            }
             if (type && th_hash(ctx, type) == row->typehash)
                 valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
                                      type);

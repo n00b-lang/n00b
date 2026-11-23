@@ -92,26 +92,8 @@ void
 core_module_spec_release(core_module_spec_t *spec)
 {
     if (!spec) return;
-    if (spec->user_data_free) spec->user_data_free(spec->user_data);
     core_free(spec->identifier.data);
     *spec = (core_module_spec_t){0};
-}
-
-void
-core_module_spec_set_user_data(core_module_spec_t *spec, void *data,
-                               core_module_user_data_free_fn free_fn)
-{
-    if (!spec) return;
-    if (spec->user_data != data && spec->user_data_free)
-        spec->user_data_free(spec->user_data);
-    spec->user_data = data;
-    spec->user_data_free = free_fn;
-}
-
-void *
-core_module_spec_user_data(const core_module_spec_t *spec)
-{
-    return spec ? spec->user_data : nullptr;
 }
 
 bool
@@ -392,15 +374,6 @@ core_translation_units_visit_sccs(core_translation_unit_t *const *roots,
     core_dict_free(&unit_index);
     core_list_free(units);
     return state.succeeded;
-}
-
-bool
-core_translation_unit_visit_sccs(core_translation_unit_t *root,
-                                 core_translation_unit_scc_fn callback,
-                                 void *context)
-{
-    return root && core_translation_units_visit_sccs(&root, 1, callback,
-                                                     context);
 }
 
 core_module_resolve_status_t

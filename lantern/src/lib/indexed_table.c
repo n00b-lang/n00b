@@ -145,12 +145,6 @@ core_index_remap_free(core_index_remap_t *remap)
     core_free(remap);
 }
 
-size_t
-core_index_remap_len(const core_index_remap_t *remap)
-{
-    return remap ? remap->len : 0;
-}
-
 bool
 core_index_remap_set(core_index_remap_t *remap, uint32_t local_index,
                      uint32_t final_index)
