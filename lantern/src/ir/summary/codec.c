@@ -300,6 +300,13 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         core_put_u32(out, heap->column);
     }
     core_free(heaps);
+    core_put_u32(out, (uint32_t)summary->fields.len);
+    for (size_t i = 0; i < summary->fields.len; i++) {
+        const ir_sfield_t *field = &summary->fields.data[i];
+        put_type(out, types, field->record);
+        put_text(out, texts, field->name);
+        core_put_u8(out, field->flags);
+    }
     return true;
 }
 
@@ -538,6 +545,13 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
         heap.line   = core_cursor_u32(&r.in);
         heap.column = core_cursor_u32(&r.in);
         if (!r.in.failed) core_list_push(summary->heaps, heap);
+    }
+    uint32_t fields = core_cursor_u32(&r.in);
+    for (uint32_t i = 0; !r.in.failed && i < fields; i++) {
+        ir_sfield_t field = {.record = get_type(&r)};
+        field.name  = get_owned_text(&r, function);
+        field.flags = core_cursor_u8(&r.in);
+        if (!r.in.failed) core_list_push(summary->fields, field);
     }
     if (r.in.failed || r.in.at != r.in.end) {
         summary_free(summary);
