@@ -7,7 +7,7 @@ n00b/bitcode-native 42.55
 n00b/buffer-slices 8.97
 n00b/builtin-abi-n00b 2.67
 n00b/cache-fill 20.94
-n00b/cache-matrix 142.77
+n00b/cache-matrix 73.04
 n00b/calls-n00b 6.77
 n00b/closed-world-n00b 25.63
 n00b/comptime-entry 9.91
