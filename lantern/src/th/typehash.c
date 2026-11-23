@@ -77,6 +77,27 @@ void th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type)
     }
 }
 
+th_type *th_hashed_type(th_ctx *ctx, uint64_t hash)
+{
+    return ctx && ctx->hashed_types
+        ? core_dict_get(ctx->hashed_types, (void *)(uintptr_t)hash, nullptr)
+        : nullptr;
+}
+
+void th_remember_hashed_type(th_ctx *ctx, uint64_t hash, th_type *type)
+{
+    if (!ctx || !type) {
+        return;
+    }
+    if (!ctx->hashed_types) {
+        ctx->hashed_types = core_alloc(core_dict_t);
+        core_dict_init(ctx->hashed_types, nullptr, nullptr);
+    }
+    if (!core_dict_contains(ctx->hashed_types, (void *)(uintptr_t)hash)) {
+        core_dict_put(ctx->hashed_types, (void *)(uintptr_t)hash, type);
+    }
+}
+
 void th_ctx_free(th_ctx *ctx)
 {
     if (!ctx) {
@@ -96,6 +117,7 @@ void th_ctx_free(th_ctx *ctx)
         core_dict_free(ctx->text_types);
         core_free(ctx->text_types);
     }
+    free_index(ctx->hashed_types);
     core_arena_free(&ctx->arena);
     core_arena_free(&ctx->memo_arena);
     core_buffer_release(&ctx->scratch);

@@ -400,6 +400,8 @@ size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
 th_type *th_text_type(th_ctx *ctx, core_string_t text);
 void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
+th_type *th_hashed_type(th_ctx *ctx, uint64_t hash);
+void     th_remember_hashed_type(th_ctx *ctx, uint64_t hash, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
 bool     th_match(th_type *pattern, th_type *concrete);

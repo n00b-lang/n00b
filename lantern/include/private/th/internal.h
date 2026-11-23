@@ -203,6 +203,7 @@ struct th_ctx {
   core_dict_t *implements_memo;
   core_dict_t *method_memo;
   core_dict_t *text_types;
+  core_dict_t *hashed_types;
   core_arena_t memo_arena;
 };
 
