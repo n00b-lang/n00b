@@ -71,8 +71,7 @@ same() {
 }
 
 mkdir -p "$tmp/record" "$tmp/syntax"
-cp "$programs/cache_record/racy.n" "$programs/cache_record/state.n" \
-    "$tmp/record/"
+cp "$programs/cache_record/"*.n "$tmp/record/"
 cp "$programs/syntax_preferences.n" "$tmp/syntax/prefs.n"
 printf 'import prefs\n\nfunc main() {\n}\n' >"$tmp/syntax/main.n"
 syntax="$tmp/syntax/main.n"

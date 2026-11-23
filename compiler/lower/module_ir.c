@@ -1360,9 +1360,8 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         for (size_t j = 0; j < units->len; j++) {
             if (units->data[i] == units->data[j]
                 || !n00bb_unit_reaches_import(unit, units->data[j])
-                || (tu_state(units->data[j])->interface_module
-                    && !n00bb_source_file_is_linked_library(
-                           &units->data[j]->source)))
+                || !n00bb_source_file_is_linked_library(
+                       &units->data[j]->source))
                 continue;
             if (!register_imported_record_layouts(grammar, units->data[j],
                                                    tu_state(unit)->ir_module))
