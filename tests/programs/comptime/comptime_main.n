@@ -4,12 +4,15 @@ if comptime() {
     count = 1
 }
 
+var seen: int = 0
+
 func comptime_main() {
+    seen = count
     count = count + 10
 }
 
 func main() {
-    if count == 11 {
+    if count == 11 and seen == 1 {
         __fd_write(2, "comptime_main ran\n")
     } else {
         __fd_write(2, "wrong\n")

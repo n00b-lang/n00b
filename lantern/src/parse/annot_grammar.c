@@ -163,49 +163,18 @@ annot_scan(parse_scanner_t *s)
         core_option_t(core_string_t) id   = scan_ident(s);
 
         if (core_option_is_set(id)) {
-            int64_t kw = name ? PARSE_TOK_OTHER
-                              : scan_terminal_id(s,
-                                                     core_option_get(id));
-
-            scan_emit_owned(s,
-                            kw != PARSE_TOK_OTHER ? (int32_t)kw
-                                                  : PARSE_TOK_IDENTIFIER,
-                            id);
+            scan_emit_word(s, id, name);
 
             return true;
         }
     }
 
-    if (c == '.' && scan_peek(s, 1) == '.' && scan_peek(s, 2) == '.') {
-        int64_t op = scan_terminal_id(s, CORE_STRING_STATIC("..."));
-
-        if (op != PARSE_TOK_OTHER && op > 0xFF) {
-            scan_advance_n(s, 3);
-            scan_emit_marked(s, (int32_t)op);
-
-            return true;
-        }
+    if (c == '.' && scan_peek(s, 1) == '.' && scan_peek(s, 2) == '.'
+        && scan_emit_punct(s, CORE_STRING_STATIC("..."))) {
+        return true;
     }
 
-    core_codepoint_t next = scan_peek(s, 1);
-
-    if (next > 0 && next < 128) {
-        char two[3] = {(char)c, (char)next, 0};
-
-        int64_t op = scan_terminal_id(s, core_string_borrow(two, 2));
-
-        if (op != PARSE_TOK_OTHER && op > 0xFF) {
-            scan_advance_n(s, 2);
-            scan_emit_marked(s, (int32_t)op);
-
-            return true;
-        }
-    }
-
-    scan_advance(s);
-    scan_emit_marked(s, (int32_t)c);
-
-    return true;
+    return scan_emit_operator(s, c, true);
 }
 
 parse_token_stream_t *

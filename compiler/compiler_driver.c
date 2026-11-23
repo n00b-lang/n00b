@@ -15,7 +15,6 @@ extern char **environ;
 double n00bb_profile_seconds(void);
 
 #include "driver.h"
-#include "handoff.h"
 #include "lib/os.h"
 #include "lib/process.h"
 #include "compiler_cli.h"
@@ -660,17 +659,6 @@ dump_symbols(core_translation_unit_t *unit)
                        symbol->pass_by.data);
             if (symbol->is_optional) printf(", optional");
             if (symbol->is_variadic) printf(", variadic");
-            if (symbol->error_type && state->types) {
-                core_string_t printed = n00bb_print_type_qualified(state->types,
-                                                         symbol->error_type);
-                printf(", error=%.*s", TEXT_ARGS(printed));
-            }
-            if (symbol->direction.data)
-                printf(", direction=%.*s", (int)symbol->direction.u8_bytes,
-                       symbol->direction.data);
-            if (symbol->pass_by.data)
-                printf(", pass_by=%.*s", (int)symbol->pass_by.u8_bytes,
-                       symbol->pass_by.data);
             if (symbol->is_thread_local) printf(", thread-local");
             core_string_t storage_duration = parse_sym_storage_duration_name(
                 symbol->storage_duration);
@@ -1041,11 +1029,11 @@ make_interface_module_source(locate_worker_context_t *context,
     core_string_t package = interface_package_for_module(
         &context->interfaces, module->identifier);
     if (!package.data) return false;
-    core_string_t cached_path = {0};
+    core_string_t cached_path = {0}, generated[3] = {0};
     uint64_t source_hash = 0;
     core_buffer_t path = {0};
     if (!n00bb_cache_module_source(context->cache, module->identifier,
-                                   &cached_path, &source_hash)
+                                   &cached_path, &source_hash, generated)
         || !cached_path.data)
         core_buffer_printf(&path, "<interface:%.*s>",
             (int)module->identifier.u8_bytes, module->identifier.data);
@@ -1055,7 +1043,8 @@ make_interface_module_source(locate_worker_context_t *context,
     core_buffer_release(&path);
     if (!initialized) return false;
     n00bb_source_file_set_package(source, package);
-    n00bb_source_file_mark_interface(source, source_hash);
+    n00bb_source_file_mark_interface(source, source_hash, !cached_path.data,
+                                     generated);
     return true;
 }
 
@@ -2354,7 +2343,7 @@ restore_interface_literals(import_driver_t *driver,
     core_string_t path = {0};
     uint64_t hash = 0;
     if (!data || !n00bb_cache_module_source(driver->loader->cache,
-            unit->module.identifier, &path, &hash)) return true;
+            unit->module.identifier, &path, &hash, nullptr)) return true;
     char *contents = nullptr;
     size_t bytes = 0;
     bool ok = core_os_read_file(path, &contents, &bytes)
@@ -2426,10 +2415,19 @@ load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
             "a cached module interface has malformed package declarations");
         return false;
     }
-    n00bb_cache_declaration_sites(driver->loader->cache, module,
-                                  &tu_state(unit)->declaration_sites);
-    n00bb_cache_unused_facts(driver->loader->cache, module,
-                             &tu_state(unit)->unused_facts);
+    struct { core_string_t kind; core_buffer_t *out; } facts[] = {
+        {CORE_STRING_STATIC("sites"), &tu_state(unit)->declaration_sites},
+        {CORE_STRING_STATIC("unused"), &tu_state(unit)->unused_facts},
+    };
+    for (size_t f = 0; f < sizeof(facts) / sizeof(*facts); f++) {
+        const uint8_t *bytes = nullptr;
+        size_t length = 0;
+        const th_type_reader_t *types = nullptr;
+        if (!n00bb_cache_module_section(driver->loader->cache, module,
+                facts[f].kind, &bytes, &length, &types)) continue;
+        facts[f].out->byte_len = 0;
+        core_buffer_append(facts[f].out, (const char *)bytes, length);
+    }
     core_string_t module_name = module;
     size_t size = 0;
     const uint8_t *data = module_name.data
@@ -3054,9 +3052,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     n00bb_preprocessor_free(preprocessor);
     bool analysis_owns_diagnostics = defer_diagnostics
         && analysis_out && *analysis_out;
-    bool optimistic = n00bb_cache_optimistic(cache);
-    if (!analysis_owns_diagnostics
-        && (optimistic || collect_located_diagnostics))
+    if (!analysis_owns_diagnostics && collect_located_diagnostics)
         core_diagnostics_merge(requests->diagnostics, diags);
     else if (!analysis_owns_diagnostics && core_diagnostics_count(diags)) {
         fflush(stdout);
@@ -4449,131 +4445,6 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     return ok;
 }
 
-static void
-exec_compiler(core_string_t compiler, char **argv)
-{
-    char *native = core_string_to_cstr(compiler);
-    if (!native) return;
-    n00bb_handoff_pass();
-    fflush(stdout);
-    fflush(stderr);
-    char *invoked = argv[0];
-    argv[0] = native;
-    core_process_exec(&(core_process_spec_t){.arguments = argv});
-    argv[0] = invoked;
-    core_free(native);
-}
-
-static bool
-reaches_speculative_module(const n00bb_cache_t *cache,
-                           core_translation_unit_t *unit, core_dict_t *seen)
-{
-    if (!unit || core_dict_contains(seen, unit)) return false;
-    core_dict_put(seen, unit, (void *)1);
-    n00bb_tu_state_t *state = tu_state(unit);
-    if (state && state->interface_module
-        && n00bb_cache_module_speculative(cache, unit->module.identifier))
-        return true;
-    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++)
-        if (reaches_speculative_module(cache,
-                core_translation_unit_import(unit, i), seen))
-            return true;
-    return false;
-}
-
-static core_translation_unit_t *
-requested_unit_named(core_work_queue_t *queue,
-                     const locate_requests_t *requests, core_string_t module)
-{
-    for (size_t r = 0; module.data && r < requests->ordered.len; r++) {
-        core_translation_unit_t *unit = core_work_job_result(queue,
-            requests->ordered.data[r].job);
-        if (unit && core_string_eq(unit->module.identifier, module))
-            return unit;
-    }
-    return nullptr;
-}
-
-static core_string_t
-strict_retry_reason(const n00bb_cache_t *cache, core_work_queue_t *queue,
-                    const locate_requests_t *requests,
-                    const core_diagnostics_t *outer)
-{
-    bool any_error = core_diagnostics_failed(outer);
-    bool speculative = false;
-    core_dict_t seen;
-    core_dict_init(&seen, nullptr, nullptr);
-    for (size_t r = 0; !speculative && r < requests->ordered.len; r++) {
-        core_translation_unit_t *unit = core_work_job_result(queue,
-            requests->ordered.data[r].job);
-        if (!unit || !core_diagnostics_failed(
-                core_translation_unit_diagnostics(unit)))
-            continue;
-        any_error = true;
-        speculative = reaches_speculative_module(cache, unit, &seen);
-    }
-    for (size_t i = 0; !speculative && i < core_diagnostics_count(outer); i++) {
-        const core_diagnostic_t *item = core_diagnostics_at(outer, i);
-        if (item->severity == CORE_DIAG_ERROR
-            || item->severity == CORE_DIAG_FATAL)
-            speculative = reaches_speculative_module(cache,
-                requested_unit_named(queue, requests, item->module), &seen);
-    }
-    core_dict_free(&seen);
-    if (speculative)
-        return CORE_STRING_STATIC(
-            "an error depends on a module reused from an optimistic cache entry");
-    if (!any_error)
-        return CORE_STRING_STATIC("the optimistic build failed without a diagnostic");
-    return (core_string_t){0};
-}
-
-static void
-restart_with_strict_cache(char **argv, core_string_t argv0)
-{
-    core_string_t compiler = core_os_executable_path(argv0);
-    if (!compiler.data) return;
-    n00bb_handoff()->cache_strict = true;
-    exec_compiler(compiler, argv);
-    core_free(compiler.data);
-}
-
-static void
-restart_with_summaries(char **argv, core_string_t argv0, n00bb_cache_t *cache)
-{
-    core_buffer_t hints = {0};
-    if (n00bb_cache_summary_hints(cache, &hints)) {
-        n00bb_handoff_set(&n00bb_handoff()->cache_summaries,
-                          core_buffer_string(&hints));
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "cached modules depend on summaries that changed"));
-        core_string_t compiler = core_os_executable_path(argv0);
-        if (compiler.data) exec_compiler(compiler, argv);
-        core_free(compiler.data);
-    }
-    core_buffer_release(&hints);
-    n00bb_cache_log_restart(CORE_STRING_STATIC(
-        "cached summary assumptions do not hold"));
-    restart_with_strict_cache(argv, argv0);
-}
-
-static void
-restart_excluding_cached(char **argv, core_string_t argv0,
-                         const core_buffer_t *stale)
-{
-    n00bb_handoff_t *handoff = n00bb_handoff();
-    core_buffer_t excluded = {0};
-    core_buffer_append_string(&excluded, handoff->cache_exclude);
-    if (handoff->cache_exclude.u8_bytes) core_buffer_putc(&excluded, ',');
-    core_buffer_append(&excluded, stale->data, stale->byte_len);
-    n00bb_handoff_set(&handoff->cache_exclude, core_buffer_string(&excluded));
-    core_buffer_release(&excluded);
-    core_string_t compiler = core_os_executable_path(argv0);
-    if (!compiler.data) return;
-    exec_compiler(compiler, argv);
-    core_free(compiler.data);
-}
-
 static char **
 check_arguments_for(int argc, char **argv, parse_cmdr_result_t *args,
                     int32_t input_count, int32_t kept)
@@ -4860,6 +4731,14 @@ dump_final_ir(const n00bb_link_analysis_t *analysis)
     core_dict_free(&printed);
 }
 
+static int
+instance_order(const void *left, const void *right)
+{
+    const n00bb_specialization_t *a = left, *b = right;
+    return core_string_cmp(ir_module_name(a->instance->owner),
+                           ir_module_name(b->instance->owner));
+}
+
 static bool
 specialize_emitted(n00bb_link_analysis_t *analysis,
                    const n00bb_specialization_seed_t *seeds,
@@ -4874,11 +4753,7 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         .context = &binder_state,
     };
     core_list_t(n00bb_ir_func_ptr_t) callers =
-        core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(callers, analysis->emitted_functions.data[i]);
-    for (size_t i = 0; i < analysis->cached_functions.len; i++)
-        core_list_push(callers, analysis->cached_functions.data[i]);
+        n00bb_program_functions(analysis);
     core_dict_t visited;
     core_dict_init(&visited, nullptr, nullptr);
     bool ok = true;
@@ -4914,6 +4789,9 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
     core_dict_free(&visited);
     core_dict_free(&binder_state.found);
     core_list_free(callers);
+    if (ok && analysis->specializations.len > 1)
+        qsort(analysis->specializations.data, analysis->specializations.len,
+              sizeof(*analysis->specializations.data), instance_order);
     if (ok && n00bb_setting_bool(N00BB_KEY_DEV_DUMP_FINAL_IR))
         dump_final_ir(analysis);
     return ok;
@@ -5023,21 +4901,6 @@ typedef struct {
     bool              dump_summaries;
 } deferred_analysis_t;
 
-static void
-record_cache_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
-                       n00bb_link_analysis_t *analysis, bool optimistic,
-                       char **argv, core_string_t argv0)
-{
-    bool recorded = n00bb_cache_record_summaries(cache, link, analysis);
-    if (optimistic && !recorded) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "cached summary assumptions do not hold"));
-        restart_with_strict_cache(argv, argv0);
-    }
-    if (optimistic && !n00bb_cache_summary_assumptions_hold(cache))
-        restart_with_summaries(argv, argv0, cache);
-}
-
 static bool
 specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
                  core_diagnostics_t *diagnostics,
@@ -5071,12 +4934,11 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
     core_list_free(seeds);
     if (ok && !check_only) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
-    core_translation_unit_t *site = nullptr;
-    for (size_t i = 0; !ok && failure.located && !site
-         && i < analysis->units.len; i++)
-        if (core_string_eq(analysis->units.data[i]->module.identifier,
-                           failure.module))
-            site = analysis->units.data[i];
+    core_translation_unit_t *site = !ok && failure.located
+        ? n00bb_unit_named(analysis, failure.module) : nullptr;
+    core_translation_unit_t *user = !ok && failure.located
+        && failure.site_located
+        ? n00bb_unit_named(analysis, failure.site_module) : nullptr;
     core_diag_location_t failure_location = {
         .line = failure.span.start_line,
         .column = failure.span.start_col,
@@ -5093,12 +4955,6 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
                        ARG_TEXT(failure.after), ARG_TEXT(failure.before),
                        ARG_TEXT(failure.other)));
-        core_translation_unit_t *user = nullptr;
-        for (size_t i = 0; failure.site_located && !user
-             && i < analysis->units.len; i++)
-            if (core_string_eq(analysis->units.data[i]->module.identifier,
-                               failure.site_module))
-                user = analysis->units.data[i];
         if (user)
             n00bb_report_secondary(failure_diagnostics, user,
                 n00bb_span_location(failure.site),
@@ -5116,12 +4972,6 @@ specialize_calls(n00bb_link_analysis_t *analysis, bool check_only,
             N00B_TEXT_GENERIC_MISSING_IMPLEMENTATION,
             N00BB_ARGS(ARG_TEXT(n00bb_name_leaf(failure.function)),
                        ARG_TEXT(failure.after), ARG_TEXT(failure.before)));
-        core_translation_unit_t *user = nullptr;
-        for (size_t i = 0; failure.site_located && !user
-             && i < analysis->units.len; i++)
-            if (core_string_eq(analysis->units.data[i]->module.identifier,
-                               failure.site_module))
-                user = analysis->units.data[i];
         if (user)
             n00bb_report_secondary(failure_diagnostics, user,
                 n00bb_span_location(failure.site),
@@ -5195,11 +5045,9 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     }
     parse_cmdr_result_t *args = invocation.parsed;
 
-    closed_world_build = parse_cmdr_flag_present(args,
-            CORE_STRING_STATIC("--closed-world"))
-        || (n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
-            && !parse_cmdr_flag_present(args,
-                   CORE_STRING_STATIC("--no-closed-world")));
+    closed_world_build = n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
+        && !parse_cmdr_flag_present(args,
+               CORE_STRING_STATIC("--no-closed-world"));
     function_summaries_build = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--function-summaries"));
     bool requested_native = parse_cmdr_flag_present(args,
@@ -5421,7 +5269,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     ir_ctx_t *ir_context = ir_ctx_new();
     th_ctx *types = ir_ctx_types(ir_context);
     th_install_nfc(types);
-    n00bb_cache_t *cache = (build_command || check_command) && scheduled
+    n00bb_cache_t *cache = (build_command || check_command || normalize_fmt)
+        && scheduled
         && options_valid && input_count == 1
         ? open_object_cache(resolver, args, ir_context, linked_interfaces,
                             (size_t)interface_count)
@@ -5511,26 +5360,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         ir_context, types, (size_t)requested_jobs, &environment, &link,
         &link_analysis);
     if (link_analysis) link_analysis->cache = cache;
-    bool optimistic_cache = n00bb_cache_optimistic(cache);
-    if (optimistic_cache) {
-        bool assumptions = n00bb_cache_assumptions_hold(cache, link,
-                                                        link_analysis);
-        core_string_t reason = !located
-            ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
-            : !assumptions
-                ? CORE_STRING_STATIC("cached interface assumptions do not hold")
-                : (core_string_t){0};
-        if (reason.data) {
-            n00bb_cache_log_restart(reason);
-            restart_with_strict_cache(argv, argv0);
-        }
-    }
-    if (cache && located) {
-        core_buffer_t stale = {0};
-        n00bb_cache_stale_modules(cache, &stale);
-        if (stale.byte_len) restart_excluding_cached(argv, argv0, &stale);
-        core_buffer_release(&stale);
-    }
     if (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--show-ffi"))
         && !show_module_literal(resolver, CORE_STRING_STATIC("ffi"),
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
@@ -5605,9 +5434,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
     if (located && normalize_fmt)
         located = n00bb_format_units(grammar, queue, &requests, args);
-    if (located && cache && !check_command && !defer_analysis)
-        record_cache_summaries(cache, link, link_analysis, optimistic_cache,
-                               argv, argv0);
     core_string_t header_output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (located && header_output.data
@@ -5705,9 +5531,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         located = report_boxed_operators(link_analysis);
     if (analyzed_late && cache && link_analysis->summaries)
         n00bb_cache_capture_summaries(cache, link_analysis, N00BB_PHASE_MAIN);
-    if (located && analyzed_late && cache && !check_command)
-        record_cache_summaries(cache, link, link_analysis, optimistic_cache,
-                               argv, argv0);
     if (check_snapshot && analyzed_late)
         (void)n00bb_cache_store(cache, link, link_analysis, nullptr, 0);
     if (located && specializing) warn_dead_type_arms(link_analysis);
@@ -5867,25 +5690,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             core_diagnostics_merge(cli_diagnostics,
                                    core_link_unit_diagnostics(link));
     }
-    core_string_t late_retry = optimistic_cache && !located
-        ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
-        : (core_string_t){0};
-    core_buffer_t unloadable = {0};
-    n00bb_cache_unloadable_modules(cache, &unloadable);
-    if (unloadable.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "cached IR names a function this program does not define"));
-        restart_excluding_cached(argv, argv0, &unloadable);
-    }
-    core_buffer_release(&unloadable);
-    core_buffer_t refreeze = {0};
-    n00bb_cache_refreeze_modules(cache, &refreeze);
-    if (refreeze.byte_len) {
-        n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "comptime_main changes the state of cached modules"));
-        restart_excluding_cached(argv, argv0, &refreeze);
-    }
-    core_buffer_release(&refreeze);
 
     core_link_unit_free(link);
     th_env_free(environment);
@@ -5900,10 +5704,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         th_env_free((th_env *)linked_interfaces[i]);
     core_free(linked_interfaces);
     core_free(native_roots);
-    if (late_retry.data) {
-        n00bb_cache_log_restart(late_retry);
-        restart_with_strict_cache(argv, argv0);
-    }
     if (core_diagnostics_count(cli_diagnostics)) {
         n00bb_resolver_remap_diagnostics(resolver, cli_diagnostics);
         print_counted_diagnostics(cli_diagnostics, diagnostic_filter);

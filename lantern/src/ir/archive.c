@@ -32,36 +32,25 @@ typedef struct {
 static void
 w_u8(writer_t *w, uint8_t value)
 {
-    core_buffer_append(w->out, (const char *)&value, 1);
+    core_put_u8(w->out, value);
 }
 
 static void
 w_u32(writer_t *w, uint32_t value)
 {
-    uint8_t bytes[4];
-    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(w->out, (const char *)bytes, 4);
+    core_put_u32(w->out, value);
 }
 
 static void
 w_u64(writer_t *w, uint64_t value)
 {
-    uint8_t bytes[8];
-    for (int i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(w->out, (const char *)bytes, 8);
-}
-
-static void
-w_bytes(writer_t *w, const void *data, size_t length)
-{
-    w_u64(w, data ? length : UINT64_MAX);
-    if (data && length) core_buffer_append(w->out, data, length);
+    core_put_u64(w->out, value);
 }
 
 static void
 w_text(writer_t *w, core_string_t text)
 {
-    w_bytes(w, text.data, text.u8_bytes);
+    core_put_text(w->out, text);
 }
 
 static void
@@ -527,7 +516,7 @@ w_function_details(writer_t *w, ir_func_t *function)
             w_shape(w, instr->shape_constraint);
             w_annots(w, &instr->annots);
             if (instr->dest) w_value_details(w, instr->dest);
-            w_bytes(w, instr->const_bytes, instr->const_byte_len);
+            core_put_bytes(w->out, instr->const_bytes, instr->const_byte_len);
             w_u32(w, instr->n_mods);
             for (uint32_t j = 0; j < instr->n_mods; j++)
                 w_text(w, instr->mods[j]);
@@ -542,12 +531,16 @@ w_function_details(writer_t *w, ir_func_t *function)
 
 bool
 ir_modules_save_references(ir_module_t *const *modules, size_t count,
-                           core_buffer_t *out, core_buffer_t *references)
+                           core_buffer_t *out, core_buffer_t *references,
+                           th_type_writer_t *types)
 {
     if (!out || (count && !modules)) return false;
     core_buffer_t body = {0};
     writer_t w = {
-        .out = &body, .types = th_type_writer_new(), .modules = modules,
+        .out = &body,
+        .types = types ? types : th_type_writer_new(count
+            ? modules[0]->ctx->types : nullptr),
+        .modules = modules,
         .module_count = count, .references = references,
     };
     if (!w.types) return false;
@@ -616,20 +609,16 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
         w_annots(&w, &modules[m]->annots);
     }
     bool ok = !w.failed;
-    core_buffer_t types = {0};
-    if (ok) ok = th_type_writer_finish(w.types, &types);
-    th_type_writer_free(w.types);
+    core_buffer_t table = {0};
+    if (ok && !types) ok = th_type_writer_finish(w.types, &table);
+    if (!types) th_type_writer_free(w.types);
     if (ok) {
-        uint8_t header[8];
-        for (int i = 0; i < 4; i++)
-            header[i] = (uint8_t)(IR_ARCHIVE_MAGIC >> (8 * i));
-        for (int i = 0; i < 4; i++)
-            header[4 + i] = (uint8_t)(IR_ARCHIVE_VERSION >> (8 * i));
-        core_buffer_append(out, (const char *)header, 8);
-        core_buffer_append(out, types.data, types.byte_len);
+        core_put_u32(out, IR_ARCHIVE_MAGIC);
+        core_put_u32(out, IR_ARCHIVE_VERSION);
+        core_buffer_append(out, table.data, table.byte_len);
         core_buffer_append(out, body.data, body.byte_len);
     }
-    core_buffer_release(&types);
+    core_buffer_release(&table);
     core_buffer_release(&body);
     return ok;
 }
@@ -638,11 +627,10 @@ typedef struct reader reader_t;
 
 struct reader {
     ir_ctx_t                 *ctx;
-    const uint8_t            *data;
+    core_byte_cursor_t        in;
     size_t                    length;
-    size_t                    at;
-    bool                      failed;
-    th_type_reader_t         *types;
+    const th_type_reader_t   *types;
+    th_type_reader_t         *owned;
     ir_module_t             **modules;
     size_t                    count;
     size_t                   *slot_counts;
@@ -657,60 +645,30 @@ struct reader {
 static uint8_t
 r_u8(reader_t *r)
 {
-    if (r->failed || r->at >= r->length) {
-        r->failed = true;
-        return 0;
-    }
-    return r->data[r->at++];
+    return core_cursor_u8(&r->in);
 }
 
 static uint32_t
 r_u32(reader_t *r)
 {
-    if (r->failed || r->length - r->at < 4) {
-        r->failed = true;
-        return 0;
-    }
-    uint32_t value = 0;
-    for (int i = 0; i < 4; i++)
-        value |= (uint32_t)r->data[r->at + i] << (8 * i);
-    r->at += 4;
-    return value;
+    return core_cursor_u32(&r->in);
 }
 
 static uint64_t
 r_u64(reader_t *r)
 {
-    if (r->failed || r->length - r->at < 8) {
-        r->failed = true;
-        return 0;
-    }
-    uint64_t value = 0;
-    for (int i = 0; i < 8; i++)
-        value |= (uint64_t)r->data[r->at + i] << (8 * i);
-    r->at += 8;
-    return value;
+    return core_cursor_u64(&r->in);
 }
 
 static const uint8_t *
 r_bytes(reader_t *r, size_t *length)
 {
-    uint64_t size = r_u64(r);
-    *length = 0;
-    if (r->failed || size == UINT64_MAX) return nullptr;
-    if (size > r->length - r->at) {
-        r->failed = true;
-        return nullptr;
-    }
-    uint8_t *copy = ir_alloc(r->ctx, (size_t)size + 1);
-    if (!copy) {
-        r->failed = true;
-        return nullptr;
-    }
-    if (size) memcpy(copy, r->data + r->at, (size_t)size);
-    copy[size] = 0;
-    r->at += (size_t)size;
-    *length = (size_t)size;
+    const uint8_t *data = core_cursor_bytes(&r->in, length);
+    uint8_t *copy = data ? ir_alloc(r->ctx, *length + 1) : nullptr;
+    if (data && !copy) r->in.failed = true;
+    if (!copy) return nullptr;
+    if (*length) memcpy(copy, data, *length);
+    copy[*length] = 0;
     return copy;
 }
 
@@ -727,8 +685,8 @@ static uint64_t
 r_count(reader_t *r)
 {
     uint64_t count = r_u64(r);
-    if (count > r->length) r->failed = true;
-    return r->failed ? 0 : count;
+    if (count > r->length) r->in.failed = true;
+    return r->in.failed ? 0 : count;
 }
 
 static th_type *
@@ -737,8 +695,24 @@ r_type(reader_t *r)
     uint32_t index = r_u32(r);
     if (!index) return nullptr;
     th_type *type = th_type_reader_get(r->types, index);
-    if (!type) r->failed = true;
+    if (!type) r->in.failed = true;
     return type;
+}
+
+static uint32_t
+r_size(reader_t *r)
+{
+    uint32_t count = r_u32(r);
+    if (count > r->length) r->in.failed = true;
+    return r->in.failed ? 0 : count;
+}
+
+static bool
+r_slot(reader_t *r, core_string_t *name, th_type **type)
+{
+    *name = r_text(r);
+    *type = r_type(r);
+    return r_u8(r) != 0;
 }
 
 static ir_span_t
@@ -761,16 +735,16 @@ r_origin(reader_t *r)
 {
     uint32_t depth = r_u32(r);
     if (depth > r->length) {
-        r->failed = true;
+        r->in.failed = true;
         return nullptr;
     }
     ir_origin_t *origin = nullptr;
-    for (uint32_t i = 0; !r->failed && i < depth; i++) {
+    for (uint32_t i = 0; !r->in.failed && i < depth; i++) {
         ir_origin_kind_t kind = (ir_origin_kind_t)r_u8(r);
         ir_span_t span = r_span(r);
         core_string_t agent = r_text(r);
         origin = ir_origin_new(r->ctx, kind, span, agent, origin);
-        if (!origin) r->failed = true;
+        if (!origin) r->in.failed = true;
     }
     return origin;
 }
@@ -883,16 +857,15 @@ r_value(reader_t *r)
     default:
         break;
     }
-    r->failed = true;
+    r->in.failed = true;
     return nullptr;
 }
 
 static void
 r_annots(reader_t *r, ir_annots_t *annots)
 {
-    uint32_t count = r_u32(r);
-    if (count > r->length) r->failed = true;
-    for (uint32_t i = 0; !r->failed && i < count; i++) {
+    uint32_t count = r_size(r);
+    for (uint32_t i = 0; !r->in.failed && i < count; i++) {
         ir_annot_t annot = {0};
         annot.key = r_text(r);
         annot.kind = (ir_annot_kind_t)r_u8(r);
@@ -903,11 +876,11 @@ r_annots(reader_t *r, ir_annots_t *annots)
         case IR_ANNOT_STR: annot.s = r_text(r); break;
         case IR_ANNOT_TYPE: annot.t = r_type(r); break;
         case IR_ANNOT_VALUE: annot.v = r_value(r); break;
-        default: r->failed = true; break;
+        default: r->in.failed = true; break;
         }
-        if (!r->failed
+        if (!r->in.failed
             && (!annot.key.data || !ir_annot_set(r->ctx, annots, annot)))
-            r->failed = true;
+            r->in.failed = true;
     }
 }
 
@@ -927,28 +900,28 @@ r_shape(reader_t *r)
     if (!r_u8(r)) return nullptr;
     th_type *element = r_type(r);
     uint32_t rank = r_u32(r);
-    ir_shape_t *shape = !r->failed && element && rank
+    ir_shape_t *shape = !r->in.failed && element && rank
         ? ir_shape_new(r->ctx, element, rank) : nullptr;
     if (!shape) {
-        r->failed = true;
+        r->in.failed = true;
         return nullptr;
     }
-    for (uint32_t i = 0; !r->failed && i < rank; i++) {
+    for (uint32_t i = 0; !r->in.failed && i < rank; i++) {
         ir_shape_extent_t extent = {0};
         extent.kind = (ir_shape_extent_kind_t)r_u8(r);
         extent.static_value = r_u64(r);
         extent.value = r_value(r);
         ir_shape_measure_t stride = r_measure(r);
-        if (!r->failed && (!ir_shape_set_extent(shape, i, extent)
+        if (!r->in.failed && (!ir_shape_set_extent(shape, i, extent)
                            || !ir_shape_set_stride(shape, i, stride)))
-            r->failed = true;
+            r->in.failed = true;
     }
     ir_shape_measure_t count = r_measure(r);
     uint32_t flat = r_u32(r);
     bool known = r_u8(r) != 0;
-    if (!r->failed && (!ir_shape_set_element_count(shape, count)
+    if (!r->in.failed && (!ir_shape_set_element_count(shape, count)
                        || !ir_shape_set_storage(shape, flat, known)))
-        r->failed = true;
+        r->in.failed = true;
     return shape;
 }
 
@@ -991,8 +964,8 @@ r_init(reader_t *r, ir_global_init_value_t *value)
         uint64_t count = r_count(r);
         ir_global_init_value_t *items = count
             ? ir_alloc(r->ctx, (size_t)count * sizeof(*items)) : nullptr;
-        if (count && !items) r->failed = true;
-        for (uint64_t i = 0; !r->failed && i < count; i++)
+        if (count && !items) r->in.failed = true;
+        for (uint64_t i = 0; !r->in.failed && i < count; i++)
             r_init(r, &items[i]);
         value->aggregate.items = items;
         value->aggregate.count = (size_t)count;
@@ -1001,7 +974,7 @@ r_init(reader_t *r, ir_global_init_value_t *value)
     case IR_GLOBAL_INIT_NIL:
         break;
     default:
-        r->failed = true;
+        r->in.failed = true;
         break;
     }
 }
@@ -1012,8 +985,8 @@ r_runs(reader_t *r, size_t *count)
     uint64_t n = r_count(r);
     ir_layout_bit_run_t *runs = n
         ? ir_alloc(r->ctx, (size_t)n * sizeof(*runs)) : nullptr;
-    if (n && !runs) r->failed = true;
-    for (uint64_t i = 0; !r->failed && i < n; i++) {
+    if (n && !runs) r->in.failed = true;
+    for (uint64_t i = 0; !r->in.failed && i < n; i++) {
         runs[i].offset = r_u64(r);
         runs[i].width = r_u64(r);
     }
@@ -1043,8 +1016,8 @@ r_layout(reader_t *r, ir_final_layout_t *layout)
     uint64_t count = r_count(r);
     ir_final_member_layout_t *members = count
         ? ir_alloc(r->ctx, (size_t)count * sizeof(*members)) : nullptr;
-    if (count && !members) r->failed = true;
-    for (uint64_t i = 0; !r->failed && i < count; i++) {
+    if (count && !members) r->in.failed = true;
+    for (uint64_t i = 0; !r->in.failed && i < count; i++) {
         ir_final_member_layout_t *member = &members[i];
         memset(member, 0, sizeof(*member));
         member->name = r_text(r);
@@ -1058,8 +1031,8 @@ r_layout(reader_t *r, ir_final_layout_t *layout)
         uint64_t accesses = r_count(r);
         ir_layout_access_t *items = accesses
             ? ir_alloc(r->ctx, (size_t)accesses * sizeof(*items)) : nullptr;
-        if (accesses && !items) r->failed = true;
-        for (uint64_t j = 0; !r->failed && j < accesses; j++)
+        if (accesses && !items) r->in.failed = true;
+        for (uint64_t j = 0; !r->in.failed && j < accesses; j++)
             items[j] = r_access(r);
         member->accesses = items;
         member->n_accesses = (size_t)accesses;
@@ -1092,12 +1065,11 @@ r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
     r_layout_val(r, &scratch.size);
     r_layout_val(r, &scratch.align);
     r_layout_val(r, &scratch.stride);
-    uint32_t members = r_u32(r);
-    if (members > r->length) r->failed = true;
-    ir_member_layout_t *items = !r->failed && members
+    uint32_t members = r_size(r);
+    ir_member_layout_t *items = !r->in.failed && members
         ? ir_alloc(r->ctx, members * sizeof(*items)) : nullptr;
-    if (members && !items) r->failed = true;
-    for (uint32_t i = 0; !r->failed && i < members; i++) {
+    if (members && !items) r->in.failed = true;
+    for (uint32_t i = 0; !r->in.failed && i < members; i++) {
         items[i].name = r_text(r);
         r_layout_val(r, &items[i].bit_offset);
         r_layout_val(r, &items[i].bit_width);
@@ -1113,15 +1085,15 @@ r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
     ir_final_layout_t *final = nullptr;
     if (r_u8(r)) {
         final = ir_alloc(r->ctx, sizeof(*final));
-        if (!final) r->failed = true;
+        if (!final) r->in.failed = true;
         else r_layout(r, final);
     }
-    if (r->failed || !type) return;
+    if (r->in.failed || !type) return;
     ir_descriptor_t *d = target.data
         ? ir_layout_ensure(module, type, target)
         : ir_layout_ensure_targetless(module, type);
     if (!d) {
-        r->failed = true;
+        r->in.failed = true;
         return;
     }
     d->size = scratch.size;
@@ -1129,7 +1101,7 @@ r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
     d->stride = scratch.stride;
     for (uint32_t i = 0; i < members; i++)
         if (!ir_layout_descriptor_pin_member(module, d, items[i].name, 0, 0)) {
-            r->failed = true;
+            r->in.failed = true;
             return;
         }
     for (uint32_t i = 0; i < d->n_members && i < members; i++)
@@ -1144,7 +1116,7 @@ r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
     d->done = done;
     if (final && !d->final
         && !ir_layout_publish_final(module, type, target, final))
-        r->failed = true;
+        r->in.failed = true;
 }
 
 static ir_block_t *
@@ -1153,7 +1125,7 @@ r_block(reader_t *r, ir_func_t *function)
     uint32_t index = r_u32(r);
     if (index == UINT32_MAX) return nullptr;
     if (index >= function->n_blocks) {
-        r->failed = true;
+        r->in.failed = true;
         return nullptr;
     }
     return function->blocks[index];
@@ -1209,57 +1181,54 @@ r_function_skeleton(reader_t *r, ir_func_t *function)
     function->origin = r_origin(r);
     function->props = (ir_props_t)r_u32(r);
     uint32_t optional_count = r_u32(r);
-    for (uint32_t i = 0; !r->failed && i < optional_count; i++)
+    for (uint32_t i = 0; !r->in.failed && i < optional_count; i++)
         if (r_u8(r) && !ir_func_set_parameter_optional(function, i, true))
-            r->failed = true;
-    uint32_t params = r_u32(r);
-    if (params > r->length) r->failed = true;
-    for (uint32_t i = 0; !r->failed && i < params; i++) {
-        core_string_t name = r_text(r);
-        th_type *type = r_type(r);
-        bool optional = r_u8(r) != 0;
+            r->in.failed = true;
+    uint32_t params = r_size(r);
+    for (uint32_t i = 0; !r->in.failed && i < params; i++) {
+        core_string_t name;
+        th_type *type;
+        bool optional = r_slot(r, &name, &type);
         ir_value_t *param = ir_param_add(function, name, type);
         if (!param || (optional
                        && !ir_func_set_parameter_optional(function, i, true)))
-            r->failed = true;
+            r->in.failed = true;
         else if (optional) param->is_optional = true;
     }
-    uint32_t locals = r_u32(r);
-    if (locals > r->length) r->failed = true;
-    for (uint32_t i = 0; !r->failed && i < locals; i++) {
-        core_string_t name = r_text(r);
-        th_type *type = r_type(r);
-        bool has_value = r_u8(r) != 0;
+    uint32_t locals = r_size(r);
+    for (uint32_t i = 0; !r->in.failed && i < locals; i++) {
+        core_string_t name;
+        th_type *type;
+        bool has_value = r_slot(r, &name, &type);
         ir_local_t *local = ir_local_add(function, name, type);
         if (!local || (has_value && !ir_local_value(function, local)))
-            r->failed = true;
+            r->in.failed = true;
     }
-    uint32_t blocks = r_u32(r);
-    if (blocks > r->length) r->failed = true;
-    for (uint32_t b = 0; !r->failed && b < blocks; b++) {
+    uint32_t blocks = r_size(r);
+    for (uint32_t b = 0; !r->in.failed && b < blocks; b++) {
         ir_block_t *block = ir_block_add(function, r_text(r));
         uint32_t instrs = r_u32(r);
         if (!block || instrs > r->length) {
-            r->failed = true;
+            r->in.failed = true;
             break;
         }
-        for (uint32_t i = 0; !r->failed && i < instrs; i++) {
+        for (uint32_t i = 0; !r->in.failed && i < instrs; i++) {
             ir_instr_t *instr = ir_instr_add(block, (ir_op_t)r_u32(r));
             uint8_t dest = r_u8(r);
             if (!instr) {
-                r->failed = true;
+                r->in.failed = true;
                 break;
             }
             if (dest == 1) {
                 core_string_t name = r_text(r);
                 th_type *type = r_type(r);
-                if (!r->failed && !ir_instr_set_dest(instr, name, type))
-                    r->failed = true;
+                if (!r->in.failed && !ir_instr_set_dest(instr, name, type))
+                    r->in.failed = true;
             } else if (dest == 2) {
                 uint32_t index = r_u32(r);
                 if (index >= function->n_locals
                     || !ir_instr_set_dest_local(instr,
-                        function->locals[index])) r->failed = true;
+                        function->locals[index])) r->in.failed = true;
             }
         }
     }
@@ -1270,9 +1239,9 @@ static void
 r_function_details(reader_t *r, ir_func_t *function)
 {
     r->function = function;
-    for (uint32_t i = 0; !r->failed && i < function->n_params; i++)
+    for (uint32_t i = 0; !r->in.failed && i < function->n_params; i++)
         r_value_details(r, function->params[i]);
-    for (uint32_t i = 0; !r->failed && i < function->n_locals; i++) {
+    for (uint32_t i = 0; !r->in.failed && i < function->n_locals; i++) {
         ir_local_t *local = function->locals[i];
         local->mutability = (ir_mutability_t)r_u8(r);
         local->address_taken = r_u8(r) != 0;
@@ -1290,12 +1259,12 @@ r_function_details(reader_t *r, ir_func_t *function)
         r_annots(r, &local->annots);
         if (local->value) r_value_details(r, local->value);
     }
-    for (uint32_t b = 0; !r->failed && b < function->n_blocks; b++) {
+    for (uint32_t b = 0; !r->in.failed && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         block->span = r_span(r);
         block->origin = r_origin(r);
         r_annots(r, &block->annots);
-        for (uint32_t i = 0; !r->failed && i < block->n_instrs; i++) {
+        for (uint32_t i = 0; !r->in.failed && i < block->n_instrs; i++) {
             ir_instr_t *instr = block->instrs[i];
             instr->span = r_span(r);
             instr->origin = r_origin(r);
@@ -1306,18 +1275,16 @@ r_function_details(reader_t *r, ir_func_t *function)
             const uint8_t *bytes = r_bytes(r, &const_length);
             if (bytes && !ir_instr_set_const_bytes(instr, bytes,
                                                    const_length))
-                r->failed = true;
-            uint32_t mods = r_u32(r);
-            if (mods > r->length) r->failed = true;
-            for (uint32_t j = 0; !r->failed && j < mods; j++)
-                if (!ir_instr_add_mod(instr, r_text(r))) r->failed = true;
-            uint32_t operands = r_u32(r);
-            if (operands > r->length) r->failed = true;
-            if (!r->failed && operands) {
+                r->in.failed = true;
+            uint32_t mods = r_size(r);
+            for (uint32_t j = 0; !r->in.failed && j < mods; j++)
+                if (!ir_instr_add_mod(instr, r_text(r))) r->in.failed = true;
+            uint32_t operands = r_size(r);
+            if (!r->in.failed && operands) {
                 instr->operands = ir_alloc(r->ctx,
                     operands * sizeof(*instr->operands));
-                if (!instr->operands) r->failed = true;
-                for (uint32_t j = 0; !r->failed && j < operands; j++)
+                if (!instr->operands) r->in.failed = true;
+                for (uint32_t j = 0; !r->in.failed && j < operands; j++)
                     r_operand(r, function, &instr->operands[j]);
                 instr->n_operands = instr->cap_operands = operands;
             }
@@ -1341,7 +1308,7 @@ static void
 load_headers(reader_t *r, const ir_profile_t *const *profiles,
              size_t profile_count, uint32_t modules)
 {
-    for (uint32_t m = 0; !r->failed && m < modules; m++) {
+    for (uint32_t m = 0; !r->in.failed && m < modules; m++) {
         core_string_t name = r_text(r);
         const ir_profile_t *profile = r_profile(r_text(r), profiles,
                                                 profile_count);
@@ -1349,7 +1316,7 @@ load_headers(reader_t *r, const ir_profile_t *const *profiles,
         ir_module_t *module = name.data && profile
             ? ir_module_new(r->ctx, name, profile, target) : nullptr;
         if (!module) {
-            r->failed = true;
+            r->in.failed = true;
             break;
         }
         r->modules[m] = module;
@@ -1357,33 +1324,33 @@ load_headers(reader_t *r, const ir_profile_t *const *profiles,
         module->props = (ir_props_t)r_u32(r);
         module->span = r_span(r);
         uint64_t files = r_count(r);
-        for (uint64_t i = 0; !r->failed && i < files; i++)
+        for (uint64_t i = 0; !r->in.failed && i < files; i++)
             ir_file_add(module, r_text(r));
         uint64_t slots = r_count(r);
         r->slot_types[m] = slots
             ? core_alloc_array(th_type *, (size_t)slots) : nullptr;
-        if (slots && !r->slot_types[m]) r->failed = true;
-        for (uint64_t i = 0; !r->failed && i < slots; i++) {
+        if (slots && !r->slot_types[m]) r->in.failed = true;
+        for (uint64_t i = 0; !r->in.failed && i < slots; i++) {
             th_type *type = r_type(r);
             r->slot_types[m][i] = type ? ir_type_intern(module, type)
                                        : nullptr;
         }
-        r->slot_counts[m] = r->failed ? 0 : (size_t)slots;
+        r->slot_counts[m] = r->in.failed ? 0 : (size_t)slots;
         uint64_t functions = r_count(r);
-        for (uint64_t i = 0; !r->failed && i < functions; i++) {
+        for (uint64_t i = 0; !r->in.failed && i < functions; i++) {
             core_string_t function_name = r_text(r);
             th_type *type = r_type(r);
             ir_linkage_t linkage = (ir_linkage_t)r_u8(r);
-            if (!r->failed && !ir_func_add(module, function_name, type,
+            if (!r->in.failed && !ir_func_add(module, function_name, type,
                                            linkage))
-                r->failed = true;
+                r->in.failed = true;
         }
         uint64_t globals = r_count(r);
-        for (uint64_t i = 0; !r->failed && i < globals; i++) {
+        for (uint64_t i = 0; !r->in.failed && i < globals; i++) {
             core_string_t global_name = r_text(r);
             th_type *type = r_type(r);
-            if (!r->failed && !ir_global_add(module, global_name, type))
-                r->failed = true;
+            if (!r->in.failed && !ir_global_add(module, global_name, type))
+                r->in.failed = true;
         }
     }
 }
@@ -1391,17 +1358,17 @@ load_headers(reader_t *r, const ir_profile_t *const *profiles,
 static void
 load_slots(reader_t *r)
 {
-    for (size_t m = 0; !r->failed && m < r->count; m++) {
+    for (size_t m = 0; !r->in.failed && m < r->count; m++) {
         ir_module_t *module = r->modules[m];
-        for (size_t i = 0; !r->failed && i < r->slot_counts[m]; i++) {
+        for (size_t i = 0; !r->in.failed && i < r->slot_counts[m]; i++) {
             th_type *type = r->slot_types[m][i];
             th_type *definition = r_type(r);
             ir_typeslot_t *slot = type ? ir_type_slot(module, type) : nullptr;
-            if (type && !slot) r->failed = true;
+            if (type && !slot) r->in.failed = true;
             if (slot && definition && !ir_type_define(module, type, definition))
                 slot->def = th_resolve(definition);
             uint64_t descriptors = r_count(r);
-            for (uint64_t d = 0; !r->failed && d < descriptors; d++)
+            for (uint64_t d = 0; !r->in.failed && d < descriptors; d++)
                 r_descriptor(r, module, type);
         }
     }
@@ -1410,17 +1377,17 @@ load_slots(reader_t *r)
 static void
 load_skeletons(reader_t *r)
 {
-    for (size_t m = 0; !r->failed && m < r->count; m++)
-        for (size_t i = 0; !r->failed && i < r->modules[m]->n_funcs; i++)
+    for (size_t m = 0; !r->in.failed && m < r->count; m++)
+        for (size_t i = 0; !r->in.failed && i < r->modules[m]->n_funcs; i++)
             r_function_skeleton(r, r->modules[m]->funcs[i]);
 }
 
 static void
 load_globals(reader_t *r)
 {
-    for (size_t m = 0; !r->failed && m < r->count; m++) {
+    for (size_t m = 0; !r->in.failed && m < r->count; m++) {
         ir_module_t *module = r->modules[m];
-        for (size_t i = 0; !r->failed && i < module->n_globals; i++) {
+        for (size_t i = 0; !r->in.failed && i < module->n_globals; i++) {
             ir_global_t *global = module->globals[i];
             global->is_static = r_u8(r) != 0;
             global->is_extern = r_u8(r) != 0;
@@ -1433,12 +1400,12 @@ load_globals(reader_t *r)
                 ir_global_init_value_t *init = ir_alloc(r->ctx,
                                                         sizeof(*init));
                 if (!init) {
-                    r->failed = true;
+                    r->in.failed = true;
                     break;
                 }
                 r_init(r, init);
                 global->static_initializer = init;
-                global->has_static_initializer = !r->failed;
+                global->has_static_initializer = !r->in.failed;
             }
         }
     }
@@ -1447,8 +1414,8 @@ load_globals(reader_t *r)
 static void
 load_details(reader_t *r)
 {
-    for (size_t m = 0; !r->failed && m < r->count; m++) {
-        for (size_t i = 0; !r->failed && i < r->modules[m]->n_funcs; i++)
+    for (size_t m = 0; !r->in.failed && m < r->count; m++) {
+        for (size_t i = 0; !r->in.failed && i < r->modules[m]->n_funcs; i++)
             r_function_details(r, r->modules[m]->funcs[i]);
         r_annots(r, &r->modules[m]->annots);
     }
@@ -1461,21 +1428,19 @@ reader_open(reader_t *r, ir_ctx_t *ctx, const ir_archive_input_t *input,
     const uint8_t *data = input->data;
     size_t length = input->length;
     if (!data || length < 8) return false;
-    uint32_t magic = 0, version = 0;
-    for (int i = 0; i < 4; i++) magic |= (uint32_t)data[i] << (8 * i);
-    for (int i = 0; i < 4; i++) version |= (uint32_t)data[4 + i] << (8 * i);
-    if (magic != IR_ARCHIVE_MAGIC || version != IR_ARCHIVE_VERSION)
+    if (core_le_load_u32(data) != IR_ARCHIVE_MAGIC
+        || core_le_load_u32(data + 4) != IR_ARCHIVE_VERSION)
         return false;
     size_t consumed = 0;
-    r->types = th_type_reader_open(ir_ctx_types(ctx), data + 8, length - 8,
-                                   &consumed);
+    r->owned = input->types ? nullptr : th_type_reader_open(ir_ctx_types(ctx),
+        data + 8, length - 8, &consumed);
+    r->types = input->types ? input->types : r->owned;
     if (!r->types) return false;
     r->ctx = ctx;
-    r->data = data;
+    r->in = core_cursor(data + 8 + consumed, length - 8 - consumed);
     r->length = length;
-    r->at = 8 + consumed;
     uint32_t modules = r_u32(r);
-    if (r->failed || modules > capacity || (modules && !out)) return false;
+    if (r->in.failed || modules > capacity || (modules && !out)) return false;
     r->modules = out;
     r->slot_counts = core_alloc_array(size_t, modules + 1);
     r->slot_types = core_alloc_array(th_type **, modules + 1);
@@ -1486,7 +1451,7 @@ reader_open(reader_t *r, ir_ctx_t *ctx, const ir_archive_input_t *input,
 static void
 reader_close(reader_t *r, size_t modules)
 {
-    if (r->types) th_type_reader_free(r->types);
+    th_type_reader_free(r->owned);
     for (size_t m = 0; r->slot_types && m < modules; m++)
         core_free(r->slot_types[m]);
     core_free(r->slot_types);
@@ -1523,7 +1488,7 @@ ir_archives_load(ir_ctx_t *ctx, const ir_archive_input_t *inputs,
     for (size_t i = 0; ok && i < input_count; i++) {
         load_headers(&readers[i], profiles, profile_count,
                      (uint32_t)declared[i]);
-        ok = !readers[i].failed;
+        ok = !readers[i].in.failed;
     }
     void (*const stages[])(reader_t *) = {
         load_slots, load_skeletons, load_globals, load_details,
@@ -1531,7 +1496,7 @@ ir_archives_load(ir_ctx_t *ctx, const ir_archive_input_t *inputs,
     for (size_t s = 0; ok && s < sizeof(stages) / sizeof(*stages); s++)
         for (size_t i = 0; ok && i < input_count; i++) {
             stages[s](&readers[i]);
-            ok = !readers[i].failed;
+            ok = !readers[i].in.failed;
         }
     for (size_t i = 0; i < input_count; i++)
         reader_close(&readers[i], declared[i]);

@@ -1,5 +1,6 @@
 #include "abi_semantics.h"
 #include "abi_type_index.h"
+#include "compiler_cache.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -12,10 +13,7 @@ typedef struct {
     th_type *type;
     uint32_t index;
 } receiver_t;
-typedef struct {
-    uint32_t child;
-    uint32_t parent;
-} specialization_t;
+typedef n00bb_abi_specialization_t specialization_t;
 core_list_decl(receiver_t);
 core_list_decl(specialization_t);
 core_list_decl(n00b_abi_dispatch_v1);
@@ -152,18 +150,23 @@ same_string(n00bb_abi_string_view_t value, core_string_t text)
 }
 
 static bool
+receivable(const link_index_t *link, uint32_t index)
+{
+    const n00bb_abi_merged_table_t *types = link->types;
+    const n00b_abi_type_v1 *row = index ? (const void *)(types->records
+        + (size_t)index * types->record_bytes) : nullptr;
+    return row && !(row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
+        && row->kind != N00B_ABI_TYPE_TRAIT;
+}
+
+static bool
 add_receiver(th_ctx *ctx, link_index_t *link,
              core_list_t(receiver_t) *receivers, core_dict_t *seen,
              th_type *type)
 {
-    const n00bb_abi_merged_table_t *types = link->types;
     if (!type || !th_is_closed(ctx, type)) return true;
     uint32_t index = type_index(link, th_hash(ctx, type));
-    if (!index) return true;
-    const n00b_abi_type_v1 *row = (const void *)(types->records
-        + (size_t)index * types->record_bytes);
-    if ((row->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
-        || row->kind == N00B_ABI_TYPE_TRAIT
+    if (!receivable(link, index)
         || core_dict_contains(seen, (void *)(uintptr_t)index)) return true;
     th_type *copy = th_type_clone(ctx, type);
     if (!copy) return false;
@@ -184,6 +187,20 @@ add_rows(n00bb_abi_rows_t *into, const n00bb_abi_rows_t *rows)
 {
     for (size_t i = 0; rows && i < rows->len; i++)
         core_list_push(*into, rows->data[i]);
+}
+
+static int
+key_order(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *)left, b = *(const uint64_t *)right;
+    return a < b ? -1 : a > b;
+}
+
+static int
+receiver_order(const void *left, const void *right)
+{
+    const receiver_t *a = left, *b = right;
+    return a->index < b->index ? -1 : a->index > b->index;
 }
 
 static int
@@ -372,61 +389,11 @@ add_specializations(n00bb_abi_merged_rows_t *merged,
         if (!unique || compare_specializations(&edges.data[i],
                                                 &edges.data[unique - 1]))
             edges.data[unique++] = edges.data[i];
-    bool valid = unique < UINT32_MAX;
-    uint32_t *incoming = valid
-        ? core_alloc_array(uint32_t, types->record_count) : nullptr;
-    uint32_t *queue = valid
-        ? core_alloc_array(uint32_t, types->record_count) : nullptr;
-    n00b_abi_range_v1 *spans = valid
-        ? core_alloc_array(n00b_abi_range_v1, types->record_count) : nullptr;
-    uint32_t *rebuilt = valid
-        ? core_alloc_array(uint32_t, unique + 1) : nullptr;
-    valid = valid && incoming && queue && spans && rebuilt;
-    if (valid) {
-        memset(incoming, 0, types->record_count * sizeof(*incoming));
-        memset(spans, 0, types->record_count * sizeof(*spans));
-        rebuilt[0] = 0;
-        for (size_t i = 0; valid && i < unique; i++) {
-            specialization_t edge = edges.data[i];
-            if (!edge.child || !edge.parent || edge.child == edge.parent
-                || edge.child >= types->record_count
-                || edge.parent >= types->record_count) { valid = false; break; }
-            n00b_abi_range_v1 *span = &spans[edge.child];
-            if (!span->count) span->first = (uint32_t)i + 1;
-            span->count++;
-            rebuilt[i + 1] = edge.parent;
-            incoming[edge.parent]++;
-        }
-        size_t head = 0, tail = 0;
-        for (uint32_t i = 0; valid && i < types->record_count; i++)
-            if (!incoming[i]) queue[tail++] = i;
-        while (valid && head < tail) {
-            uint32_t child = queue[head++];
-            n00b_abi_range_v1 span = spans[child];
-            for (uint32_t j = 0; j < span.count; j++) {
-                uint32_t parent = rebuilt[span.first + j];
-                if (!--incoming[parent]) queue[tail++] = parent;
-            }
-        }
-        valid = valid && tail == types->record_count;
-    }
-    if (valid) {
-        for (uint32_t i = 0; i < types->record_count; i++) {
-            n00b_abi_type_v1 *type = (void *)(types->records
-                + (size_t)i * types->record_bytes);
-            type->specialization_start_ix = spans[i].first;
-            type->specialization_end_ix = spans[i].count
-                ? spans[i].first + spans[i].count : 0;
-        }
-        core_free(links->records);
-        links->records = (uint8_t *)rebuilt;
-        links->record_count = (uint32_t)unique + 1;
-        rebuilt = nullptr;
-    }
-    core_free(rebuilt);
-    core_free(spans);
-    core_free(queue);
-    core_free(incoming);
+    bool valid = true;
+    for (size_t i = 0; i < unique; i++)
+        valid = valid && edges.data[i].child && edges.data[i].parent;
+    valid = valid
+        && n00bb_abi_link_specializations(types, links, edges.data, unique);
     core_list_free(edges);
     return valid;
 }
@@ -545,13 +512,48 @@ n00bb_abi_link_semantic_rows(
         valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
             th_name(ctx, declaration.qualified_name));
     }
-    for (size_t m = 0; valid && m < facts->module_count; m++) {
+    core_dict_t interned;
+    core_dict_init(&interned, nullptr, nullptr);
+    for (size_t m = 0; m < facts->module_count; m++) {
         ir_module_t *module = (ir_module_t *)facts->modules[m];
-        for (size_t i = 0; valid && i < ir_type_count(module); i++)
-            valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
-                ir_type_at(module, i));
+        for (size_t i = 0; i < ir_type_count(module); i++) {
+            th_type *type = ir_type_at(module, i);
+            if (type && th_is_closed(ctx, type))
+                core_dict_add(&interned,
+                              (void *)(uintptr_t)th_hash(ctx, type), type);
+        }
     }
+    for (size_t s = 0; valid && s < selected->count; s++) {
+        const n00bb_abi_object_view_t *view = &selected->views[s];
+        const n00bb_abi_directory_entry_t *rows = n00bb_abi_object_table(view,
+            N00B_ABI_TABLE_TYPE);
+        for (uint32_t r = 1; valid && rows && r < rows->record_count; r++) {
+            const n00b_abi_type_v1 *row = n00bb_abi_object_row(view,
+                N00B_ABI_TABLE_TYPE, r);
+            uint32_t linked = row ? type_index(&link, row->typehash) : 0;
+            if (!receivable(&link, linked)
+                || core_dict_contains(&seen_receivers,
+                                      (void *)(uintptr_t)linked)) continue;
+            bool known = false;
+            th_type *type = core_dict_get(&interned,
+                (void *)(uintptr_t)row->typehash, &known);
+            if (!known) {
+                const th_type *cached = n00bb_cache_type(facts->cache,
+                                                         row->typehash);
+                type = cached ? th_type_clone(ctx, cached) : nullptr;
+                core_dict_add(&interned, (void *)(uintptr_t)row->typehash,
+                              type);
+            }
+            if (type && th_hash(ctx, type) == row->typehash)
+                valid = add_receiver(ctx, &link, &receivers, &seen_receivers,
+                                     type);
+        }
+    }
+    core_dict_free(&interned);
     core_dict_free(&seen_receivers);
+    if (valid && receivers.len > 1)
+        qsort(receivers.data, receivers.len, sizeof(*receivers.data),
+              receiver_order);
     for (size_t r = 0; valid && r < receivers.len; r++) {
         th_type *head = n00bb_generic_head(ctx, receivers.data[r].type);
         uint32_t parent = head ? type_index(&link, th_hash(ctx, head)) : 0;
@@ -563,7 +565,20 @@ n00bb_abi_link_semantic_rows(
     bool *matches = receivers.len
         ? core_alloc_array(bool, receivers.len) : nullptr;
     valid = valid && (!receivers.len || matches != nullptr);
-    for (size_t i = 0; valid && i < declarations; i++) {
+    uint64_t *ordered = core_alloc_array(uint64_t, declarations + 1);
+    size_t trait_count = 0;
+    for (size_t i = 0; valid && ordered && i < declarations; i++) {
+        th_env_declaration_view_t trait;
+        if (th_env_declaration_at(facts->environment, i, &trait)
+            && trait.kind == TH_ENV_DECLARATION_TRAIT && trait.contract
+            && th_kind_of(trait.contract) == TH_TRAIT)
+            ordered[trait_count++] = (uint64_t)type_index(&link,
+                th_hash(ctx, trait.contract)) << 32 | i;
+    }
+    if (trait_count > 1)
+        qsort(ordered, trait_count, sizeof(*ordered), key_order);
+    for (size_t t = 0; valid && t < trait_count; t++) {
+        size_t i = (uint32_t)ordered[t];
         th_env_declaration_view_t trait;
         valid = th_env_declaration_at(facts->environment, i, &trait);
         if (!valid || trait.kind != TH_ENV_DECLARATION_TRAIT) continue;
@@ -672,6 +687,7 @@ n00bb_abi_link_semantic_rows(
     core_list_free(specializations);
     core_list_free(receivers);
     core_free(matches);
+    core_free(ordered);
     link_index_close(&link);
     if (!facts->types) th_ctx_free(ctx);
     return valid;

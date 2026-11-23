@@ -18,6 +18,7 @@ enum { SUMMARY_METADATA_VERSION = 2 };
 typedef struct {
     core_list_t(core_string_t) texts;
     ir_summary_texts_t         table;
+    th_type_reader_t          *types;
 } module_texts_t;
 
 typedef module_texts_t *module_texts_ptr_t;
@@ -38,6 +39,7 @@ struct n00bb_interface_summaries_t {
     core_dict_t by_function;
     core_list_t(interface_summary_ptr_t) owned;
     core_list_t(module_texts_ptr_t) tables;
+    th_ctx *types;
 };
 
 static core_string_t
@@ -60,10 +62,9 @@ intern_text(void *context, core_string_t text)
     bool      found = false;
     uintptr_t id    = (uintptr_t)core_dict_get(&interner->ids, &text, &found);
     if (found) return (uint32_t)id;
-    core_list_push(interner->texts, text);
+    core_string_t *key = core_dict_string_key_copy(text);
+    core_list_push(interner->texts, *key);
     id = interner->texts.len;
-    core_string_t *key = core_alloc(core_string_t);
-    *key = text;
     core_dict_put(&interner->ids, key, (void *)id);
     return (uint32_t)id;
 }
@@ -82,14 +83,6 @@ summary_equal(const void *left, const void *right)
     const interface_summary_t *a = left, *b = right;
     return core_string_eq(a->module, b->module)
         && core_string_eq(a->function, b->function);
-}
-
-static void
-put_u32(core_buffer_t *out, uint32_t value)
-{
-    uint8_t bytes[4];
-    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
-    core_buffer_append(out, (const char *)bytes, 4);
 }
 
 enum { BODY_AS_CACHED = 1 };
@@ -155,44 +148,49 @@ body_matches(void *context, const ir_func_t *function, uint64_t body)
 
 static bool
 module_summaries(n00bb_link_analysis_t *analysis, ir_summaries_t *summaries,
-                 ir_module_t *module, uint8_t phase, core_buffer_t *out)
+                 ir_summaries_t *except, ir_module_t *module, uint8_t phase,
+                 th_type_writer_t *types, core_buffer_t *out)
 {
     core_buffer_t encoded = {0};
     uint32_t count = 0;
     bool ok = true;
     text_interner_t interner = {.texts = core_list_new(core_string_t)};
     core_dict_init_string(&interner.ids);
-    ir_summary_texts_t texts = {.intern = intern_text, .context = &interner};
+    th_type_writer_t *own = types ? nullptr
+                                  : th_type_writer_new(ir_module_types(module));
+    ir_summary_texts_t texts = {
+        .intern = intern_text, .context = &interner,
+        .types = types ? types : own,
+    };
     for (size_t f = 0; ok && f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
         ir_summary_t *summary = function->n_blocks
             ? ir_summary_of(summaries, function) : nullptr;
-        if (!summary) continue;
+        if (!summary || (except && (summary == ir_summary_of(except, function)
+                                    || !ir_summary_results_known(summary))))
+            continue;
         core_buffer_t bytes = {0};
         ok = phase
             ? ir_summary_encode_stored(summaries, function,
                   body_marker(analysis, function, phase), &texts, &bytes)
             : ir_summary_encode_with(summary, &bytes, &texts);
-        put_u32(&encoded, (uint32_t)function->name.u8_bytes);
-        core_buffer_append(&encoded, function->name.data,
-                           function->name.u8_bytes);
-        put_u32(&encoded, (uint32_t)bytes.byte_len);
-        core_buffer_append(&encoded, bytes.data, bytes.byte_len);
+        core_put_text(&encoded, function->name);
+        core_put_bytes(&encoded, bytes.data, bytes.byte_len);
         core_buffer_release(&bytes);
         count++;
     }
-    put_u32(out, (uint32_t)interner.texts.len);
-    for (size_t t = 0; t < interner.texts.len; t++) {
-        put_u32(out, (uint32_t)interner.texts.data[t].u8_bytes);
-        core_buffer_append(out, interner.texts.data[t].data,
-                           interner.texts.data[t].u8_bytes);
-    }
-    core_dict_foreach(&interner.ids, entry) core_free(entry->key);
+    core_put_u32(out, (uint32_t)interner.texts.len);
+    for (size_t t = 0; t < interner.texts.len; t++)
+        core_put_text(out, interner.texts.data[t]);
+    core_dict_foreach(&interner.ids, entry)
+        core_dict_string_key_free(entry->key);
     core_dict_free(&interner.ids);
     core_list_free(interner.texts);
-    put_u32(out, count);
+    core_put_u32(out, count);
     core_buffer_append(out, encoded.data, encoded.byte_len);
     core_buffer_release(&encoded);
+    if (own) ok = th_type_writer_finish(own, out) && ok;
+    th_type_writer_free(own);
     return ok;
 }
 
@@ -256,7 +254,8 @@ static bool
 encode_summaries(void *context, ir_module_t *module, core_buffer_t *out)
 {
     n00bb_link_analysis_t *analysis = context;
-    return module_summaries(analysis, analysis->summaries, module, 0, out);
+    return module_summaries(analysis, analysis->summaries, nullptr, module, 0,
+                            nullptr, out);
 }
 
 bool
@@ -268,63 +267,47 @@ n00bb_publish_function_summaries(n00bb_link_analysis_t *analysis)
         SUMMARY_METADATA_VERSION, encode_summaries, analysis);
 }
 
-static bool
-read_u32(const uint8_t *data, size_t size, size_t *at, uint32_t *out)
-{
-    if (size - *at < 4) return false;
-    *out = 0;
-    for (int i = 0; i < 4; i++)
-        *out |= (uint32_t)data[*at + (size_t)i] << (8 * i);
-    *at += 4;
-    return true;
-}
-
 static void
 index_module(n00bb_interface_summaries_t *index, core_string_t module,
-             const uint8_t *data, size_t size)
+             const uint8_t *data, size_t size, const th_type_reader_t *types)
 {
-    size_t at = 0;
-    uint32_t count = 0;
-    if (!read_u32(data, size, &at, &count)) return;
+    core_byte_cursor_t in = core_cursor(data, size);
+    uint32_t count = core_cursor_u32(&in);
+    if (in.failed) return;
     module_texts_t *table = core_alloc(module_texts_t);
     table->texts = core_list_new(core_string_t);
-    table->table = (ir_summary_texts_t){.lookup = text_at, .context = table};
+    table->table = (ir_summary_texts_t){
+        .lookup = text_at, .context = table, .reader = types,
+    };
     core_list_push(index->tables, table);
-    for (uint32_t t = 0; t < count; t++) {
-        uint32_t bytes = 0;
-        if (!read_u32(data, size, &at, &bytes) || size - at < bytes) return;
-        core_list_push(table->texts, core_string_borrow(
-            (const char *)data + at, bytes));
-        at += bytes;
-    }
-    if (!read_u32(data, size, &at, &count)) return;
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t name_bytes = 0, summary_bytes = 0;
-        if (!read_u32(data, size, &at, &name_bytes)
-            || size - at < name_bytes) return;
-        core_string_t function = core_string_borrow(
-            (const char *)data + at, name_bytes);
-        at += name_bytes;
-        if (!read_u32(data, size, &at, &summary_bytes)
-            || size - at < summary_bytes) return;
+    for (uint32_t t = 0; !in.failed && t < count; t++)
+        core_list_push(table->texts, core_cursor_text(&in));
+    count = core_cursor_u32(&in);
+    for (uint32_t i = 0; !in.failed && i < count; i++) {
+        core_string_t function = core_cursor_text(&in);
+        size_t bytes = 0;
+        const uint8_t *summary = core_cursor_bytes(&in, &bytes);
+        if (in.failed) return;
         interface_summary_t *entry = core_alloc(interface_summary_t);
         *entry = (interface_summary_t){
             .module = module, .function = function,
-            .data = data + at, .size = summary_bytes,
+            .data = summary, .size = bytes,
             .texts = &table->table,
         };
-        at += summary_bytes;
         if (core_dict_add(&index->by_function, entry, entry))
             core_list_push(index->owned, entry);
         else core_free(entry);
     }
+    if (!types && !in.failed)
+        table->table.reader = table->types = th_type_reader_open(index->types,
+            in.at, (size_t)(in.end - in.at), nullptr);
 }
 
 static bool
 index_metadata(void *context, core_string_t module, const uint8_t *data,
                size_t size)
 {
-    index_module(context, module, data, size);
+    index_module(context, module, data, size, nullptr);
     return true;
 }
 
@@ -338,14 +321,22 @@ index_environment(n00bb_interface_summaries_t *index,
 }
 
 static n00bb_interface_summaries_t *
-interface_index(n00bb_link_analysis_t *analysis)
+new_index(n00bb_link_analysis_t *analysis)
 {
-    if (analysis->interface_summaries) return analysis->interface_summaries;
     n00bb_interface_summaries_t *index =
         core_alloc(n00bb_interface_summaries_t);
     core_dict_init(&index->by_function, summary_hash, summary_equal);
     index->owned = core_list_new(interface_summary_ptr_t);
     index->tables = core_list_new(module_texts_ptr_t);
+    index->types = ir_ctx_types(analysis->ir_context);
+    return index;
+}
+
+static n00bb_interface_summaries_t *
+interface_index(n00bb_link_analysis_t *analysis)
+{
+    if (analysis->interface_summaries) return analysis->interface_summaries;
+    n00bb_interface_summaries_t *index = new_index(analysis);
     for (size_t e = 0; e < analysis->linked_interface_count; e++)
         index_environment(index, analysis->linked_interfaces[e]);
     analysis->interface_summaries = index;
@@ -448,43 +439,45 @@ n00bb_interface_summary(n00bb_link_analysis_t *analysis,
 
 bool
 n00bb_encode_stored_summaries(n00bb_link_analysis_t *analysis,
-                              ir_summaries_t *summaries, ir_module_t *module,
-                              uint8_t phase, core_buffer_t *out)
+                              ir_summaries_t *summaries,
+                              ir_summaries_t *except, ir_module_t *module,
+                              uint8_t phase, th_type_writer_t *types,
+                              core_buffer_t *out)
 {
-    return summaries && phase
-        && module_summaries(analysis, summaries, module, phase, out);
+    return summaries && phase && types
+        && module_summaries(analysis, summaries, except, module, phase, types,
+                            out);
 }
 
 static const core_string_t stored_sections[] = {
     CORE_STRING_STATIC("escapes"),
     CORE_STRING_STATIC("summaries"),
     CORE_STRING_STATIC("final"),
+    CORE_STRING_STATIC("program"),
 };
 
 static n00bb_interface_summaries_t *
-stored_index(n00bb_link_analysis_t *analysis, uint8_t phase)
+stored_index(n00bb_link_analysis_t *analysis, size_t slot)
 {
-    n00bb_interface_summaries_t **slot =
-        &analysis->stored_summaries[phase - 1];
-    if (*slot) return *slot;
-    n00bb_interface_summaries_t *index =
-        core_alloc(n00bb_interface_summaries_t);
-    core_dict_init(&index->by_function, summary_hash, summary_equal);
-    index->owned = core_list_new(interface_summary_ptr_t);
-    index->tables = core_list_new(module_texts_ptr_t);
+    bool record = slot == N00BB_PHASE_FINAL;
+    if (analysis->stored_summaries[slot])
+        return analysis->stored_summaries[slot];
+    n00bb_interface_summaries_t *index = new_index(analysis);
     for (size_t u = 0; analysis->cache && u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
         const uint8_t *data = nullptr;
         size_t size = 0;
-        if (state && state->ir_module && state->interface_module
-            && n00bb_cache_module_summaries(analysis->cache,
-                   unit->module.identifier, stored_sections[phase - 1],
-                   &data, &size))
+        const th_type_reader_t *types = nullptr;
+        if (state && state->ir_module && (record || state->interface_module)
+            && (record ? n00bb_cache_record_section
+                       : n00bb_cache_module_section)(analysis->cache,
+                   unit->module.identifier, stored_sections[slot], &data,
+                   &size, &types) && types)
             index_module(index, ir_module_name(state->ir_module), data,
-                         size);
+                         size, types);
     }
-    *slot = index;
+    analysis->stored_summaries[slot] = index;
     return index;
 }
 
@@ -495,14 +488,19 @@ n00bb_stored_summary(void *context, ir_summaries_t *summaries,
     n00bb_link_analysis_t *analysis = context;
     uint8_t phase = analysis ? analysis->summary_phase : 0;
     if (!phase || phase > 3 || !analysis->cache || !function
-        || !function->n_blocks || !function->owner)
-        return nullptr;
+        || !function->n_blocks || !function->owner
+        || (analysis->program_layer && analysis->may_link_further))
+        return analysis && analysis->program_layer
+            ? ir_summary_of(analysis->library_summaries, function) : nullptr;
     interface_summary_t probe = {
         .module = ir_module_name(function->owner), .function = function->name,
     };
     bool found = false;
-    interface_summary_t *entry = core_dict_get(
-        &stored_index(analysis, phase)->by_function, &probe, &found);
+    interface_summary_t *entry = core_dict_get(&stored_index(analysis,
+        analysis->program_layer ? N00BB_PHASE_FINAL : phase - 1u)
+            ->by_function, &probe, &found);
+    if (!found && analysis->program_layer)
+        return ir_summary_of(analysis->library_summaries, function);
     ir_summary_resolver_t resolver = {
         .global = resolve_global, .function = resolve_function,
         .context = analysis, .texts = found ? entry->texts : nullptr,
@@ -521,6 +519,7 @@ n00bb_interface_summaries_free(n00bb_interface_summaries_t *index)
         core_free(index->owned.data[i]);
     core_list_free(index->owned);
     for (size_t i = 0; i < index->tables.len; i++) {
+        th_type_reader_free(index->tables.data[i]->types);
         core_list_free(index->tables.data[i]->texts);
         core_free(index->tables.data[i]);
     }

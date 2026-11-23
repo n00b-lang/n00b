@@ -22,49 +22,19 @@ build_escape_facts(n00bb_link_analysis_t *analysis)
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++)
-            core_list_push(roots, ir_func_at(state->ir_module, f));
-    }
+    n00bb_unit_bodies(analysis, &roots);
+    analysis->summary_phase = N00BB_PHASE_ESCAPES;
     bind_summary_hooks(analysis, true);
     n00bb_push_summary_roots(analysis, &roots);
     ir_summaries_free(analysis->escapes);
-    analysis->summary_phase = N00BB_PHASE_ESCAPES;
+    analysis->escaped_ready = false;
     analysis->escapes = ir_escapes_compute(roots.data, roots.len,
                                            &analysis->summary_hooks);
-    analysis->summary_phase = 0;
     ir_analysis_bind_summaries(analysis->escapes);
     core_list_free(roots);
+    if (analysis->escapes) n00bb_collect_escaped_globals(analysis);
+    analysis->summary_phase = 0;
     return analysis->escapes != nullptr;
-}
-
-bool
-mark_diverging_calls(n00bb_link_analysis_t *analysis)
-{
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        ir_module_t *module = state->ir_module;
-        for (size_t f = 0; f < ir_func_count(module); f++) {
-            ir_func_t *function = ir_func_at(module, f);
-            for (uint32_t b = 0; b < function->n_blocks; b++)
-                for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-                    ir_instr_t *call = function->blocks[b]->instrs[i];
-                    if ((call->op != IR_OP_CALL
-                         && call->op != IR_OP_CALLBACK_INVOKE)
-                        || !ir_summary_call_diverges(analysis->escapes, call))
-                        continue;
-                    if (!ir_annot_set(analysis->ir_context,
-                            &call->annots, (ir_annot_t){
-                                .key = CORE_STRING_STATIC("ir.diverges"),
-                                .kind = IR_ANNOT_BOOL, .b = true}))
-                        return false;
-                }
-        }
-    }
-    return true;
 }
 
 static void
@@ -100,7 +70,7 @@ mark_external_call_return(n00bb_link_analysis_t *analysis,
 }
 
 bool
-mark_external_call_returns(n00bb_link_analysis_t *analysis)
+mark_calls(n00bb_link_analysis_t *analysis, bool diverging)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
@@ -110,10 +80,17 @@ mark_external_call_returns(n00bb_link_analysis_t *analysis)
             ir_func_t *function = ir_func_at(module, f);
             for (uint32_t b = 0; b < function->n_blocks; b++)
                 for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-                    ir_instr_t *in = function->blocks[b]->instrs[i];
-                    if ((in->op == IR_OP_CALL
-                         || in->op == IR_OP_CALLBACK_INVOKE)
-                        && !mark_external_call_return(analysis, function, in))
+                    ir_instr_t *call = function->blocks[b]->instrs[i];
+                    if (call->op != IR_OP_CALL
+                        && call->op != IR_OP_CALLBACK_INVOKE) continue;
+                    if (diverging
+                        ? ir_summary_call_diverges(analysis->escapes, call)
+                          && !ir_annot_set(analysis->ir_context,
+                              &call->annots, (ir_annot_t){
+                                  .key = CORE_STRING_STATIC("ir.diverges"),
+                                  .kind = IR_ANNOT_BOOL, .b = true})
+                        : !mark_external_call_return(analysis, function,
+                                                     call))
                         return false;
                 }
         }

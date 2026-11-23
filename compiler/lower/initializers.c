@@ -503,7 +503,8 @@ static bool
 collect_phase_reachable_function(ir_func_t *function, void *raw)
 {
     reachable_collection_t *collection = raw;
-    if (!n00bb_cache_owns(collection->cache, function->owner))
+    if (!collection->cached
+        || !n00bb_cache_owns(collection->cache, function->owner))
         core_list_push(*collection->functions, function);
     else if (collection->cached && function->n_blocks)
         core_list_push(*collection->cached, function);
@@ -550,6 +551,15 @@ function_has_body(ir_func_t *function)
         || ir_annot_get(&function->annots, CORE_STRING_STATIC("n00bb.cached_body"));
 }
 
+static ir_module_t *
+ordered_module(core_list_t(core_translation_unit_ptr_t) *order, size_t i,
+               core_string_t *name)
+{
+    ir_module_t *module = unit_module(tu_state(order->data[i]));
+    *name = module ? ir_module_name(module) : (core_string_t){};
+    return module;
+}
+
 static void
 suggest_program_function(core_diagnostics_t *diagnostics, core_string_t name,
     core_list_t(core_translation_unit_ptr_t) *initializer_order)
@@ -567,9 +577,9 @@ suggest_program_function(core_diagnostics_t *diagnostics, core_string_t name,
     }
     core_list_t(core_string_t) candidates = core_list_new(core_string_t);
     for (size_t i = 0; i < initializer_order->len; i++) {
-        ir_module_t *module = unit_module(tu_state(initializer_order->data[i]));
-        core_string_t module_name = module ? ir_module_name(module)
-                                           : (core_string_t){};
+        core_string_t module_name;
+        ir_module_t *module = ordered_module(initializer_order, i,
+                                             &module_name);
         if (!module_name.u8_bytes
             || (module_known && !core_string_eq(module_name, wanted_module)))
             continue;
@@ -618,10 +628,9 @@ collect_program_roots(
                                         CORE_STRING_STATIC(N00BB_START_NAME));
     if (entry) core_list_push(roots, entry);
     for (size_t i = 0; i < initializer_order->len; i++) {
-        n00bb_tu_state_t *state = tu_state(initializer_order->data[i]);
-        ir_module_t *module = unit_module(state);
-        core_string_t module_name = module ? ir_module_name(module)
-                                           : (core_string_t){};
+        core_string_t module_name;
+        ir_module_t *module = ordered_module(initializer_order, i,
+                                             &module_name);
         if (!module_name.data) continue;
         for (size_t j = 0; j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
@@ -648,10 +657,9 @@ collect_program_roots(
     for (size_t r = 0; r < analysis->native_root_count; r++) {
         bool found = false;
         for (size_t i = 0; i < initializer_order->len && !found; i++) {
-            n00bb_tu_state_t *state = tu_state(initializer_order->data[i]);
-            ir_module_t *module = unit_module(state);
-            core_string_t owner = module ? ir_module_name(module)
-                                         : (core_string_t){};
+            core_string_t owner;
+            ir_module_t *module = ordered_module(initializer_order, i,
+                                                 &owner);
             if (!owner.data) continue;
             for (size_t j = 0; j < ir_func_count(module); j++) {
                 ir_func_t *function = ir_func_at(module, j);
@@ -679,10 +687,9 @@ collect_program_roots(
             n00bb_native_root_registered_at(r)->qualified_name);
         bool found = false;
         for (size_t i = 0; i < initializer_order->len && !found; i++) {
-            ir_module_t *module = unit_module(
-                tu_state(initializer_order->data[i]));
-            core_string_t module_name = module ? ir_module_name(module)
-                                               : (core_string_t){};
+            core_string_t module_name;
+            ir_module_t *module = ordered_module(initializer_order, i,
+                                                 &module_name);
             size_t prefix = module_name.u8_bytes;
             ir_func_t *function = prefix
                 && core_string_starts_with(name, module_name)

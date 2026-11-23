@@ -1,0 +1,9 @@
+record Block layout(c) {
+    marks: Array[byte][4]
+    bits: Array[Atomic[u64]][2]
+}
+
+record Plain {
+    marks: Array[byte][4]
+    bits: Array[Atomic[u64]][2]
+}

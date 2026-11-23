@@ -1,0 +1,5 @@
+type Count_Id = u128
+
+func count_id(count: int) -> Count_Id {
+    return cast[Count_Id] cast[u128] count
+}

@@ -5,8 +5,9 @@ compiler=$1
 sources=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-shared_cache=${N00B_CACHE-}
-N00B_CACHE="$tmp/cache"
+cp -R "$sources" "$tmp/sources"
+sources=$tmp/sources
+N00B_CACHE=${N00B_CACHE:-$tmp/cache}
 export N00B_CACHE
 export N00B_DIAGNOSTICS=terse
 
@@ -45,12 +46,7 @@ grep -q 'calls `alpha.impl.note`' "$tmp/out" \
     || fail "the interface note doesn't name alpha.impl.note once"
 N00B_PATH="$sources" "$compiler" library --emit-interface "$tmp/sorter.n00bi" \
     sorter.facade >"$tmp/out" 2>&1 || fail "emitting sorter's interface failed"
-if [ -n "$shared_cache" ]; then
-    set -- env N00B_CACHE="$shared_cache"
-else
-    set -- env -u N00B_CACHE
-fi
-"$@" "$compiler" build \
+"$compiler" build \
     --link-interface "$tmp/alpha.n00bi" --link-interface "$tmp/sorter.n00bi" \
     --output "$tmp/runs" "$sources/runs.n" >"$tmp/out" 2>&1 \
     || fail "a program didn't build from library interfaces"

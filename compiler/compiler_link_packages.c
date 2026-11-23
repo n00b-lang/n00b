@@ -1176,7 +1176,8 @@ register_library_ir(n00bb_link_analysis_t *analysis, core_string_t owner)
     core_buffer_t archive = {0};
     core_buffer_t references = {0};
     bool ok = modules && (!count || (ir_modules_save_references(modules,
-                                         count, &archive, &references)
+                                         count, &archive, &references,
+                                         nullptr)
         && th_env_register_metadata(environment,
                TH_ENV_METADATA_ENVIRONMENT, owner,
                CORE_STRING_STATIC(N00BB_LIBRARY_IR_KEY), 1, archive.data,

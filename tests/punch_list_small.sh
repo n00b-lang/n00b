@@ -6,12 +6,24 @@ src=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-"$compiler" build --no-syntax-warnings -D PUNCH_FLAG \
+"$compiler" build --no-syntax-warnings \
     --output "$tmp/small" "$src/tests/programs/punch_list_small.n" \
     >"$tmp/compile.out" 2>"$tmp/compile.err"
 "$tmp/small" >"$tmp/stdout" 2>"$tmp/stderr"
 test ! -s "$tmp/stdout"
 test "$(cat "$tmp/stderr")" = ok
+
+cat >"$tmp/define.n" <<'EOF'
+when preproc_defines("PUNCH_FLAG") and preproc_value("PUNCH_FLAG") {
+    let bare_define = true
+} else {
+    let bare_define: int = "undefined"
+}
+EOF
+"$compiler" check -D PUNCH_FLAG "$tmp/define.n" >"$tmp/compile.out" 2>&1
+if "$compiler" check "$tmp/define.n" >"$tmp/compile.out" 2>&1; then
+    exit 1
+fi
 
 cat >"$tmp/unreachable.n" <<'EOF'
 func f(x: int) -> int {

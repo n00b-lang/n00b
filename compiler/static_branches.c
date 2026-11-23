@@ -5,8 +5,8 @@
 #include "lib/alloc.h"
 #include "th/environment.h"
 
-static th_type *
-test_source_type(th_ctx *types, ir_value_t *value)
+th_type *
+n00bb_type_test_source(th_ctx *types, ir_value_t *value)
 {
     for (size_t depth = 0; value && depth < 8; depth++) {
         if (th_is_closed(types, value->type)) return value->type;
@@ -35,7 +35,7 @@ n00bb_static_type_test(const ir_instr_t *test)
         || test->operands[1].kind != IR_OPD_TYPE
         || !test->operands[0].value || !test->block) return -1;
     th_ctx *types = ir_module_types(test->block->owner->owner);
-    th_type *source = test_source_type(types, test->operands[0].value);
+    th_type *source = n00bb_type_test_source(types, test->operands[0].value);
     th_type *pattern = test->operands[1].type;
     th_type *resolved = source ? th_resolve(source) : nullptr;
     if (!resolved || !pattern || !th_is_closed(types, resolved)
@@ -121,42 +121,6 @@ branch_type_test(ir_block_t *block)
     return test && test->op == IR_OP_TYPE_TEST ? test : nullptr;
 }
 
-static uint64_t
-annotated_int(const ir_annots_t *annots, core_string_t key)
-{
-    ir_annot_t *seen = ir_annot_get((ir_annots_t *)annots, key);
-    return seen && seen->kind == IR_ANNOT_INT ? (uint64_t)seen->i.mag : 0;
-}
-
-static void
-note_outcome(ir_ctx_t *context, ir_func_t *origin, uint32_t block,
-             uint64_t outcomes)
-{
-    ir_instr_t *test = block < origin->n_blocks
-        ? branch_type_test(origin->blocks[block]) : nullptr;
-    if (test)
-        (void)ir_annot_set(context, &test->annots, (ir_annot_t){
-            .key = CORE_STRING_STATIC(N00BB_TYPE_TEST_OUTCOMES_KEY),
-            .kind = IR_ANNOT_INT,
-            .i = {.mag = outcomes | annotated_int(&test->annots,
-                CORE_STRING_STATIC(N00BB_TYPE_TEST_OUTCOMES_KEY))}});
-}
-
-uint64_t
-n00bb_type_test_outcomes(const ir_instr_t *test)
-{
-    return annotated_int(&test->annots,
-                         CORE_STRING_STATIC(N00BB_TYPE_TEST_OUTCOMES_KEY));
-}
-
-bool
-n00bb_instantiated(const ir_func_t *function)
-{
-    return annotated_int(&function->annots,
-                         CORE_STRING_STATIC(N00BB_TYPE_TEST_OUTCOMES_KEY))
-        != 0;
-}
-
 void
 n00bb_fold_exit_verdicts(ir_func_t *function)
 {
@@ -177,17 +141,18 @@ n00bb_fold_exit_verdicts(ir_func_t *function)
 }
 
 bool
-n00bb_fold_static_branches(ir_func_t *function, ir_func_t *origin,
-                           ir_ctx_t *context)
+n00bb_fold_static_branches(ir_func_t *function,
+                           core_list_t(uint32_t) *outcomes)
 {
     bool folded = false;
     uint32_t count = function->n_blocks;
-    uint8_t *outcomes = core_alloc_array(uint8_t, count + 1);
+    *outcomes = core_list_new(uint32_t);
     for (uint32_t b = 0; b < count; b++) {
         ir_instr_t *term = ir_block_terminator(function->blocks[b]);
         ir_instr_t *test = branch_type_test(function->blocks[b]);
         int decided = test ? n00bb_static_type_test(test) : -1;
-        outcomes[b] = !test ? 0 : decided < 0 ? 3 : decided ? 2 : 1;
+        core_list_push(*outcomes,
+                       !test ? 0u : decided < 0 ? 3u : decided ? 2u : 1u);
         ir_block_t *next = decided >= 0
             ? ir_succ_at(term, decided ? 0 : 1) : nullptr;
         if (!next) continue;
@@ -195,16 +160,10 @@ n00bb_fold_static_branches(ir_func_t *function, ir_func_t *origin,
         term->n_operands = 0;
         folded = ir_instr_operand_block(term, next) || folded;
     }
-    bool *reached = origin ? reachable_blocks(function) : nullptr;
-    for (uint32_t b = 0; reached && b < count; b++)
-        if (reached[b] && outcomes[b])
-            note_outcome(context, origin, b, outcomes[b]);
-    if (origin)
-        (void)ir_annot_set(context, &origin->annots, (ir_annot_t){
-            .key = CORE_STRING_STATIC(N00BB_TYPE_TEST_OUTCOMES_KEY),
-            .kind = IR_ANNOT_INT, .i = {.mag = 1}});
+    bool *reached = reachable_blocks(function);
+    for (uint32_t b = 0; b < count; b++)
+        if (!reached || !reached[b]) outcomes->data[b] = 0;
     core_free(reached);
-    core_free(outcomes);
     if (folded) n00bb_drop_unreachable_blocks(function);
     th_ctx *types = ir_module_types(function->owner);
     core_dict_t replacements;

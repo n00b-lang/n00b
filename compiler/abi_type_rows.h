@@ -12,6 +12,7 @@
 typedef struct {
     n00b_abi_type_v1 *rows;
     parse_sym_entry_t **owners;
+    bool *declared_elsewhere;
     parse_sym_entry_t *(*owner_lookup)(void *context, th_type *type);
     void *owner_lookup_context;
     size_t count;
@@ -31,7 +32,6 @@ typedef parse_sym_entry_t *(*n00bb_abi_type_owner_lookup_fn)(
 
 bool n00bb_abi_type_identity_rows_build(
     n00bb_abi_type_index_t *index, ir_module_t *runtime,
-    bool include_external_definitions,
     const parse_symtab_t *symbols,
     n00bb_abi_type_owner_lookup_fn lookup, void *lookup_context,
     n00bb_abi_name_pool_t *names,

@@ -1,0 +1,13 @@
+record Tag {
+    parts: Array[int]
+}
+
+func hash(self: Tag) -> u128 {
+    self.parts[0] = 7
+    return cast[u128](self.parts[1])
+}
+
+func main() {
+    var tags: Dict[Tag, int] = {}
+    tags[(parts = [3, 4])] = 2
+}

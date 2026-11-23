@@ -63,6 +63,48 @@ runtime_function_add(core_list_t(n00bb_ir_func_ptr_t) *functions,
 }
 
 bool
+visit_runtime_symbols(runtime_scan_t *scan, runtime_symbol_fn visit)
+{
+    parse_grammar_t *grammar = scan->grammar;
+    for (size_t i = 0; i < scan->analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(scan->analysis->units.data[i]);
+        parse_symtab_t *symtab = state && state->annotations
+            ? state->annotations->symtab : nullptr;
+        if (!symtab) return false;
+        for (parse_scope_t *scope = symtab->all_scopes; scope;
+             scope = scope->all_next) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                bool tracked = symbol->kind == PARSE_SYM_VARIABLE
+                    && is_module_global_symbol(grammar, symbol)
+                    && (symbol->is_thread_local
+                        || !global_has_explicit_initializer(grammar,
+                                                            symbol));
+                ir_global_t *global = tracked
+                    ? link_ir_global_for_symbol(scan->analysis, symbol)
+                    : nullptr;
+                tracked = tracked && (global || symbol->is_thread_local);
+                if (!visit(scan, symbol, global, tracked)) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool
+add_runtime_symbol(runtime_scan_t *scan, parse_sym_entry_t *symbol,
+                   ir_global_t *global, bool tracked)
+{
+    if (tracked && !runtime_init_target_add(scan->runtime, global))
+        return false;
+    if (!thread_runtime_entry_function(scan->grammar, symbol)) return true;
+    ir_func_t *function = link_ir_function_for_symbol(scan->analysis, symbol);
+    if (function && function->n_blocks)
+        runtime_function_add(&scan->runtime->entry_functions, function);
+    return true;
+}
+
+bool
 runtime_init_entries(parse_grammar_t *grammar,
                      n00bb_link_analysis_t *analysis,
                      n00bb_runtime_init_analysis_t *runtime)
@@ -71,35 +113,8 @@ runtime_init_entries(parse_grammar_t *grammar,
     runtime->entry_functions = core_list_new(n00bb_ir_func_ptr_t);
     core_dict_init(&runtime->targets, nullptr, nullptr);
     core_dict_init(&runtime->reachable, nullptr, nullptr);
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        if (!symtab) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
-             scope = scope->all_next) {
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                if (symbol->kind == PARSE_SYM_VARIABLE
-                    && is_module_global_symbol(grammar, symbol)
-                    && (symbol->is_thread_local
-                        || !global_has_explicit_initializer(grammar,
-                                                            symbol))) {
-                    ir_global_t *global = link_ir_global_for_symbol(analysis,
-                                                                    symbol);
-                    if ((global || symbol->is_thread_local)
-                        && !runtime_init_target_add(runtime, global))
-                        return false;
-                }
-                if (!thread_runtime_entry_function(grammar, symbol)) continue;
-                ir_func_t *function = link_ir_function_for_symbol(analysis,
-                                                                  symbol);
-                if (!function || !function->n_blocks) continue;
-                runtime_function_add(&runtime->entry_functions, function);
-            }
-        }
-    }
-    return true;
+    runtime_scan_t scan = {grammar, analysis, runtime};
+    return visit_runtime_symbols(&scan, add_runtime_symbol);
 }
 
 bool
@@ -459,7 +474,7 @@ import_closure(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit)
     return closure;
 }
 
-static bool
+bool
 n00bb_module_sees(void *context, const ir_module_t *viewer,
                   const ir_module_t *other)
 {
@@ -471,6 +486,65 @@ n00bb_module_sees(void *context, const ir_module_t *viewer,
 }
 
 void
+n00bb_unit_bodies(n00bb_link_analysis_t *analysis,
+                  core_list_t(n00bb_ir_func_ptr_t) *out)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        ir_module_t *module = unit_module(tu_state(analysis->units.data[u]));
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *body = n00bb_cached_body(ir_func_at(module, f));
+            if (body && body->n_blocks) core_list_push(*out, body);
+        }
+    }
+}
+
+static void
+reinterpretation_sources(void *context, ir_summary_target_fn add, void *sink)
+{
+    core_list_t(n00bb_ir_func_ptr_t) bodies =
+        core_list_new(n00bb_ir_func_ptr_t);
+    n00bb_unit_bodies(context, &bodies);
+    for (size_t f = 0; f < bodies.len; f++) add(sink, bodies.data[f]);
+    core_list_free(bodies);
+}
+
+static bool
+reinterpretation_sees(void *context, const ir_module_t *viewer,
+                      const ir_module_t *other)
+{
+    return viewer == other
+        || (core_string_find(ir_module_name((ir_module_t *)other),
+                             CORE_STRING_STATIC("$spec$")) < 0
+            && n00bb_module_sees(context, viewer, other));
+}
+
+static void
+discard_target(void *sink, ir_func_t *target)
+{
+    (void)sink;
+    (void)target;
+}
+
+bool
+n00bb_closed_module(n00bb_link_analysis_t *analysis, const ir_module_t *module,
+                    bool package)
+{
+    core_translation_unit_t *unit = module && !analysis->may_link_further
+        ? n00bb_visibility_unit(analysis, module) : nullptr;
+    return unit && analysis->units.len
+        && (package ? n00bb_same_package(unit, analysis->units.data[0])
+                    : unit == analysis->units.data[0]);
+}
+
+bool
+n00bb_summary_open(n00bb_link_analysis_t *analysis, const ir_module_t *module)
+{
+    if (analysis->may_link_further) return true;
+    if (analysis->program_layer) return false;
+    return !n00bb_closed_module(analysis, module, !analysis->summary_phase);
+}
+
+void
 bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
 {
     if (!analysis->visibility_ready) {
@@ -479,7 +553,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         analysis->visibility_ready = true;
     }
     ir_reinterpretations_set_visibility(analysis->ir_context,
-                                        n00bb_module_sees, analysis);
+                                        reinterpretation_sees, analysis);
     analysis->summary_hooks = (ir_summary_hooks_t){
         .context = analysis,
         .call_targets = n00bb_summary_call_targets,
@@ -495,6 +569,7 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .bookkeeping = n00bb_summary_bookkeeping,
         .inherits_effect = n00bb_summary_inherits_effect,
         .stored = n00bb_stored_summary,
+        .reinterpretation_sources = reinterpretation_sources,
         .defer_trap_proofs = defer_trap_proofs,
     };
     collect_user_effects(analysis);
@@ -506,6 +581,19 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     analysis->bounded_targets_ready = true;
     collect_callback_handlers(analysis);
     analysis->entry_owner = nullptr;
+    core_list_t(n00bb_ir_func_ptr_t) bodies =
+        core_list_new(n00bb_ir_func_ptr_t);
+    n00bb_unit_bodies(analysis, &bodies);
+    for (size_t f = 0; f < bodies.len; f++)
+        for (uint32_t b = 0; b < bodies.data[f]->n_blocks; b++)
+            for (uint32_t i = 0; i < bodies.data[f]->blocks[b]->n_instrs;
+                 i++) {
+                ir_instr_t *in = bodies.data[f]->blocks[b]->instrs[i];
+                if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
+                    (void)n00bb_summary_call_targets(analysis, in,
+                                                     discard_target, nullptr);
+            }
+    core_list_free(bodies);
 }
 
 bool
@@ -515,16 +603,19 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
 {
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        core_list_push(roots,
-                       n00bb_cached_body(analysis->emitted_functions.data[i]));
-    for (size_t i = 0; i < initializers->len; i++)
-        core_list_push(roots, n00bb_cached_body(initializers->data[i]));
-    for (size_t i = 0; i < entries->len; i++)
-        core_list_push(roots, n00bb_cached_body(entries->data[i]));
+    const core_list_t(n00bb_ir_func_ptr_t) *lists[] = {
+        &analysis->emitted_functions, &analysis->reachable_functions,
+        initializers, entries,
+    };
+    for (size_t l = 0; l < sizeof(lists) / sizeof(*lists); l++)
+        for (size_t i = 0; i < lists[l]->len; i++)
+            core_list_push(roots, n00bb_cached_body(lists[l]->data[i]));
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
+        if (!state || !state->ir_module
+            || (state->interface_module && !n00bb_generated_source(
+                    core_source_file_path(&analysis->units.data[u]->source))))
+            continue;
         th_ctx *types = ir_module_types(state->ir_module);
         for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
             ir_func_t *body = n00bb_cached_body(
@@ -533,22 +624,37 @@ build_function_summaries(n00bb_link_analysis_t *analysis,
                 core_list_push(roots, body);
         }
     }
-    push_effect_query_subjects(analysis, &roots);
+    size_t subjects = roots.len;
+    visit_effect_queries(analysis, &roots);
     push_effect_check_subjects(analysis, &roots);
     push_effects_of_roots(analysis, &roots);
+    analysis->summary_phase = analysis->boxes_rewritten ? N00BB_PHASE_FINAL
+                                                        : N00BB_PHASE_MAIN;
     bind_summary_hooks(analysis, false);
     n00bb_push_summary_roots(analysis, &roots);
     ir_summaries_t *previous = analysis->summaries;
+    ir_summaries_t *earlier = analysis->library_summaries;
     if (previous && ir_analysis_summaries() == previous)
         ir_analysis_bind_summaries(nullptr);
-    analysis->summary_phase = analysis->boxes_rewritten ? N00BB_PHASE_FINAL
-                                                        : N00BB_PHASE_MAIN;
-    analysis->summaries = ir_summaries_recompute(roots.data, roots.len,
-                                                 &analysis->summary_hooks,
-                                                 previous);
+    analysis->library_summaries = ir_summaries_recompute(roots.data,
+        roots.len, &analysis->summary_hooks, earlier);
+    analysis->summaries = analysis->library_summaries;
+    core_list_t(n00bb_ir_func_ptr_t) program =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t r = 0; r < roots.len; r++)
+        if (r >= subjects
+            || n00bb_closed_module(analysis, roots.data[r]->owner, true))
+            core_list_push(program, roots.data[r]);
+    analysis->program_layer = true;
+    if (analysis->library_summaries && !analysis->boxes_rewritten)
+        analysis->summaries = ir_summaries_over(program.data, program.len,
+            &analysis->summary_hooks, analysis->library_summaries);
+    analysis->program_layer = false;
     analysis->summary_phase = 0;
-    ir_summaries_free(previous);
+    if (previous != earlier) ir_summaries_free(previous);
+    ir_summaries_free(earlier);
     ir_analysis_bind_summaries(analysis->summaries);
+    core_list_free(program);
     core_list_free(roots);
     return analysis->summaries != nullptr;
 }

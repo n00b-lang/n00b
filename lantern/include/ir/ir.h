@@ -236,6 +236,9 @@ typedef struct {
 
 bool        ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a);
 ir_annot_t *ir_annot_get(ir_annots_t *m, core_string_t key);
+bool        ir_annot_set_bool(ir_ctx_t *ctx, ir_annots_t *m,
+                              core_string_t key, bool b);
+bool        ir_annot_bool(const ir_annots_t *m, core_string_t key);
 uint32_t    ir_annot_count(const ir_annots_t *m);
 ir_annot_t *ir_annot_at(ir_annots_t *m, uint32_t i);
 void        ir_annot_invalidate(ir_annots_t *m, ir_props_t lost);
@@ -522,7 +525,6 @@ size_t   ir_type_count(const ir_module_t *m);
 th_type *ir_type_at(ir_module_t *m, size_t i);
 bool     ir_type_define(ir_module_t *m, th_type *named, th_type *def);
 th_type *ir_type_definition(ir_module_t *m, th_type *named);
-ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named);
 
 int32_t     ir_file_add(ir_module_t *m, core_string_t path);
 core_string_t ir_file_path(const ir_module_t *m, int32_t id);

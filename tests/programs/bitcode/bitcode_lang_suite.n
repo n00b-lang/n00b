@@ -30,7 +30,7 @@ record Comptime_Pair layout(c) {
     right: int
 }
 
-func comptime_main() -> nil {
+if comptime() {
     var sample: Sample
     sample.weight = 1.25
     require sample.weight * 2.0 == 2.5

@@ -32,6 +32,7 @@
 #define N00BB_REF_METHOD CORE_STRING_STATIC("__ref")
 #define N00BB_EQUAL_TRAIT CORE_STRING_STATIC("builtin.compare.Equal")
 #define N00BB_COMPARABLE_TRAIT CORE_STRING_STATIC("builtin.compare.Comparable")
+#define N00BB_HASH_TRAIT CORE_STRING_STATIC("builtin.hashing.Hash")
 ir_instr_t *n00bb_declared_result_default(ir_instr_t *write);
 core_diag_location_t n00bb_name_location(core_translation_unit_t *unit,
                                          ir_span_t span, core_string_t name);
@@ -305,6 +306,8 @@ typedef struct n00bb_static_value {
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
 bool n00bb_bitwise_type(th_type *type);
 th_type *n00bb_shift_count_type(th_ctx *types, th_type *receiver);
+bool n00bb_digits_value(core_string_t text, size_t i, unsigned base,
+                        ir_uint_t limit, ir_uint_t *value);
 bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
 parse_sym_entry_t *n00bb_narrowed_subject(parse_grammar_t *grammar,
@@ -627,6 +630,8 @@ bool static_value_matches_type(const n00bb_static_value_t *value,
                                th_type *type, n00bb_tu_state_t *state,
                                size_t depth);
 th_type *static_record_shape(n00bb_tu_state_t *state, th_type *type);
+const th_member *static_variant_arm(n00bb_tu_state_t *state, th_type *type,
+                                    const n00bb_static_value_t *value);
 th_type *n00bb_record_shape(n00bb_tu_state_t *state, th_type *type);
 bool n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type);
 void remember_link_use_site(parse_grammar_t *grammar,
@@ -1015,6 +1020,13 @@ static inline n00bb_tu_state_t *
 tu_state(core_translation_unit_t *unit)
 {
     return unit ? core_translation_unit_user_data(unit) : nullptr;
+}
+
+static inline parse_symtab_t *
+tu_symtab(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    return state && state->annotations ? state->annotations->symtab : nullptr;
 }
 
 static inline bool

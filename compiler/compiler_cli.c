@@ -107,8 +107,6 @@
                SETS(BUILD_NATIVE, false)), \
     DEV_FLAG("--no-specialize", NO_ALIAS, BOOL, false, \
              "keep concrete generic calls on the boxed path"), \
-    DEV_FLAG("--closed-world", NO_ALIAS, BOOL, false, \
-             "omit the polymorphic implementations kept for dynamic linking"), \
     FLAG("--no-closed-world", NO_ALIAS, BOOL, false, \
          "keep the polymorphic implementations needed for dynamic linking " \
          "in an LTO build"), \

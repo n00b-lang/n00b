@@ -95,6 +95,19 @@ bool ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a)
     return true;
 }
 
+bool ir_annot_set_bool(ir_ctx_t *ctx, ir_annots_t *m, core_string_t key,
+                       bool b)
+{
+    return ir_annot_set(ctx, m, (ir_annot_t){
+        .key = key, .kind = IR_ANNOT_BOOL, .b = b});
+}
+
+bool ir_annot_bool(const ir_annots_t *m, core_string_t key)
+{
+    ir_annot_t *annot = ir_annot_get((ir_annots_t *)m, key);
+    return annot && annot->kind == IR_ANNOT_BOOL && annot->b;
+}
+
 uint32_t ir_annot_count(const ir_annots_t *m)
 {
     return m ? m->n : 0;

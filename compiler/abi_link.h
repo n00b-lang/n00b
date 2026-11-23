@@ -162,6 +162,14 @@ bool n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
 bool n00bb_abi_rebuild_specialization_links(
     const n00bb_abi_selected_objects_t *selected,
     const n00bb_abi_index_plan_t *plan, n00bb_abi_merged_rows_t *merged);
+typedef struct {
+    uint32_t child;
+    uint32_t parent;
+} n00bb_abi_specialization_t;
+bool n00bb_abi_link_specializations(n00bb_abi_merged_table_t *types,
+                                    n00bb_abi_merged_table_t *links,
+                                    const n00bb_abi_specialization_t *edges,
+                                    size_t count);
 const n00bb_abi_merged_table_t *n00bb_abi_merged_table(
     const n00bb_abi_merged_rows_t *merged, uint32_t kind);
 const void *n00bb_abi_merged_row(const n00bb_abi_merged_rows_t *merged,

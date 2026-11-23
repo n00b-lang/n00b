@@ -467,8 +467,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok) ok = build_escape_facts(analysis)
         && check_lease_storage(analysis)
         && report_bookkeeping_writes(analysis)
-        && mark_external_call_returns(analysis)
-        && mark_diverging_calls(analysis);
+        && mark_calls(analysis, false)
+        && mark_calls(analysis, true);
     ir_policy_t *verify_policy = ok ? ir_policy_new(ir_context) : nullptr;
     if (ok) ok = verify_policy && ir_policy_set(verify_policy,
         CORE_STRING_STATIC("IR-E0023"), IR_POLICY_ALLOW);
@@ -654,7 +654,7 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
     }
     if (ok) ok = build_function_summaries(analysis, &initializer_functions,
                                           &runtime_init.entry_functions)
-        && fold_function_effects(analysis);
+        && visit_effect_queries(analysis, nullptr);
     if (ok) {
         bool marks = check_marks(analysis);
         bool checks = evaluate_effect_checks(analysis);
@@ -826,27 +826,18 @@ n00bb_static_value_to_ir_initializer(const n00bb_static_value_t *value,
         out->kind = IR_GLOBAL_INIT_NIL;
         return true;
     case N00BB_STATIC_VALUE_VARIANT: {
-        bool variant = false;
-        th_type *shape = static_record_shape(state, type);
-        if (!th_named_info(type, nullptr, &variant, nullptr)
-            || !variant || !shape || th_kind_of(shape) != TH_RECORD
-            || !value->as.variant.payload) return false;
-        for (size_t i = 0; i < th_record_len(shape); i++) {
-            const th_member *arm = th_record_member(shape, i);
-            if (!arm || !core_string_eq(value->as.variant.arm, arm->name))
-                continue;
-            ir_global_init_value_t *payload = core_arena_alloc(
-                &state->semantic_values, sizeof(*payload));
-            if (!payload || !n00bb_static_value_to_ir_initializer(
-                    value->as.variant.payload, arm->type, state, payload,
-                    depth + 1)) return false;
-            payload->member = arm->name;
-            out->kind = IR_GLOBAL_INIT_VARIANT;
-            out->aggregate.items = payload;
-            out->aggregate.count = 1;
-            return true;
-        }
-        return false;
+        const th_member *arm = static_variant_arm(state, type, value);
+        if (!arm) return false;
+        ir_global_init_value_t *payload = core_arena_alloc(
+            &state->semantic_values, sizeof(*payload));
+        if (!payload || !n00bb_static_value_to_ir_initializer(
+                value->as.variant.payload, arm->type, state, payload,
+                depth + 1)) return false;
+        payload->member = arm->name;
+        out->kind = IR_GLOBAL_INIT_VARIANT;
+        out->aggregate.items = payload;
+        out->aggregate.count = 1;
+        return true;
     }
     case N00BB_STATIC_VALUE_ADDRESS: {
         parse_sym_entry_t *target = value->as.address;

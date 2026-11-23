@@ -23,8 +23,6 @@ static bool
 merge_entry(ir_summary_t *into, ir_summaries_t *summaries,
             const ir_func_t *function, bool callback);
 static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis);
-static void
 dump_text(core_buffer_t *out);
 static void
 dump_param(const ir_func_t *function, uint32_t p);
@@ -170,30 +168,9 @@ effects_answer(n00bb_link_analysis_t *analysis, ir_instr_t *in,
     return 0;
 }
 
-void
-push_effect_query_subjects(n00bb_link_analysis_t *analysis,
-                           core_list_t(n00bb_ir_func_ptr_t) *roots)
-{
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
-            ir_func_t *function = ir_func_at(state->ir_module, f);
-            for (uint32_t b = 0; b < function->n_blocks; b++)
-                for (uint32_t i = 0; i < function->blocks[b]->n_instrs;
-                     i++) {
-                    ir_instr_t *in = function->blocks[b]->instrs[i];
-                    ir_func_t *subject = effects_query(in)
-                        ? effects_subject(in) : nullptr;
-                    if (subject && subject->n_blocks)
-                        core_list_push(*roots, subject);
-                }
-        }
-    }
-}
-
 bool
-fold_function_effects(n00bb_link_analysis_t *analysis)
+visit_effect_queries(n00bb_link_analysis_t *analysis,
+                     core_list_t(n00bb_ir_func_ptr_t) *roots)
 {
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
@@ -206,6 +183,12 @@ fold_function_effects(n00bb_link_analysis_t *analysis)
                     ir_instr_t *in = function->blocks[b]->instrs[i];
                     effects_query_t query = effects_query(in);
                     if (!query) continue;
+                    if (roots) {
+                        ir_func_t *subject = effects_subject(in);
+                        if (subject && subject->n_blocks)
+                            core_list_push(*roots, subject);
+                        continue;
+                    }
                     uint64_t bits = effects_answer(analysis, in, query);
                     in->op         = IR_OP_CONST;
                     in->n_operands = 0;
@@ -244,8 +227,8 @@ handler_listed(n00bb_link_analysis_t *analysis, const ir_func_t *handler,
     return false;
 }
 
-static core_list_t(n00bb_ir_func_ptr_t)
-program_functions(const n00bb_link_analysis_t *analysis)
+core_list_t(n00bb_ir_func_ptr_t)
+n00bb_program_functions(const n00bb_link_analysis_t *analysis)
 {
     core_list_t(n00bb_ir_func_ptr_t) functions =
         core_list_new(n00bb_ir_func_ptr_t);
@@ -256,6 +239,39 @@ program_functions(const n00bb_link_analysis_t *analysis)
     return functions;
 }
 
+typedef struct {
+    n00bb_link_analysis_t *analysis;
+    core_dict_t            known;
+    core_dict_t            referenced;
+} handler_scan_t;
+
+static void
+note_referenced(void *context, const ir_value_t *value)
+{
+    handler_scan_t *scan = context;
+    ir_func_t *taken = n00bb_cached_body(value->owner);
+    if (taken && core_dict_add(&scan->referenced, taken, taken))
+        core_list_push(scan->analysis->referenced_functions, taken);
+}
+
+static void
+note_handler(void *context, ir_instr_t *creation)
+{
+    handler_scan_t *scan = context;
+    n00bb_link_analysis_t *analysis = scan->analysis;
+    ir_func_t *handler = analysis->closed_world
+        ? callback_handler(creation) : nullptr;
+    if (!handler) return;
+    th_type *type = creation->dest ? creation->dest->type : nullptr;
+    bool found = false;
+    th_type *first = core_dict_get(&scan->known, handler, &found);
+    if (found && (first == type || handler_listed(analysis, handler, type)))
+        return;
+    if (!found) core_dict_put(&scan->known, handler, type);
+    core_list_push(analysis->callback_handlers, handler);
+    core_list_push(analysis->callback_handler_types, type);
+}
+
 void
 collect_callback_handlers(n00bb_link_analysis_t *analysis)
 {
@@ -263,43 +279,15 @@ collect_callback_handlers(n00bb_link_analysis_t *analysis)
     analysis->callback_handler_types.len = 0;
     analysis->referenced_functions.len = 0;
     if (analysis->may_link_further) return;
-    core_dict_t known, referenced;
-    core_dict_init(&known, nullptr, nullptr);
-    core_dict_init(&referenced, nullptr, nullptr);
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
-    for (size_t f = 0; f < program.len; f++) {
-        ir_func_t *function = program.data[f];
-        for (uint32_t b = 0; b < function->n_blocks; b++)
-            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-                ir_instr_t *creation = function->blocks[b]->instrs[i];
-                for (uint32_t o = creation->op == IR_OP_CALL ? 1 : 0;
-                     o < creation->n_operands; o++) {
-                    const ir_value_t *value = ir_operand_value(
-                        &creation->operands[o]);
-                    ir_func_t *taken = value && value->kind == IR_VAL_FUNC
-                            && value->owner
-                        ? n00bb_cached_body(value->owner) : nullptr;
-                    if (taken && core_dict_add(&referenced, taken, taken))
-                        core_list_push(analysis->referenced_functions, taken);
-                }
-                ir_func_t *handler = analysis->closed_world
-                    ? callback_handler(creation) : nullptr;
-                if (!handler) continue;
-                th_type *type = creation->dest ? creation->dest->type
-                                               : nullptr;
-                bool found = false;
-                th_type *first = core_dict_get(&known, handler, &found);
-                if (found && (first == type
-                              || handler_listed(analysis, handler, type)))
-                    continue;
-                if (!found) core_dict_put(&known, handler, type);
-                core_list_push(analysis->callback_handlers, handler);
-                core_list_push(analysis->callback_handler_types, type);
-            }
-    }
+    handler_scan_t scan = {.analysis = analysis};
+    core_dict_init(&scan.known, nullptr, nullptr);
+    core_dict_init(&scan.referenced, nullptr, nullptr);
+    core_list_t(n00bb_ir_func_ptr_t) program =
+        n00bb_program_functions(analysis);
+    visit_function_values(&program, note_referenced, note_handler, &scan);
     core_list_free(program);
-    core_dict_free(&known);
-    core_dict_free(&referenced);
+    core_dict_free(&scan.known);
+    core_dict_free(&scan.referenced);
 }
 
 static bool
@@ -492,20 +480,23 @@ n00bb_summary_call_targets(void *context, const ir_instr_t *call,
                            ir_summary_target_fn add, void *sink)
 {
     body_targets_t bodies = {.add = add, .sink = sink};
+    bool closed = !n00bb_summary_open(context, call->block->owner->owner);
     if (call->op == IR_OP_CALLBACK_INVOKE)
         return bounded_call_target(context, call, add_body_target, &bodies)
-            || callback_targets(context, call, add_body_target, &bodies);
+            || (closed && callback_targets(context, call, add_body_target,
+                                           &bodies));
     ir_func_t *target = n00bb_direct_call_target(call);
     core_string_t trait = {0}, method = {0};
     if (target && n00bb_open_hook(call, &trait, &method))
-        return hook_targets(context, target, trait, method, add_body_target,
-                            &bodies)
+        return (closed && hook_targets(context, target, trait, method,
+                                       add_body_target, &bodies))
             || bounded_call_target(context, call, add_body_target, &bodies);
     if (!target)
-        return trait_targets(context, call, add_body_target, &bodies)
+        return (closed && trait_targets(context, call, add_body_target,
+                                        &bodies))
             || bounded_call_target(context, call, add_body_target, &bodies)
-            || function_value_targets(context, call, add_body_target,
-                                      &bodies);
+            || (closed && function_value_targets(context, call,
+                                                 add_body_target, &bodies));
     add(sink, target);
     return true;
 }
@@ -617,7 +608,10 @@ n00bb_summary_call_finalizers(void *context, const ir_instr_t *call,
             ir_func_t *finalizer = finalizers->data[f];
             th_type *receiver = finalized_receiver(finalizer);
             if (!receiver || th_kind_of(receiver) == TH_VAR
-                || !th_matches(receiver, type)) continue;
+                || !th_matches(receiver, type)
+                || (n00bb_summary_open(analysis, module)
+                    && !n00bb_module_sees(analysis, module,
+                                          finalizer->owner))) continue;
             add(sink, finalizer);
             if (!th_is_closed(types, receiver))
                 (void)th_match_each(receiver, type, note_finalized_type,
@@ -662,8 +656,18 @@ n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
         n00bb_link_analysis_t *analysis = context;
         ir_summary_t *summary = ir_summary_bounded(summaries, function,
             n00bb_bound_bits(function, N00BB_QUERY_FORBIDS_EFFECT));
+        bool open = n00bb_summary_open(analysis, function->owner);
         for (size_t e = 0; summary && e < analysis->user_effects.len; e++) {
             core_string_t name = analysis->user_effects.data[e].qualified;
+            int64_t dot = core_string_rfind_byte(name, '.');
+            core_translation_unit_t *declared = open && dot > 0
+                ? n00bb_unit_named(analysis,
+                                   core_string_slice(name, 0, (size_t)dot))
+                : nullptr;
+            if (open && (!declared || !tu_state(declared)->ir_module
+                         || !n00bb_module_sees(analysis, function->owner,
+                                tu_state(declared)->ir_module)))
+                continue;
             if (!analysis->user_effects.data[e].bits
                 && !n00bb_bound_names(function, N00BB_QUERY_FORBIDS_EFFECT,
                                       name))
@@ -726,7 +730,7 @@ static core_list_t(n00bb_ir_func_ptr_t)
 entry_functions(n00bb_link_analysis_t *analysis, size_t slot)
 {
     bool complete = true;
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    core_list_t(n00bb_ir_func_ptr_t) program = n00bb_program_functions(analysis);
     core_list_t(n00bb_ir_func_ptr_t) entries = slot == 1
         ? thread_entries(&program, analysis->summaries, &complete, nullptr)
         : core_list_new(n00bb_ir_func_ptr_t);
@@ -755,12 +759,18 @@ n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
 
 const ir_summary_t *
 n00bb_summary_entries(void *context, ir_summaries_t *summaries,
-                      uint32_t flag)
+                      uint32_t flag, const ir_func_t *subject)
 {
     n00bb_link_analysis_t *analysis = context;
     if (analysis->entry_owner != summaries) {
         analysis->entry_owner = summaries;
+        analysis->open_entry = nullptr;
         for (size_t s = 0; s < 3; s++) analysis->entry_ready[s] = false;
+    }
+    if (subject && n00bb_summary_open(analysis, subject->owner)) {
+        if (!analysis->open_entry)
+            analysis->open_entry = ir_summary_conservative(summaries, nullptr);
+        return analysis->open_entry;
     }
     size_t slot = flag == IR_SUMMARY_CALLS_FINALIZERS ? 0
         : flag == IR_SUMMARY_STARTS_THREADS ? 1 : 2;
@@ -781,14 +791,15 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
     return analysis->entry_summaries[slot];
 }
 
-static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis)
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis)
 {
-    if (analysis->escaped_owner == analysis->escapes) return;
-    if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
+    core_dict_free(&analysis->escaped_globals);
     core_dict_init(&analysis->escaped_globals, nullptr, nullptr);
-    analysis->escaped_owner = analysis->escapes;
-    core_list_t(n00bb_ir_func_ptr_t) program = program_functions(analysis);
+    analysis->escaped_ready = false;
+    core_list_t(n00bb_ir_func_ptr_t) program =
+        core_list_new(n00bb_ir_func_ptr_t);
+    n00bb_unit_bodies(analysis, &program);
     for (size_t f = 0; f < program.len; f++) {
         ir_func_t *function = program.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)
@@ -808,13 +819,14 @@ collect_escaped_globals(n00bb_link_analysis_t *analysis)
             }
     }
     core_list_free(program);
+    analysis->escaped_ready = true;
 }
 
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global)
 {
     n00bb_link_analysis_t *analysis = context;
-    if (!analysis->escapes) return true;
+    if (!analysis->escaped_ready) return true;
     if (!analysis->global_symbols_ready) {
         core_dict_init(&analysis->global_symbols, nullptr, nullptr);
         index_module_globals(analysis, &analysis->global_symbols);
@@ -830,7 +842,6 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
             || parse_sym_binding(symbol,
                    CORE_STRING_STATIC("n00bb.external-export"))))
         return true;
-    collect_escaped_globals(analysis);
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
 }
 
@@ -1353,9 +1364,15 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
 void
 dump_function_summaries(n00bb_link_analysis_t *analysis)
 {
-    for (size_t f = 0; f < analysis->reachable_functions.len; f++)
-        dump_function_summary(analysis->summaries,
-            n00bb_cached_body(analysis->reachable_functions.data[f]), false);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    for (size_t f = 0; f < analysis->reachable_functions.len; f++) {
+        ir_func_t *body = n00bb_cached_body(
+            analysis->reachable_functions.data[f]);
+        if (core_dict_add(&seen, body, body))
+            dump_function_summary(analysis->summaries, body, false);
+    }
+    core_dict_free(&seen);
 }
 
 static int
@@ -2349,7 +2366,7 @@ query_resolve_effect(query_parser_t *parser, core_string_t word,
     return true;
 }
 
-static query_node_t *query_or(query_parser_t *parser);
+static query_node_t *query_binary(query_parser_t *parser, bool any);
 
 static query_node_t *
 query_question(query_parser_t *parser)
@@ -2407,7 +2424,7 @@ query_unary(query_parser_t *parser)
     if (!query_is(token, CORE_STRING_STATIC("(")))
         return query_question(parser);
     query_advance(parser, token);
-    query_node_t *inner = query_or(parser);
+    query_node_t *inner = query_binary(parser, true);
     if (!inner) return nullptr;
     core_string_t close = query_peek(parser);
     if (!query_is(close, CORE_STRING_STATIC(")"))) {
@@ -2420,41 +2437,25 @@ query_unary(query_parser_t *parser)
 }
 
 static query_node_t *
-query_and(query_parser_t *parser)
+query_binary(query_parser_t *parser, bool any)
 {
-    query_node_t *left = query_unary(parser);
+    core_string_t word = any ? CORE_STRING_STATIC("or")
+                             : CORE_STRING_STATIC("and");
+    core_string_t symbol = any ? CORE_STRING_STATIC("||")
+                               : CORE_STRING_STATIC("&&");
+    query_node_t *left = any ? query_binary(parser, false)
+                             : query_unary(parser);
     while (left) {
         core_string_t token = query_peek(parser);
-        if (!query_is(token, CORE_STRING_STATIC("and"))
-            && !query_is(token, CORE_STRING_STATIC("&&")))
-            break;
+        if (!query_is(token, word) && !query_is(token, symbol)) break;
         query_advance(parser, token);
-        query_node_t *right = query_unary(parser);
+        query_node_t *right = any ? query_binary(parser, false)
+                                  : query_unary(parser);
         if (!right) {
             query_free(left);
             return nullptr;
         }
-        left = query_node(QUERY_AND, left, right);
-    }
-    return left;
-}
-
-static query_node_t *
-query_or(query_parser_t *parser)
-{
-    query_node_t *left = query_and(parser);
-    while (left) {
-        core_string_t token = query_peek(parser);
-        if (!query_is(token, CORE_STRING_STATIC("or"))
-            && !query_is(token, CORE_STRING_STATIC("||")))
-            break;
-        query_advance(parser, token);
-        query_node_t *right = query_and(parser);
-        if (!right) {
-            query_free(left);
-            return nullptr;
-        }
-        left = query_node(QUERY_OR, left, right);
+        left = query_node(any ? QUERY_OR : QUERY_AND, left, right);
     }
     return left;
 }
@@ -2466,7 +2467,7 @@ query_parse(n00bb_link_analysis_t *analysis, core_diagnostics_t *diagnostics,
     query_parser_t parser = {
         .analysis = analysis, .diagnostics = diagnostics, .text = text,
     };
-    query_node_t *tree = query_or(&parser);
+    query_node_t *tree = query_binary(&parser, true);
     core_string_t rest = query_peek(&parser);
     if (tree && rest.data) {
         query_expected(&parser, N00B_TEXT_QUERY_THE_END, rest);

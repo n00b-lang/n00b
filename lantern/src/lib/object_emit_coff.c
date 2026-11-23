@@ -25,7 +25,9 @@ bool core_object_emit_coff(const core_target_desc_t *target,
 {
     if (target->call_abi != CORE_TARGET_CALL_WINDOWS_X64 ||
         section_count > INT16_MAX) return false;
-    uint32_t *rel_counts = core_alloc_array(uint32_t, section_count);
+    uint32_t *rel_counts = core_object_rel_counts(relocations,
+                                                  relocation_count,
+                                                  section_count);
     uint32_t *rel_written = core_alloc_array(uint32_t, section_count);
     size_t *data_offsets = core_alloc_array(size_t, section_count);
     size_t *rel_offsets = core_alloc_array(size_t, section_count);
@@ -33,9 +35,6 @@ bool core_object_emit_coff(const core_target_desc_t *target,
     uint32_t *symbol_name_offsets = core_alloc_array(uint32_t, symbol_count);
     uint8_t *image = NULL;
     bool success = false;
-
-    for (size_t i = 0; i < relocation_count; i++)
-        rel_counts[relocations[i].section_index - 1]++;
     size_t string_size = 4;
     for (size_t i = 0; i < section_count; i++) {
         const core_object_emit_section_t *section = &sections[i];

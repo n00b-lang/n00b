@@ -27,7 +27,7 @@ library_dump "$abi_programs" "$tmp/abi" import_root c_foreign \
     abi_value_root foreign_enum_user builtin.cycle_first
 library_dump "$abi_programs" "$tmp/cycle_long" builtin.cycle_long_a
 library_dump "$abi_programs" "$tmp/cycle_self" builtin.cycle_self
-library_dump "$abi_programs" "$tmp/alone" empty builtin.cycle_first
+library_dump "$abi_programs" "$tmp/alone" builtin.cycle_first
 cmp "$tmp/abi/builtin.cycle_first.n00bm" \
     "$tmp/alone/builtin.cycle_first.n00bm" || {
     echo "builtin.cycle_first's ABI object differs with other roots" >&2
@@ -49,7 +49,7 @@ cycle_self="$tmp/cycle_self"
 "$abi_record_object_test" "$abi/__ffi_c_foreign___ffi_literal_1.n00bm" c-foreign
 "$abi_record_object_test" "$rec/record_root.n00bm" import-record
 N00B_PATH="$records" "$compiler" library \
-    --output "$tmp/import_record_linked.n00bm" record_root
+    --output "$tmp/import_record_linked.n00bm" record_root struct_order_root
 "$abi_register_object_test" "$tmp/import_record_linked.n00bm" '>=2'
 mkdir -p "$tmp/nested"
 (cd "$script_dir/programs" \
@@ -60,23 +60,16 @@ mkdir -p "$tmp/nested"
     exit 1
 }
 [ -s "$tmp/nested/shared_link_first.n00bm" ]
-N00B_PATH="$records" "$compiler" library \
-    --output "$tmp/struct_order.n00bm" struct_order_root
-[ -s "$tmp/struct_order.n00bm" ]
+"$abi_register_object_test" "$abi/linked.n00bm" '>=1'
 N00B_PATH="$abi_programs" "$compiler" library \
-    --output "$tmp/abi_value_library.n00bm" abi_value_root
-"$abi_register_object_test" "$tmp/abi_value_library.n00bm" '>=1'
-N00B_PATH="$abi_programs" "$compiler" library \
-    --output "$tmp/abi_value_library_multi.n00bm" abi_value_root abi_value_dep
+    --output "$tmp/abi_value_library_multi.n00bm" abi_value_root abi_value_dep \
+    enum_export.__init
 "$abi_register_object_test" "$tmp/abi_value_library_multi.n00bm" '>=2'
 "$abi_record_object_test" "$abi/foreign_enum_user.n00bm" import-enum
 "$abi_record_object_test" "$tmp/interfaces/foreign_flagset_user.n00bm" \
     import-flagset
 [ -s "$tmp/interfaces/operator_enum_signed_user.n00bm" ]
-N00B_PATH="$interface_programs" "$compiler" library \
-    --output "$tmp/linked_flagset_abi.n00bm" \
-    "$abi_programs/foreign_flagset_user.n"
-"$abi_register_object_test" "$tmp/linked_flagset_abi.n00bm" '>=1'
+"$abi_register_object_test" "$tmp/interfaces/linked.n00bm" '>=1'
 "$abi_record_object_test" "$tmp/generic/generic_modify_parameter.n00bm" generic
 "$abi_record_object_test" "$tmp/generic/generic_local.n00bm" generic-local
 "$abi_record_object_test" "$cycle/builtin.cycle_first.n00bm" cycle \
@@ -87,6 +80,3 @@ N00B_PATH="$interface_programs" "$compiler" library \
 "$abi_register_object_test" "$cycle_long/linked.n00bm" '>=3'
 "$abi_record_object_test" "$cycle_self/builtin.cycle_self.n00bm" cycle
 "$abi_register_object_test" "$cycle_self/linked.n00bm" '>=1'
-N00B_PATH="$abi_programs" "$compiler" library \
-    --output "$tmp/enum_export_linked.n00bm" enum_export.__init
-"$abi_register_object_test" "$tmp/enum_export_linked.n00bm" '>=2'

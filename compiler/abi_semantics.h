@@ -9,6 +9,7 @@ typedef struct {
     const ir_module_t *const *modules;
     size_t module_count;
     th_ctx *types;
+    struct n00bb_cache_t *cache;
 } n00bb_abi_semantics_t;
 
 bool n00bb_abi_link_semantic_rows(

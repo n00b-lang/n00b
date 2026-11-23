@@ -60,51 +60,6 @@ typedef struct {
 } abi_frame_info_t;
 
 static bool
-adopt_owned_layout(ir_module_t *runtime, th_type *type, core_string_t triple)
-{
-    if (ir_layout_final(runtime, type, triple)) return true;
-    ir_module_t *owner = ir_type_definition_owner(runtime, type);
-    const ir_final_layout_t *layout = owner && owner != runtime
-        ? ir_layout_final(owner, type, triple) : nullptr;
-    return !layout || ir_layout_publish_final(runtime, type, triple, layout);
-}
-
-static bool
-adopt_component_layouts(ir_module_t *runtime, th_type *type,
-                        core_string_t triple)
-{
-    type = type ? th_resolve(type) : nullptr;
-    if (!type) return false;
-    switch (th_kind_of(type)) {
-    case TH_NAMED:
-        for (size_t i = 0; i < th_named_nargs(type); i++) {
-            const th_arg *argument = th_named_arg(type, i);
-            if (argument && argument->kind == TH_ARG_TYPE
-                && !adopt_component_layouts(runtime, argument->type, triple))
-                return false;
-        }
-        return adopt_owned_layout(runtime, type, triple);
-    case TH_SEQUENCE:
-        return adopt_component_layouts(runtime, th_seq_elem(type), triple);
-    case TH_RECORD:
-        for (size_t i = 0; i < th_record_len(type); i++) {
-            const th_member *member = th_record_member(type, i);
-            if (!member
-                || !adopt_component_layouts(runtime, member->type, triple))
-                return false;
-        }
-        return true;
-    case TH_SUM:
-        for (size_t i = 0; i < th_sum_len(type); i++)
-            if (!adopt_component_layouts(runtime, th_sum_arm(type, i),
-                                         triple)) return false;
-        return true;
-    default:
-        return true;
-    }
-}
-
-static bool
 collect_frame_payload_types(core_translation_unit_t *unit,
                             n00bb_abi_type_index_t *index,
                             ir_module_t *runtime,
@@ -132,8 +87,6 @@ collect_frame_payload_types(core_translation_unit_t *unit,
             const th_member *member = th_record_member(payload, j);
             bool handled = false;
             valid = member
-                && adopt_component_layouts(runtime, member->type,
-                                           target->triple)
                 && n00bb_abi_publish_direct_layout(runtime, member->type,
                                                    target, &handled);
             valid = valid && ir_layout_final(runtime, member->type,
@@ -1237,17 +1190,6 @@ publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
                 }
                 const ir_final_layout_t *layout = ir_layout_final(module,
                     child, target->triple);
-                if (!layout) {
-                    ir_module_t *child_owner = ir_type_definition_owner(
-                        module, child);
-                    const ir_final_layout_t *shared = child_owner
-                        ? ir_layout_final(child_owner, child,
-                            target->triple) : nullptr;
-                    if (shared && ir_layout_publish_final(module, child,
-                            target->triple, shared))
-                        layout = ir_layout_final(module, child,
-                            target->triple);
-                }
                 if (!layout) { ready = false; break; }
                 if (variant)
                     arms[j] = (n00bb_abi_variant_arm_t){
@@ -2059,7 +2001,7 @@ n00bb_abi_emit_unit(
                 lookup_context, graphs))
         && ABI_STAGE("type identity rows",
             n00bb_abi_type_identity_rows_build(type_index,
-                (ir_module_t *)runtime_ir, false, symbols, type_owner, type_owner_context, pool,
+                (ir_module_t *)runtime_ir, symbols, type_owner, type_owner_context, pool,
                 &type_rows))
         && ABI_STAGE("imported function requirements",
             append_imported_symbol_requirements(link, unit, type_index,
@@ -2083,7 +2025,7 @@ n00bb_abi_emit_unit(
             abi_stream_advance(&stream_base, components.count))
         && ABI_STAGE("type layouts",
             n00bb_abi_type_layout_rows_build(type_index,
-                (ir_module_t *)runtime_ir, false, (uint32_t)stream_base,
+                (ir_module_t *)runtime_ir, (uint32_t)stream_base,
                 declarations, pool, &type_rows, &layout_rows,
                 &failed_layout_type))
         && ABI_STAGE("layout stream indexes",

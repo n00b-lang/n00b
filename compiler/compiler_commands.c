@@ -1,5 +1,4 @@
 #include "compiler_cli.h"
-#include "handoff.h"
 
 #include "cache_location.h"
 #include "config.h"

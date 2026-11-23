@@ -7,6 +7,7 @@
 #include "compiler_cache.h"
 #include "compiler_link.h"
 #include "driver.h"
+#include "qualified_names.h"
 #include "compiler_lower.h"
 #include "compiler_lower_emit.h"
 #include "config.h"
@@ -114,6 +115,14 @@ has_const_initializer(ir_module_t *module)
     for (size_t f = 0; module && f < ir_func_count(module); f++)
         if (n00bb_const_initializer(ir_func_at(module, f))) return true;
     return false;
+}
+
+bool
+n00bb_runtime_internal(core_translation_unit_t *unit)
+{
+    core_string_t member = {0};
+    return n00bb_name_member(unit->module.identifier,
+                             CORE_STRING_STATIC("sys.internal"), &member);
 }
 
 bool
@@ -479,7 +488,11 @@ adopt_graph(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
             .kind = IR_GLOBAL_INIT_PHASE_RESULT,
             .phase_result.identifier = identifier,
         };
-        if (!global) continue;
+        if (!global || (global->mutability == IR_MUT_CONST
+                        && global->has_static_initializer
+                        && global->static_initializer->kind
+                            <= IR_GLOBAL_INIT_FLOAT))
+            continue;
         if (!ir_global_replace_static_initializer(module, global, &value))
             return false;
         changed = true;
@@ -503,7 +516,8 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         core_translation_unit_t *owner = ok ? n00bb_unit_named(analysis, path)
                                             : nullptr;
         bool bakeable = owner && (owner == unit
-                                  || !tu_state(owner)->interface_module);
+                                  || (!tu_state(owner)->interface_module
+                                      && !n00bb_runtime_internal(owner)));
         frozen_graph_t discarded = {
             .nodes = core_list_new(frozen_node_t),
             .edges = core_list_new(frozen_edge_t),
@@ -523,6 +537,7 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
     }
     ok = ok && read_word(reader, 8, &changes);
     core_string_t name = ir_module_name(tu_state(unit)->ir_module);
+    diagnostics = core_translation_unit_diagnostics(unit);
     bool starts = ir_func_find(tu_state(unit)->ir_module,
         CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)) != nullptr;
     for (uint64_t i = 0; ok && i < changes; i++) {
@@ -530,15 +545,13 @@ adopt_state(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
         ok = read_text(reader, &path) && read_text(reader, &global);
         core_translation_unit_t *owner = ok ? n00bb_unit_named(analysis, path)
                                             : nullptr;
-        bool frozen = false;
+        bool runtime = owner && n00bb_runtime_internal(owner);
+        bool frozen = runtime;
         for (size_t k = 0; owner && k < kept.len; k++)
             frozen |= kept.data[k] == owner;
-        bool started = ok && starts && owner != unit;
-        bool refreezes = started
-            && n00bb_cache_has_module(analysis->cache, path);
+        bool started = ok && starts && owner != unit && !runtime;
         if (started) n00bb_cache_skip_store(analysis->cache, path);
-        if (refreezes) n00bb_cache_note_refreeze(analysis->cache, path);
-        if (ok && !frozen && !refreezes && n00bb_report(diagnostics, unit,
+        if (ok && !frozen && n00bb_report(diagnostics, unit,
                 N00B_DIAG_COMPTIME_IMPORT_CHANGE_DROPPED,
                 (core_diag_location_t){0},
                 N00B_TEXT_COMPTIME_IMPORT_CHANGE_DROPPED,

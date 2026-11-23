@@ -6,13 +6,11 @@ cached_globals_ready 6
 cached_ir_module 8
 cached_module_named 4
 from_cache 5
-interface_module 135
-n00bb_cache_has_module 7
+interface_module 129
+n00bb_cache_has_module 6
 n00bb_cache_interface_has_module 3
 n00bb_cache_module 9
 n00bb_cache_module_object 6
-n00bb_cache_module_speculative 3
-n00bb_cache_optimistic 4
 n00bb_cache_owns 3
-n00bb_cached_body 87
+n00bb_cached_body 86
 package_manifest_restored 3

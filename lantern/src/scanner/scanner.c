@@ -4,6 +4,7 @@
 #include "private/scanner/token_stream.h"
 #include "private/parse/grammar.h"
 #include <assert.h>
+#include <ctype.h>
 #include <string.h>
 
 static core_codepoint_t
@@ -771,6 +772,47 @@ scan_terminal_id(parse_scanner_t *s, core_string_t name)
     int64_t tid = parse_lookup_terminal(s->grammar, name);
 
     return tid ? tid : PARSE_TOK_OTHER;
+}
+
+bool
+scan_emit_punct(parse_scanner_t *s, core_string_t text)
+{
+    int64_t tid = scan_terminal_id(s, text);
+
+    if (tid == PARSE_TOK_OTHER || tid <= 0xFF) {
+        return false;
+    }
+
+    scan_advance_n(s, (int32_t)text.u8_bytes);
+    scan_emit_marked(s, (int32_t)tid);
+
+    return true;
+}
+
+bool
+scan_emit_operator(parse_scanner_t *s, core_codepoint_t c, bool space_pairs)
+{
+    core_codepoint_t next   = scan_peek(s, 1);
+    char             two[3] = {(char)c, (char)next, 0};
+
+    if (next <= 0 || next >= 128 || (!space_pairs && isspace((int)next))
+        || !scan_emit_punct(s, core_string_borrow(two, 2))) {
+        scan_advance(s);
+        scan_emit_marked(s, (int32_t)c);
+    }
+
+    return true;
+}
+
+void
+scan_emit_word(parse_scanner_t *s, core_option_t(core_string_t) id, bool name)
+{
+    int64_t kw = name ? PARSE_TOK_OTHER
+                      : scan_terminal_id(s, core_option_get(id));
+
+    scan_emit_owned(s, kw != PARSE_TOK_OTHER ? (int32_t)kw
+                                             : PARSE_TOK_IDENTIFIER,
+                    id);
 }
 
 parse_token_info_t *

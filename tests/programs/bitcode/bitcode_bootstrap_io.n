@@ -1,8 +1,10 @@
 func comptime_main() -> nil {
     var compile_count: i32 = __fd_write(1, "compile")
+    raw_debug("compile-debug\n")
 }
 
 func main() -> nil {
     var runtime_count: i32 = __fd_write(1, "runtime")
     var long_count: i32 = __fd_write(1, "0123456789abcdef0123456789abcdef")
+    raw_debug("runtime-debug\n")
 }

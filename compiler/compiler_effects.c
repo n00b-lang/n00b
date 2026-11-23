@@ -397,10 +397,14 @@ n00bb_bound_bits(const ir_func_t *function, n00bb_query_t query)
         core_string_t tag = ir_func_effect_at(function, e);
         if (!tag.u8_bytes) break;
         n00bb_bound_t bound;
-        const n00bb_effect_name_t *effect = n00bb_bound_parse(tag, &bound)
-            && bound.query == query ? n00bb_effect_named(bound.effect)
-                                    : nullptr;
+        bool parsed = n00bb_bound_parse(tag, &bound) && bound.query == query;
+        const n00bb_effect_name_t *effect = parsed
+            ? n00bb_effect_named(bound.effect) : nullptr;
         if (effect) bits |= effect->bits;
+        else if (parsed && bound.param < 16 && core_string_eq(bound.effect,
+                     CORE_STRING_STATIC("writes_parameter")))
+            bits |= UINT64_C(1) << (IR_SEFFECT_WRITES_PARAM_SHIFT
+                                    + bound.param);
     }
     return bits;
 }

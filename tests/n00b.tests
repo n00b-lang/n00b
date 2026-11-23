@@ -5,6 +5,8 @@ guardrails	dev	2	python3 "$SRC/tools/guardrails.py" "$SRC" comments docs warm_pa
 guardrails-clones	dev	3	python3 "$SRC/tools/guardrails.py" "$SRC" clones
 guardrails-planted	dev	2	sh "$SRC/tests/guardrails_planted.sh" "$SRC"
 writ-diagnostics-current	dev	2	python3 "$SRC/tools/gen_writ_diagnostics.py" "$SRC/writ/include/writ/diag_codes.def" "$SRC/compiler/diagnostics/writ.def" --check
+cache-fill	pr	25	"$BUILD/n00b" check "$SRC/tests/perf/hello.n" & "$BUILD/n00b" build --output "$TEST_RESULTS/n00b/cache-fill" "$SRC/tests/perf/hello.n" && wait $!
+cache-fill-lto	pr	30	"$BUILD/n00b" build --release --lto --output "$TEST_RESULTS/n00b/cache-fill-lto" "$SRC/tests/perf/hello.n"
 config-layers	pr	2	sh "$SRC/tests/config_layers.sh" "$BUILD/n00b"
 syntax-aliases	pr	6	sh "$SRC/tests/syntax_aliases.sh" "$BUILD/n00b" "$SRC/tests/programs/syntax_aliases.n" "$SRC/tests/programs/syntax_preferences.n"
 writ-coexistence	dev	2	"$BUILD/writ-coexistence"
@@ -32,7 +34,7 @@ abi-emit-strings	dev	2	"$BUILD/abi-emit-strings-test"
 abi-type-signatures	dev	2	"$BUILD/abi-type-signatures-test"
 llvm-native-cache	dev	2	"$BUILD/llvm-native-cache-test"
 llvm-stack-maps	dev	2	"$BUILD/llvm-stack-maps-test"
-lto-n00b	pr	31	sh "$SRC/tests/lto_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/lto.n"
+lto-n00b	pr,lto	31	sh "$SRC/tests/lto_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/lto.n"
 trait-dispatch	pr	15	sh "$SRC/tests/trait_dispatch.sh" "$BUILD/n00b" "$SRC/tests/programs/features/trait_dispatch.n"
 views-n00b	pr	20	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/views.n"
 comptime-values	pr	20	sh "$SRC/tests/comptime.sh" "$BUILD/n00b" "$SRC/tests/programs/comptime" values
@@ -53,34 +55,33 @@ visibility-n00b	pr	13	sh "$SRC/tests/visibility_n00b.sh" "$BUILD/n00b" "$SRC/tes
 package-imports	pr	11	sh "$SRC/tests/package_imports.sh" "$BUILD/n00b" "$SRC/tests/programs/packages"
 litmod-duplicates	pr	8	sh "$SRC/tests/litmod_duplicates.sh" "$BUILD/n00b" "$SRC/tests/programs/litmod_duplicates"
 root-modules	pr	11	sh "$SRC/tests/root_modules.sh" "$BUILD/n00b" "$SRC/tests/programs/root_modules"
-ffi	pr	28	sh "$SRC/tests/ffi.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi"
+ffi	pr,lto	28	sh "$SRC/tests/ffi.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi"
 ffi-zlib	pr	23	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts" "$BUILD/abi-register-object-test" modules
 ffi-load-dynamic	pr	2	sh "$SRC/tests/ffi_load_dynamic.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi_load_dynamic" "$SRC/writ/contracts"
 ffi-resharp	pr,rust	20	sh "$SRC/tests/ffi_resharp.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts"
 panic-n00b	pr	11	sh "$SRC/tests/panic_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_panic.n"
 operator-newline-parse	pr	2	sh "$SRC/tests/operator_newline.sh" "$BUILD/n00b" "$SRC/tests/programs/operator_newline_continuation.n" "$SRC/tests/programs/operator_double_newline_rejected.n"
-incremental-cache	pr	35	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" edits
+incremental-cache	pr	35	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" 'edits shapes contexts'
 private-consume-trait-method-n00b	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/bitcode/trait_consume_private.n"
 thread-races-n00b	pr	2	sh "$SRC/tests/thread_races.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_thread_races.n"
-summaries-n00b	pr	20	sh "$SRC/tests/summary_expected.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_trap_summaries.n" 'summary @bitcode_trap_summaries.both may_trap=>  traps explicit bounds arithmetic' 'summary @bitcode_trap_summaries.square may_trap=>  traps arithmetic' 'summary @bitcode_trap_summaries.checked may_trap=>  traps explicit' && sh "$SRC/tests/effects_expected.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/effects_probe.n" "$SRC/tests/programs/effects/effects_probe.expected" sys.fs.read_file,sys.env.args,sys.clock.now_ns,sys.random.fill,builtin.containers.dict.len,builtin.containers.dict.get,builtin.containers.dict.put,builtin.containers.dict.__iterator,builtin.containers.list.len,builtin.containers.list.__iterator,text.rich_string,unicode.general_category,unicode.internal.runebuf.push '^  why may_input: sys\.internal\.fs\.open_read \([0-9]+:[0-9]+\) -> sys\.internal\.os\.open\.open \(' '^  why reads_random: .*\.(getentropy|getrandom|gen_random)(_raw)? \(' '^  output \(new in text\.internal\.rich\.rich_string:[0-9]+:[0-9]+\)\.s data\[(.* )?text[] ]' && sh "$SRC/tests/effects_expected.sh" --with-outputs "$BUILD/n00b" "$SRC/tests/programs/effects/flow_probe.n" "$SRC/tests/programs/effects/flow_probe.expected" flow_probe.inc,flow_probe.choose,flow_probe.via_scalar,flow_probe.via_local,flow_probe.via_array,flow_probe.split,flow_probe.set_a,flow_probe.heap_fields,flow_probe.heap_overwrite,flow_probe.param_fields,flow_probe.put,flow_probe.caller,flow_probe.get_a,flow_probe.by_value,flow_probe.pick,flow_probe.relay,flow_probe.handled,flow_probe.caught && sh "$SRC/tests/effects_expected.sh" --with-outputs "$BUILD/n00b" "$SRC/tests/programs/effects/effects_probe.n" "$SRC/tests/programs/effects/effects_probe_flow.expected" sys.fs.read_file,sys.env.args,sys.clock.now_ns,sys.random.fill,builtin.containers.dict.len,builtin.containers.dict.get,builtin.containers.dict.put,builtin.containers.dict.__iterator,builtin.containers.list.len,builtin.containers.list.__iterator,text.rich_string,unicode.general_category,unicode.internal.runebuf.push && sh "$SRC/tests/effects_expected.sh" --with-outputs "$BUILD/n00b" "$SRC/tests/programs/effects/coarseness.n" "$SRC/tests/programs/effects/coarseness.expected" coarseness.lookup,coarseness.hash_str,coarseness.len_of && sh "$SRC/tests/explain_effects.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/effects_probe.n" "$SRC/tests/programs/effects/explain.expected" builtin.containers.dict.put,builtin.containers.dict.get,builtin.containers.dict.len,builtin.containers.dict.__iterator,builtin.containers.list.append,builtin.containers.list.pop,builtin.containers.list.len,builtin.containers.list.__iterator,sys.fs.read_file,sys.env.args,sys.env.exit,sys.clock.now_ns,sys.random.fill,builtin.io.debug.raw_debug,builtin.panic.panic && sh "$SRC/tests/explain_effects.sh" --library "$BUILD/n00b" "$SRC/tests/programs/effects/explain_library.n" "$SRC/tests/programs/effects/explain_library.expected" builtin.containers.dict.compare_key,builtin.sort.sort_by && sh "$SRC/tests/effect_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/audit" "$SRC/tests/programs/effects/audit.expected" server.handle,server.stamp,server.maybe,server.batched,audit_log.note,audit_log.flush && sh "$SRC/tests/effect_package.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/package"
-shared-cache-summaries	pr	20	sh "$SRC/tests/shared_cache_summaries.sh" "$BUILD/n00b" "$SRC/tests/programs"
+summaries-n00b	pr	20	sh "$SRC/tests/summary_expected.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_trap_summaries.n" 'summary @bitcode_trap_summaries.both may_trap=>  traps explicit bounds arithmetic' 'summary @bitcode_trap_summaries.square may_trap=>  traps arithmetic' 'summary @bitcode_trap_summaries.checked may_trap=>  traps explicit' && sh "$SRC/tests/effects_expected.sh" --with-outputs "$BUILD/n00b" "$SRC/tests/programs/effects/flow_probe.n" "$SRC/tests/programs/effects/flow_probe.expected" flow_probe.inc,flow_probe.choose,flow_probe.via_scalar,flow_probe.via_local,flow_probe.via_array,flow_probe.split,flow_probe.set_a,flow_probe.heap_fields,flow_probe.heap_overwrite,flow_probe.param_fields,flow_probe.put,flow_probe.caller,flow_probe.get_a,flow_probe.by_value,flow_probe.pick,flow_probe.relay,flow_probe.handled,flow_probe.caught && sh "$SRC/tests/effects_expected.sh" --with-outputs "$BUILD/n00b" "$SRC/tests/programs/effects/effects_probe.n" "$SRC/tests/programs/effects/effects_probe_flow.expected" sys.fs.read_file,sys.env.args,sys.clock.now_ns,sys.random.fill,builtin.containers.dict.len,builtin.containers.dict.get,builtin.containers.dict.put,builtin.containers.dict.__iterator,builtin.containers.list.len,builtin.containers.list.__iterator,text.rich_string,unicode.general_category,unicode.internal.runebuf.push '^  why may_input: sys\.internal\.fs\.open_read \([0-9]+:[0-9]+\) -> sys\.internal\.os\.open\.open \(' '^  why reads_random: .*\.(getentropy|getrandom|gen_random)(_raw)? \(' '^  output \(new in text\.internal\.rich\.rich_string:[0-9]+:[0-9]+\)\.s data\[(.* )?text[] ]' && sh "$SRC/tests/effects_expected.sh" --with-outputs "$BUILD/n00b" "$SRC/tests/programs/effects/coarseness.n" "$SRC/tests/programs/effects/coarseness.expected" coarseness.lookup,coarseness.hash_str,coarseness.len_of && sh "$SRC/tests/explain_effects.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/effects_probe.n" "$SRC/tests/programs/effects/explain.expected" builtin.containers.dict.put,builtin.containers.dict.get,builtin.containers.dict.len,builtin.containers.dict.__iterator,builtin.containers.list.append,builtin.containers.list.pop,builtin.containers.list.len,builtin.containers.list.__iterator,sys.fs.read_file,sys.env.args,sys.env.exit,sys.clock.now_ns,sys.random.fill,builtin.io.debug.raw_debug,builtin.panic.panic && sh "$SRC/tests/explain_effects.sh" --library "$BUILD/n00b" "$SRC/tests/programs/effects/explain_library.n" "$SRC/tests/programs/effects/explain_library.expected" builtin.containers.dict.compare_key,builtin.sort.sort_by && sh "$SRC/tests/effect_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/audit" "$SRC/tests/programs/effects/audit.expected" server.handle,server.stamp,server.maybe,server.batched,audit_log.note,audit_log.flush && sh "$SRC/tests/effect_package.sh" "$BUILD/n00b" "$SRC/tests/programs/effects/package"
+cache-matrix	pr	75	sh "$SRC/tests/cache_matrix.sh" "$BUILD" "$SRC/tests"
 initializer-read-after-exit-arm-n00b	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/bitcode/bitcode_initializer_read_after_exit_arm.n"
 indirect-global-init-n00b	pr	4	sh "$SRC/tests/indirect_global_init.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode"
 gc-worker-live-n00b	pr,darwin	16	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_gc_worker_live.n" "$BUILD/gc-worker-thread.o" sys.internal.gc.collect.worker
-array-uint-index-n00b	pr	19	sh "$SRC/tests/array_uint_index.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode"
+array-uint-index-n00b	pr,lto	19	sh "$SRC/tests/array_uint_index.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode"
 index-read-variant-override-n00b	pr	16	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_index_read_variant_override.n"
 shift-count-n00b	pr	20	sh "$SRC/tests/shift_count_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs"
 numeric-casts-n00b	pr	6	sh "$SRC/tests/numeric_casts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_numeric_casts.n" "$SRC/tests/programs/bitcode/bitcode_numeric_cast_trap.n"
 record-layout-n00b	pr	20	sh "$SRC/tests/inline_array_layout.sh" "$BUILD/n00b" "$SRC/tests/programs/inline_array_record_layout.n" && sh "$SRC/tests/aligned_records.sh" "$BUILD/n00b" "$SRC/tests/programs/aligned_records"
 runtime-array-bound-n00b	pr	2	sh "$SRC/tests/runtime_array_bound.sh" "$BUILD/n00b" "$SRC/tests/programs/array_runtime_sized_declaration.n"
 builtin-abi-n00b	pr	3	sh "$SRC/tests/builtin_abi_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_abi.n"
-builtin-debug	pr	5	sh "$SRC/tests/builtin_debug.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_debug.n"
 raw-repr	pr	13	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" defaults
 bitcode-native	pr	18	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" runtime
 inline-n00b	pr	10	sh "$SRC/tests/inline_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/inline"
 abi-link-fixtures	pr	18	sh "$SRC/tests/abi_link_fixtures.sh" "$BUILD/n00b" "$BUILD/abi-record-object-test" "$BUILD/abi-register-object-test"
 formatter	pr	5	sh "$SRC/tests/formatter.sh" "$BUILD/n00b"
-punch-list-small	pr	8	sh "$SRC/tests/punch_list_small.sh" "$BUILD/n00b" "$SRC"
+punch-list-small	pr	10	sh "$SRC/tests/punch_list_small.sh" "$BUILD/n00b" "$SRC"
 punch-list-medium	pr	4	sh "$SRC/tests/punch_list_medium.sh" "$BUILD/n00b" "$SRC"
 unicode-tables-match	dev	2	python3 "$SRC/tools/check_unicode_tables.py" --root "$SRC"
 install	pr,serial	23	sh "$SRC/tests/install.sh" "$SRC" "$BUILD"
@@ -107,11 +108,9 @@ ffi-zlib-const	pr	20	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/progr
 ffi-zlib-litmod	pr	21	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts" "$BUILD/abi-register-object-test" litmod
 unicode-conformance	pr	13	cd "$SRC/tests/programs/unicode" && sh "$SRC/tests/program_args_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/unicode/conformance.n" grapheme word sentence line normalization bidi collation idna
 storage-facts-n00b	pr	5	sh "$SRC/tests/storage_facts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_storage_facts.n"
-incremental-cache-shapes	pr	31	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" shapes
-incremental-cache-instances	pr	38	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" instances
-incremental-cache-contexts	pr	40	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" contexts
-incremental-cache-lto	pr	70	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" lto --lto
-closed-world-n00b	pr	11	sh "$SRC/tests/closed_world.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_closed_world.n"
+incremental-cache-instances	pr	30	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" instances
+incremental-cache-lto	pr,lto	55	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" lto '--release --lto'
+closed-world-n00b	pr,lto	11	sh "$SRC/tests/closed_world.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_closed_world.n"
 raw-repr-overrides	pr	17	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" overrides
 bitcode-build-time	pr	28	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" build-time
 bitcode-litmod	pr	11	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" litmod

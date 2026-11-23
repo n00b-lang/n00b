@@ -753,53 +753,42 @@ aliased_from(pt_t *pt, const core_list_t(uint64_t) *visible,
     core_list_free(merged);
 }
 
-static bool
-same_visible(const core_list_t(uint64_t) *a, const core_list_t(uint64_t) *b)
+static void
+aliased_at(pt_t *pt, const pt_loc_t *loc, bool memoized, pt_set_t *into)
 {
-    return a->len == b->len
-        && (!a->len || !memcmp(a->data, b->data, a->len * sizeof(*a->data)));
+    uintptr_t root = external_key(&loc->path);
+    pt_depend(pt, alias_root_key(root));
+    core_list_t(uint32_t) *sites = core_dict_get(&pt->alias_roots,
+                                                 (void *)root, nullptr);
+    core_list_t(uint64_t) visible = core_list_new(uint64_t);
+    if (sites) visible_aliases(pt, sites->data, sites->len, loc, &visible);
+    for (size_t v = 0; memoized && v < visible.len; v++)
+        pt_depend(pt, aliases_key((uint32_t)(visible.data[v] >> 32)));
+    aliased_from(pt, &visible, loc, into);
+    core_list_free(visible);
 }
 
 static void
 external_aliased(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
 {
     if (loc->path.root == IR_SPLACE_UNKNOWN) return;
-    uintptr_t root = external_key(&loc->path);
-    pt_depend(pt, alias_root_key(root));
-    bool                   found = false;
-    core_list_t(uint32_t) *sites = core_dict_get(&pt->alias_roots,
-                                                 (void *)root, &found);
-    if (!sites) return;
-    core_list_t(uint64_t) visible = core_list_new(uint64_t);
-    visible_aliases(pt, sites->data, sites->len, loc, &visible);
-    aliased_key_t   probe = {
-        *loc, core_xxh3_64bits_raw(visible.data ? (const void *)visible.data
-                                                : "",
-                                   visible.len * sizeof(*visible.data))};
-    aliased_memo_t *entry = !visible.len || pt->reading.len
-            || pt->delta_since
-        ? nullptr : core_dict_get(&pt->aliased_memo, &probe, &found);
-    if (visible.len && !pt->reading.len && !pt->delta_since && !entry) {
-        entry  = core_alloc(aliased_memo_t);
-        *entry = (aliased_memo_t){.key = probe, .visible = visible};
-        core_dict_put(&pt->aliased_memo, &entry->key, entry);
-        visible = core_list_new(uint64_t);
-    }
-    else if (entry && !same_visible(&entry->visible, &visible)) entry = nullptr;
-    if (!entry) {
-        aliased_from(pt, &visible, loc, into);
-        core_list_free(visible);
+    if (pt->reading.len || pt->delta_since) {
+        aliased_at(pt, loc, false, into);
         return;
     }
-    core_list_free(visible);
+    content_key_t   probe = {*loc, pt->at};
+    bool            found = false;
+    aliased_memo_t *entry = core_dict_get(&pt->aliased_memo, &probe, &found);
+    if (!found) {
+        entry  = core_alloc(aliased_memo_t);
+        *entry = (aliased_memo_t){.key = probe};
+        core_dict_put(&pt->aliased_memo, &entry->key, entry);
+    }
     if (memo_stale(pt, &entry->memo)) {
         pt_memo_frame_t frame;
         entry->items.len = 0;
         memo_begin(pt, &entry->memo, &frame);
-        for (size_t v = 0; v < entry->visible.len; v++)
-            pt_depend(pt, aliases_key((uint32_t)(entry->visible.data[v]
-                                                 >> 32)));
-        aliased_from(pt, &entry->visible, loc, &entry->items);
+        aliased_at(pt, loc, true, &entry->items);
         memo_end(pt, &entry->memo, &frame);
     }
     memo_use(pt, &entry->memo);

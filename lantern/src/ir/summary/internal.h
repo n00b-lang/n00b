@@ -123,6 +123,7 @@ struct ir_summary_t {
 };
 
 struct ir_summaries_t {
+    ir_summaries_t           *fallback;
     const ir_summary_hooks_t *hooks;
     ir_summary_hooks_t        hook_values;
     core_list_t(summary_ptr_t) owned;
@@ -435,15 +436,9 @@ typedef struct {
 } content_memo_t;
 
 typedef struct {
-    pt_loc_t loc;
-    uint64_t signature;
-} aliased_key_t;
-
-typedef struct {
-    aliased_key_t         key;
-    core_list_t(uint64_t) visible;
-    pt_set_t              items;
-    pt_memo_t             memo;
+    content_key_t key;
+    pt_set_t      items;
+    pt_memo_t     memo;
 } aliased_memo_t;
 
 typedef struct {

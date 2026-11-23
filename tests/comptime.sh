@@ -109,7 +109,6 @@ mutable at runtime" "$programs/record_list.n"
         "$programs/imported/app.n" ;;
 start)
     prints comptime_main "comptime_main ran" "$programs/comptime_main.n"
-    prints start_reads_comptime "ok" "$programs/start_reads_comptime.n"
     prunes runtime_prune "bumped from comptime
 phase recomputed
 items from comptime

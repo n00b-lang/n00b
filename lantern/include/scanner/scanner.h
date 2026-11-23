@@ -209,4 +209,12 @@ extern int32_t scan_skip_whitespace(parse_scanner_t *s);
 
 extern int64_t scan_terminal_id(parse_scanner_t *s, core_string_t name);
 
+extern bool scan_emit_punct(parse_scanner_t *s, core_string_t text);
+
+extern bool scan_emit_operator(parse_scanner_t *s, core_codepoint_t c,
+                               bool space_pairs);
+
+extern void scan_emit_word(parse_scanner_t *s,
+                           core_option_t(core_string_t) id, bool name);
+
 extern parse_token_info_t *scan_prev_token(parse_scanner_t *s);

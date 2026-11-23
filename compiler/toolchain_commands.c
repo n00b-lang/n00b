@@ -1,5 +1,4 @@
 #include "toolchain_commands.h"
-#include "handoff.h"
 
 #include "cache_location.h"
 #include "compiler_cli.h"
@@ -392,11 +391,6 @@ n00bb_toolchain_select(const n00bb_invocation_t *invocation, bool *handled)
 {
     *handled = false;
     const n00bb_toolchain_t *self = n00bb_toolchain();
-    core_string_t inherited = n00bb_handoff()->toolchain_reason;
-    if (inherited.u8_bytes) {
-        selection_reason = core_string_dup(inherited);
-        return 0;
-    }
     if (self->mode != N00BB_TOOLCHAIN_INSTALLED) return 0;
     core_string_t spec =
         core_os_environment(CORE_STRING_STATIC("N00B_TOOLCHAIN"));
@@ -454,9 +448,7 @@ n00bb_toolchain_select(const n00bb_invocation_t *invocation, bool *handled)
         core_string_t root = core_os_path_join(directory, list.data[index].id);
         core_string_t exe = core_os_path_join(root, CORE_STRING_STATIC("bin/n00b"));
         char *native = core_string_to_cstr(exe);
-        n00bb_handoff_set(&n00bb_handoff()->toolchain_reason,
-                          core_buffer_string(&reason));
-        bool ready = native && n00bb_handoff_pass();
+        bool ready = native != nullptr;
         if (ready) {
             fflush(stdout);
             fflush(stderr);

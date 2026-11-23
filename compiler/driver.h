@@ -38,8 +38,11 @@ bool n00bb_resolver_same_root(const n00bb_resolver_t *resolver,
 bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
                                       core_string_t identifier);
 void n00bb_source_file_mark_interface(core_source_file_t *source,
-                                      uint64_t source_hash);
+                                      uint64_t source_hash,
+                                      bool linked_library,
+                                      const core_string_t generated[3]);
 bool n00bb_source_file_is_interface(const core_source_file_t *source);
+bool n00bb_source_file_is_linked_library(const core_source_file_t *source);
 bool n00bb_source_file_generated_owner(const core_source_file_t *source,
                                        core_string_t *owner,
                                        core_string_t *owner_path);

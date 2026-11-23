@@ -3675,39 +3675,29 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->annotations || !state->annotations->symtab)
             return false;
-        core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
-            state, CORE_STRING_STATIC(""));
-        for (size_t s = 0; s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope) {
-                if (linkable_module_symbol(symbol)
-                    && (symbol_binding_node(symbol) || state->interface_module)
-                    && !register_link_declaration(link, unit, grammar,
-                                                  declarations_by_symbol,
-                                                  symbol)
-                    && !n00bb_unit_failed(unit)) {
-                    core_list_free(scopes);
-                    return false;
+        core_string_t namespaces[] = {
+            CORE_STRING_STATIC(""), CORE_STRING_STATIC("type"),
+        };
+        for (size_t n = 0; n < 2; n++) {
+            core_list_t(parse_scope_ptr_t) scopes = link_declaration_scopes(
+                state, namespaces[n]);
+            for (size_t s = 0; s < scopes.len; s++) {
+                for (parse_sym_entry_t *symbol =
+                         scopes.data[s]->first_in_scope;
+                     symbol; symbol = symbol->next_in_scope) {
+                    if (linkable_module_symbol(symbol)
+                        && (symbol_binding_node(symbol)
+                            || state->interface_module)
+                        && !register_link_declaration(link, unit, grammar,
+                               declarations_by_symbol, symbol)
+                        && !n00bb_unit_failed(unit)) {
+                        core_list_free(scopes);
+                        return false;
+                    }
                 }
             }
+            core_list_free(scopes);
         }
-        core_list_free(scopes);
-        scopes = link_declaration_scopes(state, CORE_STRING_STATIC("type"));
-        for (size_t s = 0; s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope) {
-                if (linkable_module_symbol(symbol)
-                    && (symbol_binding_node(symbol) || state->interface_module)
-                    && !register_link_declaration(link, unit, grammar,
-                                                  declarations_by_symbol,
-                                                  symbol)
-                    && !n00bb_unit_failed(unit)) {
-                    core_list_free(scopes);
-                    return false;
-                }
-            }
-        }
-        core_list_free(scopes);
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
@@ -4047,12 +4037,14 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_free(analysis->failed_regions.data[i].module.data);
     core_list_free(analysis->failed_regions);
     core_list_free(analysis->dead_regions);
+    if (analysis->library_summaries != analysis->summaries)
+        ir_summaries_free(analysis->library_summaries);
     ir_summaries_free(analysis->summaries);
     ir_summaries_free(analysis->escapes);
     ir_group_pdg_free(analysis->program);
     core_list_free(analysis->assert_sites);
     n00bb_interface_summaries_free(analysis->interface_summaries);
-    for (size_t p = 0; p < N00BB_PHASE_FINAL; p++)
+    for (size_t p = 0; p <= N00BB_PHASE_FINAL; p++)
         n00bb_interface_summaries_free(analysis->stored_summaries[p]);
     if (analysis->module_names_ready) {
         core_dict_foreach(&analysis->module_names, item)
@@ -4087,7 +4079,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_dict_free(&analysis->import_closures);
         core_dict_free(&analysis->visibility_units);
     }
-    if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
+    core_dict_free(&analysis->escaped_globals);
     if (analysis->bounded_targets_ready)
         core_dict_free(&analysis->bounded_targets);
     for (size_t e = 0; e < analysis->user_effects.len; e++) {
@@ -4100,6 +4092,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->effect_natives);
     if (analysis->effect_functions_ready)
         core_dict_free(&analysis->effect_functions);
+    for (size_t i = 0; i < analysis->specializations.len; i++)
+        core_list_free(analysis->specializations.data[i].outcomes);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
     core_list_free(analysis->boxed_hooks.addresses);
@@ -4237,8 +4231,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symbols = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symbols = tu_symtab(unit);
         if (!symbols || !module_scope(state)) continue;
         th_ctx *probe = th_ctx_new();
         core_string_t package = n00bb_package_id(unit);
@@ -4509,8 +4502,7 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symbols = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symbols = tu_symtab(unit);
         if (!symbols || !module_scope(state)) continue;
         core_list_t(parse_sym_entry_ptr_t) targets =
             core_list_new(parse_sym_entry_ptr_t);

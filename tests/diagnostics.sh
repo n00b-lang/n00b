@@ -78,6 +78,12 @@ wait
 
 failed=0
 count=0
+again=tests/diagnostics/lower/locked_writes
+"$compiler" check "$again.n" >/dev/null 2>"$tmp/again"
+if ! diff -u "$tmp/raw/$(key "$again")" "$tmp/again" >&2; then
+    echo "checking $again.n again over its record warned differently" >&2
+    failed=$((failed + 1))
+fi
 if [ "$checked_status" != 1 ]; then
     echo "n00b check exited $checked_status over the corpus, expected 1" >&2
     failed=$((failed + 1))

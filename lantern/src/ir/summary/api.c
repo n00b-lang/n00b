@@ -249,8 +249,11 @@ ir_summary_bounded(ir_summaries_t *summaries, const ir_func_t *function,
         add_path(summary, &(ir_spath_t){
             .root = IR_SPLACE_UNKNOWN, .flags = globals | IR_SPATH_DEEP});
     for (uint32_t p = 0; p < function->n_params; p++) {
+        bool written = p >= 16 || !(forbidden & UINT64_C(1)
+            << (IR_SEFFECT_WRITES_PARAM_SHIFT + p));
         ir_spath_t path = ir_spath_of_place(&(ir_splace_t){
-            .kind = IR_SPLACE_PARAM, .param = p}, IR_SPATH_ACCESS);
+            .kind = IR_SPLACE_PARAM, .param = p},
+            written ? IR_SPATH_ACCESS : IR_SPATH_READ);
         add_path(summary, &path);
     }
     if (summary->flags & IR_SUMMARY_MAY_TRAP) summary->traps = IR_STRAP_ALL;
@@ -549,6 +552,8 @@ summary_shell(ir_summaries_t *summaries, const ir_func_t *function)
     void *summary = summaries
         ? core_dict_get(&summaries->by_function, (void *)function, &found)
         : nullptr;
+    if (!found && summaries && summaries->fallback)
+        return summary_shell(summaries->fallback, function);
     return found ? summary : nullptr;
 }
 
@@ -1000,7 +1005,10 @@ entries_unrecorded(ir_summaries_t *summaries, uint32_t flag)
 {
     const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
     return hooks && hooks->entries
-        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+        ? hooks->entries(hooks->context, summaries, flag,
+                         summaries->member_count ? summaries->members[0]
+                                                 : nullptr)
+        : nullptr;
 }
 
 const ir_summary_t *

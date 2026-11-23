@@ -21,8 +21,13 @@
 #include "ir/layout.h"
 #include "th/environment.h"
 
+typedef bool (*layout_symbol_fn)(n00bb_link_analysis_t *analysis,
+                                 core_translation_unit_t *unit,
+                                 ir_module_t *module, parse_scope_t *scope,
+                                 parse_sym_entry_t *symbol);
+
 static bool
-publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
+visit_layout_symbols(n00bb_link_analysis_t *analysis, layout_symbol_fn visit)
 {
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
@@ -32,46 +37,27 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
         ir_module_t *module = state ? state->ir_module : nullptr;
         if (!symtab || !module) return false;
         for (parse_scope_t *scope = symtab->all_scopes; scope;
-             scope = scope->all_next) {
+             scope = scope->all_next)
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                if (!symbol->type) continue;
-                const n00bb_enum_range_t *enum_range = parse_sym_binding(
-                    symbol, CORE_STRING_STATIC("n00bb.enum-range"));
-                uint64_t enum_bits = enum_range ? enum_range->storage_bits
-                                                : 0;
-                const n00bb_flagset_info_t *flagset_info = parse_sym_binding(
-                    symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
-                th_type *type = th_apply_subst(ir_module_types(module),
-                                               symbol->type);
-                bool handled = false;
-                bool layout_ok = type && n00bb_abi_publish_direct_layout(
-                    module, type, &analysis->target, &handled);
-                if (layout_ok && enum_bits)
-                    layout_ok = enum_bits <= UINT32_MAX
-                        && n00bb_abi_publish_integer_like_layout(
-                            module, type, &analysis->target,
-                            (uint32_t)enum_bits);
-                if (layout_ok && flagset_info && flagset_info->atomic_count)
-                    layout_ok = n00bb_abi_publish_integer_like_layout(
-                        module, type, &analysis->target,
-                        flagset_info->atomic_count);
-                if (layout_ok) continue;
-                core_string_t printed = n00bb_print_type(
-                    ir_module_types(module), type ? type : symbol->type);
-                n00bb_internal_error(core_translation_unit_diagnostics(unit),
-                    unit, symbol->decl_node
-                        ? link_source_location(symbol->decl_node)
-                        : (core_diag_location_t){0},
-                    "computing type layouts",
-                    "could not compute the memory layout of `%.*s`",
-                    (int)printed.u8_bytes, printed.data);
-                return false;
-            }
-        }
+                 symbol = symbol->next_in_scope)
+                if (!visit(analysis, unit, module, scope, symbol))
+                    return false;
+        if (!visit(analysis, unit, module, nullptr, nullptr)) return false;
+    }
+    return true;
+}
+
+static bool
+publish_known_scalar_layout(n00bb_link_analysis_t *analysis,
+                            core_translation_unit_t *unit,
+                            ir_module_t *module, parse_scope_t *scope,
+                            parse_sym_entry_t *symbol)
+{
+    (void)scope;
+    if (!symbol) {
         th_type *failed_type = nullptr;
         if (n00bb_abi_publish_interned_direct_layouts(
-                module, &analysis->target, &failed_type)) continue;
+                module, &analysis->target, &failed_type)) return true;
         core_string_t printed = n00bb_print_type(ir_module_types(module),
                                                  failed_type);
         n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
@@ -80,7 +66,34 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
             (int)printed.u8_bytes, printed.data);
         return false;
     }
-    return true;
+    if (!symbol->type) return true;
+    const n00bb_enum_range_t *enum_range = parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.enum-range"));
+    uint64_t enum_bits = enum_range ? enum_range->storage_bits : 0;
+    const n00bb_flagset_info_t *flagset_info = parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
+    th_type *type = th_apply_subst(ir_module_types(module), symbol->type);
+    bool handled = false;
+    bool layout_ok = type && n00bb_abi_publish_direct_layout(
+        module, type, &analysis->target, &handled);
+    if (layout_ok && enum_bits)
+        layout_ok = enum_bits <= UINT32_MAX
+            && n00bb_abi_publish_integer_like_layout(
+                module, type, &analysis->target, (uint32_t)enum_bits);
+    if (layout_ok && flagset_info && flagset_info->atomic_count)
+        layout_ok = n00bb_abi_publish_integer_like_layout(
+            module, type, &analysis->target, flagset_info->atomic_count);
+    if (layout_ok) return true;
+    core_string_t printed = n00bb_print_type(
+        ir_module_types(module), type ? type : symbol->type);
+    n00bb_internal_error(core_translation_unit_diagnostics(unit),
+        unit, symbol->decl_node
+            ? link_source_location(symbol->decl_node)
+            : (core_diag_location_t){0},
+        "computing type layouts",
+        "could not compute the memory layout of `%.*s`",
+        (int)printed.u8_bytes, printed.data);
+    return false;
 }
 
 static bool
@@ -148,49 +161,36 @@ inline_layout_cycle(ir_module_t *module, th_type *type, core_string_t via,
 }
 
 static bool
-validate_inline_layout_cycles(n00bb_link_analysis_t *analysis)
+validate_inline_layout_cycle(n00bb_link_analysis_t *analysis,
+                             core_translation_unit_t *unit,
+                             ir_module_t *module, parse_scope_t *scope,
+                             parse_sym_entry_t *symbol)
 {
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        core_translation_unit_t *unit = analysis->units.data[u];
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        ir_module_t *module = state ? state->ir_module : nullptr;
-        if (!symtab || !module) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
-             scope = scope->all_next) {
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
-                    || !ir_type_definition(module, symbol->type)) continue;
-                core_list_t(th_type_ptr_t) active =
-                    core_list_new(th_type_ptr_t);
-                core_list_t(core_string_t) edges =
-                    core_list_new(core_string_t);
-                core_buffer_t message = {0};
-                bool cycle = inline_layout_cycle(module, symbol->type,
-                    (core_string_t){}, &active, &edges, &message);
-                core_list_free(active);
-                core_list_free(edges);
-                core_diagnostics_t *diagnostics =
-                    core_translation_unit_diagnostics(unit);
-                if (cycle
-                    && n00bb_report(diagnostics, unit,
-                        N00B_DIAG_TYPE_CONTAINS_ITSELF, symbol->decl_node
-                            ? link_source_location(symbol->decl_node)
-                            : (core_diag_location_t){0},
-                                N00B_TEXT_CONTAINS_ITSELF_BY_VALUE_THROUGH,
-                        N00BB_ARGS(ARG_TEXT(symbol->name),
-                                   ARG_TEXT(core_buffer_string(&message)))))
-                    n00bb_report_help(diagnostics,
-                        N00B_TEXT_BREAK_THE_CYCLE_WITH_A,
-                        N00BB_NO_ARGS);
-                core_buffer_release(&message);
-                if (cycle) return false;
-            }
-        }
-    }
-    return true;
+    (void)analysis;
+    (void)scope;
+    if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
+        || !ir_type_definition(module, symbol->type)) return true;
+    core_list_t(th_type_ptr_t) active = core_list_new(th_type_ptr_t);
+    core_list_t(core_string_t) edges = core_list_new(core_string_t);
+    core_buffer_t message = {0};
+    bool cycle = inline_layout_cycle(module, symbol->type,
+        (core_string_t){}, &active, &edges, &message);
+    core_list_free(active);
+    core_list_free(edges);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (cycle
+        && n00bb_report(diagnostics, unit,
+            N00B_DIAG_TYPE_CONTAINS_ITSELF, symbol->decl_node
+                ? link_source_location(symbol->decl_node)
+                : (core_diag_location_t){0},
+                    N00B_TEXT_CONTAINS_ITSELF_BY_VALUE_THROUGH,
+            N00BB_ARGS(ARG_TEXT(symbol->name),
+                       ARG_TEXT(core_buffer_string(&message)))))
+        n00bb_report_help(diagnostics,
+            N00B_TEXT_BREAK_THE_CYCLE_WITH_A,
+            N00BB_NO_ARGS);
+    core_buffer_release(&message);
+    return !cycle;
 }
 
 static bool
@@ -490,39 +490,53 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     return valid;
 }
 
+int
+n00bb_compare_symbol_names(const void *left, const void *right)
+{
+    return core_string_cmp((*(parse_sym_entry_t *const *)left)->name,
+                           (*(parse_sym_entry_t *const *)right)->name);
+}
+
 static bool
 publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
 {
-    for (size_t u = 0; u < analysis->units.len; u++) {
+    bool ok = true;
+    core_list_t(parse_sym_entry_ptr_t) requested =
+        core_list_new(parse_sym_entry_ptr_t);
+    for (size_t u = 0; ok && u < analysis->units.len; u++) {
         core_translation_unit_t *owner = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(owner);
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
-        if (!symtab) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
+        ok = symtab != nullptr;
+        requested.len = 0;
+        for (parse_scope_t *scope = ok ? symtab->all_scopes : nullptr; scope;
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
                 n00bb_record_layout_request_t *request = parse_sym_binding(
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
-                if (!request || request->policy != N00BB_RECORD_C) continue;
-                for (size_t d = 0; d < analysis->units.len; d++) {
-                    core_translation_unit_t *importer =
-                        analysis->units.data[d];
-                    if (importer != owner
-                        && !n00bb_unit_reaches_import(importer, owner)) continue;
-                    n00bb_tu_state_t *destination = tu_state(
-                        importer);
-                    if (!destination->ir_module
-                        || !publish_c_record_symbol(analysis, owner, symbol,
-                                                    destination->ir_module))
-                        return false;
-                }
+                if (request && request->policy == N00BB_RECORD_C)
+                    core_list_push(requested, symbol);
             }
         }
+        if (requested.len > 1)
+            qsort(requested.data, requested.len, sizeof(*requested.data),
+                  n00bb_compare_symbol_names);
+        for (size_t s = 0; ok && s < requested.len; s++)
+            for (size_t d = 0; ok && d < analysis->units.len; d++) {
+                core_translation_unit_t *importer = analysis->units.data[d];
+                if (importer != owner
+                    && !n00bb_unit_reaches_import(importer, owner)) continue;
+                n00bb_tu_state_t *destination = tu_state(importer);
+                ok = destination->ir_module
+                    && publish_c_record_symbol(analysis, owner,
+                           requested.data[s], destination->ir_module);
+            }
     }
-    return true;
+    core_list_free(requested);
+    return ok;
 }
 
 static bool
@@ -531,8 +545,7 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
+        parse_symtab_t *symtab = tu_symtab(unit);
         if (!symtab) return false;
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
@@ -633,6 +646,11 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
             for (size_t p = 0; valid && p < pending.len; p++) {
                 uint32_t i = pending.data[p];
                 th_type *registered = ir_type_at(module, i);
+                th_type *shape = registered ? th_resolve(registered) : nullptr;
+                if (shape && th_kind_of(shape) == TH_SEQUENCE)
+                    ir_type_intern(module, th_seq_elem(shape));
+                if (shape && th_kind_of(shape) == TH_INDIRECTION)
+                    ir_type_intern(module, th_ind_referent(shape));
                 if (!registered
                     || th_kind_of(th_resolve(registered)) != TH_NAMED)
                     continue;
@@ -656,12 +674,16 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 core_translation_unit_t *owner = nullptr;
                 if (requested_record_symbol_for_type(analysis, type,
                         N00BB_RECORD_C, &owner)) {
-                    ir_module_t *source = u >= analysis->units.len && owner
+                    ir_module_t *source = owner
                         ? tu_state(owner)->ir_module : nullptr;
                     const ir_final_layout_t *layout = source
                         ? ir_layout_final(source, type,
                                           analysis->target.triple)
                         : nullptr;
+                    for (size_t j = 0; layout && j < th_record_len(definition);
+                         j++)
+                        ir_type_intern(module,
+                                       th_record_member(definition, j)->type);
                     if (layout) {
                         valid = ir_layout_publish_final(module, type,
                             analysis->target.triple, layout);
@@ -714,6 +736,7 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         ? ir_layout_final(module, physical,
                                           analysis->target.triple) : nullptr;
                     if (!member || !member->name.data || !child) {
+                        if (physical) ir_type_intern(module, physical);
                         ready = false;
                         break;
                     }
@@ -760,25 +783,6 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     return valid;
 }
 
-static bool
-borrow_owner_layouts(ir_module_t *module, th_type *type,
-                     core_string_t target, size_t depth)
-{
-    type = type ? th_resolve(type) : nullptr;
-    if (!type || depth > 16 || th_kind_of(type) != TH_NAMED) return true;
-    for (size_t i = 0; i < th_named_nargs(type); i++) {
-        const th_arg *argument = th_named_arg(type, i);
-        if (argument && argument->kind == TH_ARG_TYPE
-            && !borrow_owner_layouts(module, argument->type, target,
-                                     depth + 1)) return false;
-    }
-    if (ir_layout_final(module, type, target)) return true;
-    ir_module_t *owner = ir_type_definition_owner(module, type);
-    const ir_final_layout_t *layout = owner && owner != module
-        ? ir_layout_final(owner, type, target) : nullptr;
-    return !layout || ir_layout_publish_final(module, type, target, layout);
-}
-
 bool
 publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
 {
@@ -795,9 +799,7 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 if (!channels[c] || !th_is_closed(ir_module_types(module),
                                                  channels[c])) continue;
                 bool handled = false;
-                if (!borrow_owner_layouts(module, channels[c],
-                        analysis->target.triple, 0)
-                    || !n00bb_abi_publish_direct_layout(module,
+                if (!n00bb_abi_publish_direct_layout(module,
                         channels[c], &analysis->target, &handled))
                     return false;
             }
@@ -806,10 +808,8 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 bool handled = false;
                 if (parameter && parameter->type
                     && th_is_closed(ir_module_types(module), parameter->type)
-                    && (!borrow_owner_layouts(module, parameter->type,
-                            analysis->target.triple, 0)
-                        || !n00bb_abi_publish_direct_layout(module,
-                            parameter->type, &analysis->target, &handled)))
+                    && !n00bb_abi_publish_direct_layout(module,
+                        parameter->type, &analysis->target, &handled))
                     return false;
             }
             for (size_t b = 0; b < function->n_blocks; b++) {
@@ -940,89 +940,74 @@ finalize_atomic_aggregate_layouts(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+static bool
+select_symbol_storage(n00bb_link_analysis_t *analysis,
+                      core_translation_unit_t *unit, ir_module_t *module,
+                      parse_scope_t *scope, parse_sym_entry_t *symbol)
+{
+    (void)unit;
+    bool local_value = symbol
+        && (symbol->kind == PARSE_SYM_VARIABLE
+            || symbol->kind == PARSE_SYM_PARAM)
+        && symbol->type
+        && scope_has_lexical_lifetime(scope);
+    if (!local_value || is_reference_symbol(symbol)
+        || symbol->storage_class_required
+        || (symbol->selected_storage_class.data
+            && symbol->selected_storage_class.u8_bytes)
+        || symbol->storage_duration == PARSE_SYM_STORAGE_DYNAMIC)
+        return true;
+
+    th_type *type = th_apply_subst(ir_module_types(module), symbol->type);
+    const ir_final_layout_t *published = type
+        ? ir_layout_final_visible(module, type, ir_module_target(module))
+        : nullptr;
+    uint64_t size_bytes = 0;
+    bool size_known = published
+        && ir_layout_final_byte_extent(published, &size_bytes);
+    if (!size_known && type && ir_layout_compute(module, type, nullptr)) {
+        ir_descriptor_t *layout = ir_layout_of(module, type,
+            ir_module_target(module));
+        size_known = layout && ir_layout_is_settled(&layout->size);
+        if (size_known) size_bytes = layout->size.value;
+    }
+    bool dynamic_duration = false;
+    n00bb_storage_decision_t decision = n00bb_storage_choose_placement(
+        &(n00bb_storage_placement_facts_t){
+            .has_lexical_lifetime = true,
+            .is_reference = false,
+            .size_known = size_known,
+            .size_bytes = size_bytes,
+            .stack_limit_bytes = N00BB_STACK_OBJECT_LIMIT_BYTES,
+        }, &dynamic_duration);
+    if (decision >= N00BB_STORAGE_INVALID_TARGET) return false;
+    if (dynamic_duration)
+        parse_sym_set_storage_duration(symbol, PARSE_SYM_STORAGE_DYNAMIC);
+    else if (symbol->storage_duration == PARSE_SYM_STORAGE_UNSPECIFIED)
+        parse_sym_set_storage_duration(symbol, PARSE_SYM_STORAGE_AUTOMATIC);
+
+    core_link_declaration_t *declaration =
+        link_declaration_for_symbol(analysis, symbol);
+    n00bb_link_payload_t *payload = declaration
+        ? core_link_declaration_binding(declaration,
+            CORE_STRING_STATIC("n00bb.semantic.declaration-facts"))
+        : nullptr;
+    if (payload) {
+        payload->storage_duration = symbol->storage_duration;
+        payload->selected_storage_class = symbol->selected_storage_class;
+    }
+    return true;
+}
+
 bool
 select_storage_placement(n00bb_link_analysis_t *analysis)
 {
-    if (!analysis || !validate_inline_layout_cycles(analysis)
-        || !publish_known_scalar_layouts(analysis)
-        || !publish_requested_c_record_layouts(analysis)
-        || !publish_declared_aggregate_layouts(analysis)
-        || !finalize_atomic_aggregate_layouts(analysis)
-        || !reject_unlowered_record_layout_requests(analysis)) return false;
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        core_translation_unit_t *unit = analysis->units.data[i];
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        ir_module_t *module = state ? state->ir_module : nullptr;
-        if (!symtab || !module) return false;
-        for (parse_scope_t *scope = symtab->all_scopes; scope;
-             scope = scope->all_next) {
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                bool local_value = (symbol->kind == PARSE_SYM_VARIABLE
-                                    || symbol->kind == PARSE_SYM_PARAM)
-                    && symbol->type
-                    && scope_has_lexical_lifetime(scope);
-                if (!local_value || is_reference_symbol(symbol)
-                    || symbol->storage_class_required
-                    || (symbol->selected_storage_class.data
-                        && symbol->selected_storage_class.u8_bytes)
-                    || symbol->storage_duration
-                        == PARSE_SYM_STORAGE_DYNAMIC)
-                    continue;
-
-                th_type *type = th_apply_subst(ir_module_types(module),
-                                               symbol->type);
-                const ir_final_layout_t *published = type
-                    ? ir_layout_final_visible(module, type,
-                                              ir_module_target(module))
-                    : nullptr;
-                uint64_t size_bytes = 0;
-                bool size_known = published
-                    && ir_layout_final_byte_extent(published, &size_bytes);
-                if (!size_known && type
-                    && ir_layout_compute(module, type, nullptr)) {
-                    ir_descriptor_t *layout = ir_layout_of(module, type,
-                        ir_module_target(module));
-                    size_known = layout
-                        && ir_layout_is_settled(&layout->size);
-                    if (size_known) size_bytes = layout->size.value;
-                }
-                bool dynamic_duration = false;
-                n00bb_storage_decision_t decision =
-                    n00bb_storage_choose_placement(
-                        &(n00bb_storage_placement_facts_t){
-                            .has_lexical_lifetime = true,
-                            .is_reference = false,
-                            .size_known = size_known,
-                            .size_bytes = size_bytes,
-                            .stack_limit_bytes =
-                                N00BB_STACK_OBJECT_LIMIT_BYTES,
-                        }, &dynamic_duration);
-                if (decision >= N00BB_STORAGE_INVALID_TARGET)
-                    return false;
-                if (dynamic_duration)
-                    parse_sym_set_storage_duration(
-                        symbol, PARSE_SYM_STORAGE_DYNAMIC);
-                else if (symbol->storage_duration
-                         == PARSE_SYM_STORAGE_UNSPECIFIED)
-                    parse_sym_set_storage_duration(
-                        symbol, PARSE_SYM_STORAGE_AUTOMATIC);
-
-                core_link_declaration_t *declaration =
-                    link_declaration_for_symbol(analysis, symbol);
-                n00bb_link_payload_t *payload = declaration
-                    ? core_link_declaration_binding(declaration,
-                        CORE_STRING_STATIC("n00bb.semantic.declaration-facts"))
-                    : nullptr;
-                if (payload) {
-                    payload->storage_duration = symbol->storage_duration;
-                    payload->selected_storage_class =
-                        symbol->selected_storage_class;
-                }
-            }
-        }
-    }
-    return true;
+    return analysis
+        && visit_layout_symbols(analysis, validate_inline_layout_cycle)
+        && visit_layout_symbols(analysis, publish_known_scalar_layout)
+        && publish_requested_c_record_layouts(analysis)
+        && publish_declared_aggregate_layouts(analysis)
+        && finalize_atomic_aggregate_layouts(analysis)
+        && reject_unlowered_record_layout_requests(analysis)
+        && visit_layout_symbols(analysis, select_symbol_storage);
 }

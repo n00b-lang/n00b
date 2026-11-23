@@ -232,59 +232,43 @@ core_string_t ir_mutability_name(ir_mutability_t m)
 bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
                              bool is_initializer)
 {
-    if (!ctx || !function) return false;
-    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.initializer"),
-        .kind = IR_ANNOT_BOOL,
-        .b = is_initializer,
-    });
+    return function && ir_annot_set_bool(ctx, &function->annots,
+                                         CORE_STRING_STATIC("ir.initializer"),
+                                         is_initializer);
 }
 
 bool ir_func_is_initializer(const ir_func_t *function)
 {
-    if (!function) return false;
-    ir_annot_t *initializer = ir_annot_get(
-        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.initializer"));
-    return initializer && initializer->kind == IR_ANNOT_BOOL
-        && initializer->b;
+    return function && ir_annot_bool(&function->annots,
+                                     CORE_STRING_STATIC("ir.initializer"));
 }
 
 bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
                                bool enabled)
 {
-    if (!ctx || !function) return false;
-    return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.always_inline"),
-        .kind = IR_ANNOT_BOOL,
-        .b = enabled,
-    });
+    return function && ir_annot_set_bool(ctx, &function->annots,
+                                         CORE_STRING_STATIC("ir.always_inline"),
+                                         enabled);
 }
 
 bool ir_func_is_always_inline(const ir_func_t *function)
 {
-    if (!function) return false;
-    ir_annot_t *inline_attr = ir_annot_get(
-        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.always_inline"));
-    return inline_attr && inline_attr->kind == IR_ANNOT_BOOL
-        && inline_attr->b;
+    return function && ir_annot_bool(&function->annots,
+                                     CORE_STRING_STATIC("ir.always_inline"));
 }
 
 bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value)
 {
     ir_annots_t *annots = value ? ir_value_annots(value) : nullptr;
-    return ctx && annots && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.external_writable_storage"), .kind = IR_ANNOT_BOOL,
-        .b = true,
-    });
+    return ir_annot_set_bool(
+        ctx, annots, CORE_STRING_STATIC("ir.external_writable_storage"), true);
 }
 
 bool ir_value_has_external_writable_storage(const ir_value_t *value)
 {
-    ir_annots_t *annots = value ? ir_value_annots((ir_value_t *)value)
-                                : nullptr;
-    ir_annot_t *marker = annots
-        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.external_writable_storage")) : nullptr;
-    return marker && marker->kind == IR_ANNOT_BOOL && marker->b;
+    return value && ir_annot_bool(
+        ir_value_annots((ir_value_t *)value),
+        CORE_STRING_STATIC("ir.external_writable_storage"));
 }
 
 bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
@@ -551,7 +535,7 @@ bool ir_type_define(ir_module_t *m, th_type *named, th_type *def)
     if (!m || !named || !def || th_kind_of(named) != TH_NAMED) {
         return false;
     }
-    if (!th_type_define_owned(m->ctx->types, named, def, m)) return false;
+    if (!th_type_define(m->ctx->types, named, def)) return false;
 
     ir_type_intern(m, named);
     ir_type_intern(m, def);
@@ -577,20 +561,9 @@ th_type *ir_type_definition(ir_module_t *m, th_type *named)
     }
 
     th_type *definition = th_type_definition(m->ctx->types, named);
-    if (definition) {
-        if (th_is_closed(m->ctx->types, named)
-            && !th_type_definition_owner(m->ctx->types, named)
-            && !ir_type_define(m, named, definition)) return nullptr;
-        return definition;
-    }
+    if (definition) return definition;
     ir_typeslot_t *slot = type_find(m, ir_type_id(m, named));
     return slot ? slot->def : nullptr;
-}
-
-ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named)
-{
-    if (!m || !named || th_kind_of(named) != TH_NAMED) return nullptr;
-    return th_type_definition_owner(m->ctx->types, named);
 }
 
 th_type *ir_call_function_type(const ir_instr_t *call)

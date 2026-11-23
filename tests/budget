@@ -9,6 +9,8 @@ release ffi
 release array-uint-index-n00b
 release ffi-resharp
 release incremental-cache-lto
+release closed-world-n00b
+release cache-fill-lto
 exempt lto-n00b 31
 exempt diagnostics 36
 exempt check-programs-a 36
@@ -18,6 +20,7 @@ exempt ffi 28
 exempt ffi-zlib 23
 exempt text-theme-builtin-immutable 25
 exempt incremental-cache 35
+exempt cache-matrix 75
 exempt install 23
 exempt gc-units-n00b 30
 exempt lang-suite-n00b 28
@@ -25,10 +28,10 @@ exempt calls-n00b 30
 exempt generics-text-n00b 21
 exempt nil-types-n00b 30
 exempt ffi-zlib-litmod 21
-exempt incremental-cache-shapes 31
-exempt incremental-cache-instances 38
-exempt incremental-cache-contexts 40
-exempt incremental-cache-lto 70
+exempt cache-fill 25
+exempt cache-fill-lto 30
+exempt incremental-cache-instances 30
+exempt incremental-cache-lto 55
 exempt bitcode-build-time 28
 exempt langtools-suite 95
 exempt resharp-import 600
