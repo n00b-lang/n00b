@@ -1,4 +1,7 @@
 #include "lower/lower_internal.h"
+#include "parse/pwz.h"
+#include "scanner/token_stream.h"
+#include "scanner/tokenizer.h"
 
 static ir_func_t *
 effects_subject(ir_instr_t *call);
@@ -2187,8 +2190,8 @@ typedef struct query_node_t {
 typedef struct {
     n00bb_link_analysis_t *analysis;
     core_diagnostics_t    *diagnostics;
+    parse_grammar_t       *grammar;
     core_string_t          text;
-    size_t                 at;
     bool                   failed;
 } query_parser_t;
 
@@ -2215,51 +2218,31 @@ query_node(query_kind_t kind, query_node_t *left, query_node_t *right)
     return node;
 }
 
-static bool
-query_word_byte(char c)
+static parse_token_info_t *
+query_last_terminal(parse_tree_t *node)
 {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-        || (c >= '0' && c <= '9') || c == '_' || c == '.';
+    if (!node) return nullptr;
+    if (core_tree_is_leaf(node)) return parse_node_token(node);
+    for (size_t i = core_tree_num_children(node); i > 0; i--) {
+        parse_token_info_t *token = query_last_terminal(
+            core_tree_child(node, i - 1));
+        if (token) return token;
+    }
+    return nullptr;
 }
 
 static core_string_t
-query_peek(const query_parser_t *parser)
+query_span(const query_parser_t *parser, parse_tree_t *node)
 {
-    core_string_t text = parser->text;
-    size_t at = parser->at;
-    while (at < text.u8_bytes && (text.data[at] == ' '
-                                  || text.data[at] == '\t'
-                                  || text.data[at] == '\n'))
-        at++;
-    if (at >= text.u8_bytes) return (core_string_t){0};
-    char c = text.data[at];
-    size_t end = at + 1;
-    if (query_word_byte(c))
-        while (end < text.u8_bytes && query_word_byte(text.data[end])) end++;
-    else if ((c == '&' || c == '|') && end < text.u8_bytes
-             && text.data[end] == c)
-        end++;
-    return core_string_slice(text, at, end - at);
-}
-
-static void
-query_advance(query_parser_t *parser, core_string_t token)
-{
-    parser->at = (size_t)(token.data - parser->text.data) + token.u8_bytes;
-}
-
-static bool
-query_is(core_string_t token, core_string_t word)
-{
-    return token.data && core_string_eq(token, word);
-}
-
-static bool
-query_keyword(core_string_t token)
-{
-    return query_is(token, CORE_STRING_STATIC("and"))
-        || query_is(token, CORE_STRING_STATIC("or"))
-        || query_is(token, CORE_STRING_STATIC("not"));
+    parse_token_info_t *first = node ? parse_tree_find_first_terminal(node)
+                                     : nullptr;
+    parse_token_info_t *last = query_last_terminal(node);
+    if (!first || !last) return (core_string_t){0};
+    size_t start = parse_token_start_byte(first);
+    size_t end = parse_token_end_byte(last);
+    return start <= end && end <= parser->text.u8_bytes
+        ? core_string_slice(parser->text, start, end - start)
+        : (core_string_t){0};
 }
 
 static void
@@ -2366,16 +2349,12 @@ query_resolve_effect(query_parser_t *parser, core_string_t word,
     return true;
 }
 
-static query_node_t *query_binary(query_parser_t *parser, bool any);
-
 static query_node_t *
-query_question(query_parser_t *parser)
+query_question(query_parser_t *parser, parse_tree_t *question)
 {
-    core_string_t word = query_peek(parser);
-    if (!word.data || !query_word_byte(word.data[0]) || query_keyword(word)) {
-        query_expected(parser, N00B_TEXT_QUERY_A_QUESTION, word);
-        return nullptr;
-    }
+    parse_grammar_t *grammar = parser->grammar;
+    core_string_t word = query_span(parser, child_nt(grammar, question,
+        CORE_STRING_STATIC("effect-query-word")));
     n00bb_query_t query = n00bb_query_named(word);
     if (query != N00BB_QUERY_MAY_EFFECT && query != N00BB_QUERY_FORBIDS_EFFECT
         && query != N00BB_QUERY_HAS_EFFECT) {
@@ -2383,28 +2362,18 @@ query_question(query_parser_t *parser)
                      N00BB_ARGS(ARG_TEXT(word)));
         return nullptr;
     }
-    query_advance(parser, word);
-    core_string_t open = query_peek(parser);
-    bool parenthesized = query_is(open, CORE_STRING_STATIC("("));
-    if (parenthesized) query_advance(parser, open);
-    core_string_t name = query_peek(parser);
-    if (!name.data || !query_word_byte(name.data[0]) || query_keyword(name)) {
-        query_expected(parser, N00B_TEXT_QUERY_AN_EFFECT, name);
+    parse_tree_t *function = child_nt(grammar, question,
+                                      CORE_STRING_STATIC("expression"));
+    if (function) {
+        query_expected(parser, N00B_TEXT_QUERY_AN_EFFECT,
+                       query_span(parser, function));
         return nullptr;
-    }
-    query_advance(parser, name);
-    if (parenthesized) {
-        core_string_t close = query_peek(parser);
-        if (!query_is(close, CORE_STRING_STATIC(")"))) {
-            query_expected(parser, N00B_TEXT_QUERY_CLOSING_PAREN, close);
-            return nullptr;
-        }
-        query_advance(parser, close);
     }
     query_node_t *node = query_node(QUERY_LEAF, nullptr, nullptr);
     if (!node) return nullptr;
     node->query = query;
-    if (!query_resolve_effect(parser, name, node)) {
+    if (!query_resolve_effect(parser, query_span(parser, child_nt(grammar,
+            question, CORE_STRING_STATIC("effect-query-name"))), node)) {
         query_free(node);
         return nullptr;
     }
@@ -2412,68 +2381,89 @@ query_question(query_parser_t *parser)
 }
 
 static query_node_t *
-query_unary(query_parser_t *parser)
+query_tree(query_parser_t *parser, parse_tree_t *node)
 {
-    core_string_t token = query_peek(parser);
-    if (query_is(token, CORE_STRING_STATIC("not"))
-        || query_is(token, CORE_STRING_STATIC("!"))) {
-        query_advance(parser, token);
-        query_node_t *operand = query_unary(parser);
-        return operand ? query_node(QUERY_NOT, operand, nullptr) : nullptr;
-    }
-    if (!query_is(token, CORE_STRING_STATIC("(")))
-        return query_question(parser);
-    query_advance(parser, token);
-    query_node_t *inner = query_binary(parser, true);
-    if (!inner) return nullptr;
-    core_string_t close = query_peek(parser);
-    if (!query_is(close, CORE_STRING_STATIC(")"))) {
-        query_expected(parser, N00B_TEXT_QUERY_CLOSING_PAREN, close);
-        query_free(inner);
-        return nullptr;
-    }
-    query_advance(parser, close);
-    return inner;
-}
-
-static query_node_t *
-query_binary(query_parser_t *parser, bool any)
-{
-    core_string_t word = any ? CORE_STRING_STATIC("or")
-                             : CORE_STRING_STATIC("and");
-    core_string_t symbol = any ? CORE_STRING_STATIC("||")
-                               : CORE_STRING_STATIC("&&");
-    query_node_t *left = any ? query_binary(parser, false)
-                             : query_unary(parser);
-    while (left) {
-        core_string_t token = query_peek(parser);
-        if (!query_is(token, word) && !query_is(token, symbol)) break;
-        query_advance(parser, token);
-        query_node_t *right = any ? query_binary(parser, false)
-                                  : query_unary(parser);
+    parse_grammar_t *grammar = parser->grammar;
+    while (node && !core_tree_is_leaf(node)
+           && core_tree_num_children(node) == 1
+           && !nt_is(grammar, node, CORE_STRING_STATIC("effect-query")))
+        node = core_tree_child(node, 0);
+    size_t count = node && !core_tree_is_leaf(node)
+        ? core_tree_num_children(node) : 0;
+    bool any = nt_is(grammar, node, CORE_STRING_STATIC("or-expr"));
+    if ((any || nt_is(grammar, node, CORE_STRING_STATIC("and-expr")))
+        && count == 3) {
+        query_node_t *left = query_tree(parser, core_tree_child(node, 0));
+        query_node_t *right = left
+            ? query_tree(parser, core_tree_child(node, 2)) : nullptr;
         if (!right) {
             query_free(left);
             return nullptr;
         }
-        left = query_node(any ? QUERY_OR : QUERY_AND, left, right);
+        return query_node(any ? QUERY_OR : QUERY_AND, left, right);
     }
-    return left;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("unary-expr")) && count == 2
+        && nt_is(grammar, core_tree_child(node, 0),
+                 CORE_STRING_STATIC("not-op"))) {
+        query_node_t *operand = query_tree(parser, core_tree_child(node, 1));
+        return operand ? query_node(QUERY_NOT, operand, nullptr) : nullptr;
+    }
+    if (nt_is(grammar, node, CORE_STRING_STATIC("tuple-or-paren"))
+        && count == 3
+        && parse_tree_leaf_is(core_tree_child(node, 2),
+                              CORE_STRING_STATIC(")")))
+        return query_tree(parser, core_tree_child(node, 1));
+    if (nt_is(grammar, node, CORE_STRING_STATIC("effect-query")))
+        return query_question(parser, node);
+    query_expected(parser, N00B_TEXT_QUERY_A_QUESTION,
+                   query_span(parser, node));
+    return nullptr;
 }
 
 static query_node_t *
 query_parse(n00bb_link_analysis_t *analysis, core_diagnostics_t *diagnostics,
-            core_string_t text)
+            parse_grammar_t *grammar, core_string_t text)
 {
     query_parser_t parser = {
-        .analysis = analysis, .diagnostics = diagnostics, .text = text,
+        .analysis = analysis, .diagnostics = diagnostics, .grammar = grammar,
+        .text = text,
     };
-    query_node_t *tree = query_binary(&parser, true);
-    core_string_t rest = query_peek(&parser);
-    if (tree && rest.data) {
-        query_expected(&parser, N00B_TEXT_QUERY_THE_END, rest);
-        query_free(tree);
-        return nullptr;
+    parse_token_stream_t *tokens = grammar
+        ? scan_tokenize_owned(grammar, text) : nullptr;
+    if (tokens) {
+        while (scan_stream_next(tokens)) {}
+        scan_stream_rewind(tokens, scan_stream_token_count(tokens));
     }
+    parse_nonterm_t *start = grammar ? parse_find_nonterm(grammar,
+        CORE_STRING_STATIC("expression")) : nullptr;
+    parse_pwz_parser_t *pwz = start
+        ? parse_pwz_new_for_start(grammar, parse_nonterm_id(start)) : nullptr;
+    query_node_t *tree = nullptr;
+    int32_t end = tokens ? scan_stream_token_count(tokens) : 0;
+    while (end > 0) {
+        parse_token_info_t *last = scan_stream_get(tokens, end - 1);
+        if (last && parse_token_end_byte(last) > parse_token_start_byte(last))
+            break;
+        end--;
+    }
+    if (tokens && pwz && end > 0 && parse_pwz_parse_range(pwz, tokens, 0, end))
+        tree = query_tree(&parser, parse_pwz_get_tree(pwz));
+    else {
+        int32_t at = pwz ? parse_pwz_error_pos(pwz) : -1;
+        parse_token_info_t *token = tokens && at >= 0
+            ? scan_stream_get(tokens, at) : nullptr;
+        core_string_t found = {0};
+        if (token) {
+            size_t start_byte = parse_token_start_byte(token);
+            size_t end_byte = parse_token_end_byte(token);
+            if (start_byte < end_byte && end_byte <= text.u8_bytes)
+                found = core_string_slice(text, start_byte,
+                                          end_byte - start_byte);
+        }
+        query_expected(&parser, N00B_TEXT_QUERY_A_QUESTION, found);
+    }
+    parse_pwz_free(pwz);
+    scan_token_stream_free(tokens);
     return tree;
 }
 
@@ -2692,7 +2682,9 @@ dump_effects_query(n00bb_link_analysis_t *analysis,
                    core_translation_unit_t *unit)
 {
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    n00bb_tu_state_t *state = tu_state(unit);
     query_node_t *query = query_parse(analysis, diagnostics,
+                                      state ? state->grammar : nullptr,
                                       analysis->effects_query);
     if (!query) return false;
     core_list_t(query_candidate_t) candidates = query_candidates(analysis);
