@@ -153,13 +153,6 @@ bool core_link_unit_graph_is_finalized(const core_link_unit_t *link);
 size_t core_link_unit_translation_unit_count(core_link_unit_t *link);
 core_translation_unit_t *core_link_unit_translation_unit(
     core_link_unit_t *link, size_t index);
-bool core_link_unit_visit_sccs(core_link_unit_t *link,
-                               core_translation_unit_scc_fn callback,
-                               void *context);
-size_t core_link_unit_import_edge_count(core_link_unit_t *link);
-bool core_link_unit_import_edge(core_link_unit_t *link, size_t index,
-                                core_translation_unit_t **importer,
-                                core_translation_unit_t **imported);
 size_t core_link_unit_scc_count(core_link_unit_t *link);
 size_t core_link_unit_scc_member_count(core_link_unit_t *link,
                                        size_t scc_index);
@@ -175,8 +168,6 @@ bool core_link_unit_register_stage(
     core_string_t provenance, bool requires_finalized_graph,
     core_link_stage_fn callback, void *context);
 bool core_link_unit_run_stage(core_link_unit_t *link, uint32_t stage_kind);
-bool core_link_unit_invalidate_stage(core_link_unit_t *link,
-                                     uint32_t stage_kind);
 core_link_stage_state_t core_link_unit_stage_state(
     core_link_unit_t *link, uint32_t stage_kind);
 size_t core_link_unit_stage_count(const core_link_unit_t *link);
@@ -185,22 +176,11 @@ uint32_t core_link_unit_stage_kind(const core_link_unit_t *link,
 core_string_t core_link_unit_stage_provenance(
     const core_link_unit_t *link, uint32_t stage_kind);
 
-bool core_link_unit_define(core_link_unit_t *link,
-                           core_translation_unit_t *owner,
-                           core_string_t declaration_key, void *payload,
-                           core_link_payload_ownership_t ownership,
-                           core_link_payload_free_fn free_fn,
-                           core_link_declaration_t **out);
 bool core_link_unit_register_declaration(
     core_link_unit_t *link, core_translation_unit_t *owner,
     core_string_t declaration_key,
     const core_link_declaration_metadata_t *metadata, bool is_definition,
     void *payload, core_link_payload_ownership_t ownership,
-    core_link_payload_free_fn free_fn, core_link_declaration_t **out);
-bool core_link_unit_define_external(
-    core_link_unit_t *link, core_string_t module,
-    core_string_t declaration_key, void *payload,
-    core_link_payload_ownership_t ownership,
     core_link_payload_free_fn free_fn, core_link_declaration_t **out);
 bool core_link_unit_define_external_typed(
     core_link_unit_t *link, core_string_t module,
@@ -226,46 +206,11 @@ core_link_declaration_t *core_link_unit_declaration_at(
     const core_link_unit_t *link, size_t index);
 size_t core_link_unit_overload_member_count(
     core_link_unit_t *link, core_string_t module, core_string_t overload_group);
-core_link_declaration_t *core_link_unit_overload_member(
-    core_link_unit_t *link, core_string_t module, core_string_t overload_group,
-    size_t index);
-bool core_link_unit_reference(core_link_unit_t *link,
-                              core_translation_unit_t *referrer,
-                              core_string_t target_module,
-                              core_string_t declaration_key,
-                              core_link_reference_t **out);
-bool core_link_unit_reference_at(core_link_unit_t *link,
-                                 core_translation_unit_t *referrer,
-                                 const void *use_site,
-                                 core_string_t target_module,
-                                 core_string_t declaration_key,
-                                 core_link_reference_t **out);
-bool core_link_unit_reference_at_kind(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, core_string_t target_module,
-    core_string_t declaration_key, uint32_t expected_kind,
-    core_link_reference_t **out);
 bool core_link_unit_reference_at_scoped_kind(
     core_link_unit_t *link, core_translation_unit_t *referrer,
     const void *use_site, const void *source_scope,
     core_string_t target_module, core_string_t declaration_key,
     uint32_t expected_kind, core_link_reference_t **out);
-bool core_link_unit_defer_reference(
-    core_link_unit_t *link, core_link_reference_t *reference,
-    core_string_t reason, uint32_t prerequisite_stage);
-bool core_link_unit_defer_reference_at_scoped_kind(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, const void *source_scope, uint32_t expected_kind,
-    core_string_t reason, uint32_t prerequisite_stage,
-    core_link_reference_t **out);
-bool core_link_unit_add_deferred_reference_at_scoped_kind(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, const void *source_scope, uint32_t expected_kind,
-    core_string_t reason, uint32_t prerequisite_stage,
-    core_link_reference_t **out);
-bool core_link_unit_resolve_reference(
-    core_link_unit_t *link, core_link_reference_t *reference,
-    core_string_t target_module, core_string_t declaration_key);
 size_t core_link_unit_reference_count(const core_link_unit_t *link);
 core_link_reference_t *core_link_unit_reference_at_index(
     const core_link_unit_t *link, size_t index);
@@ -286,15 +231,9 @@ bool core_link_declaration_set_binding(
     core_string_t role, uint32_t producer_stage, void *handle);
 void *core_link_declaration_binding(
     const core_link_declaration_t *declaration, core_string_t role);
-bool core_link_declaration_is_external(
-    const core_link_declaration_t *declaration);
 uint32_t core_link_declaration_kind(
     const core_link_declaration_t *declaration);
-uint32_t core_link_declaration_visibility(
-    const core_link_declaration_t *declaration);
 core_string_t core_link_declaration_overload_group(
-    const core_link_declaration_t *declaration);
-bool core_link_declaration_is_defined(
     const core_link_declaration_t *declaration);
 bool core_link_declaration_is_external_requirement(
     const core_link_declaration_t *declaration);
@@ -309,26 +248,16 @@ core_translation_unit_t *core_link_reference_referrer(
     const core_link_reference_t *reference);
 const void *core_link_reference_use_site(
     const core_link_reference_t *reference);
-const void *core_link_reference_source_scope(
-    const core_link_reference_t *reference);
 core_string_t core_link_reference_module(
     const core_link_reference_t *reference);
 core_string_t core_link_reference_key(
     const core_link_reference_t *reference);
-bool core_link_reference_expected_kind(
-    const core_link_reference_t *reference, uint32_t *out);
 bool core_link_reference_set_source_info(
     core_link_unit_t *link, core_link_reference_t *reference,
     core_diag_location_t location, core_string_t provenance);
 bool core_link_reference_source_info(
     const core_link_reference_t *reference,
     core_diag_location_t *location, core_string_t *provenance);
-bool core_link_reference_is_deferred(
-    const core_link_reference_t *reference);
-core_string_t core_link_reference_deferral_reason(
-    const core_link_reference_t *reference);
-bool core_link_reference_deferral_prerequisite(
-    const core_link_reference_t *reference, uint32_t *out);
 
 bool core_link_unit_add_artifact(
     core_link_unit_t *link, core_string_t module, core_string_t format,

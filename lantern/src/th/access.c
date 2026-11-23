@@ -696,25 +696,6 @@ th_type *th_binder_body(const th_type *t)
     return n ? n->binder.body : nullptr;
 }
 
-bool th_bound_info(const th_type *t, uint64_t *distance, uint64_t *position)
-{
-    const th_type *n = as(t, TH_BOUND);
-
-    if (!n) {
-        return false;
-    }
-
-    if (distance) {
-        *distance = n->bound.distance;
-    }
-
-    if (position) {
-        *position = n->bound.position;
-    }
-
-    return true;
-}
-
 bool th_sum_comb(const th_type *t, th_comb *comb)
 {
     const th_type *n = as(t, TH_SUM);
@@ -744,21 +725,6 @@ th_type *th_sum_arm(const th_type *t, size_t i)
     return n && i < n->sum.n ? n->sum.arms[i] : nullptr;
 }
 
-bool th_var_index(const th_type *t, uint64_t *index)
-{
-    const th_type *n = as(t, TH_VAR);
-
-    if (!n || !n->var.has_index) {
-        return false;
-    }
-
-    if (index) {
-        *index = n->var.index;
-    }
-
-    return true;
-}
-
 core_string_t th_var_name(const th_type *t)
 {
     const th_type *n = as(t, TH_VAR);
@@ -771,16 +737,6 @@ static bool named_is(const th_type *t, core_string_t name)
     const th_type *v = as(t, TH_NAMED);
 
     return v && v->named.nargs == 0 && core_string_eq(v->named.name, name);
-}
-
-bool th_is_erased(const th_type *t)
-{
-    return named_is(t, CORE_STRING_STATIC(TH_ERASED));
-}
-
-bool th_is_bottom(const th_type *t)
-{
-    return named_is(t, CORE_STRING_STATIC(TH_BOTTOM));
 }
 
 th_type *th_poison(th_ctx *ctx)

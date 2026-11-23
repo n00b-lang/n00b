@@ -5,7 +5,6 @@
 #include "ir/layout.h"
 #include "ir/pass.h"
 #include "ir/text.h"
-#include "ir/typelang.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/verify.h"
@@ -1242,7 +1241,7 @@ static void tally(ir_region_t *r, uint32_t *seen, uint32_t n)
 
     ir_region_walk_t *w = ir_region_walk_new(&t);
 
-    ir_region_on_kind(w, IR_REGION_BLOCK, tally_block, nullptr, nullptr);
+    ir_region_on_kind(w, IR_REGION_BLOCK, tally_block, nullptr);
     ir_region_walk_run(w, r);
     ir_region_walk_free(w);
 }
@@ -1449,11 +1448,6 @@ static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
     ir_walk_free(v.collect);
 
     return held;
-}
-
-ir_props_t ir_verify_only(ir_module_t *m, ir_props_t want, ir_diags_t *out)
-{
-    return m ? run_phases(m, want, out, false, nullptr) : 0;
 }
 
 void ir_verify_failures_release(ir_verify_failures_t *failures)

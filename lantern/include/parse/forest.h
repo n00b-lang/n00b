@@ -16,8 +16,6 @@ parse_forest_t parse_forest_new(parse_grammar_t          *g,
 
 int32_t parse_forest_count(parse_forest_t *f);
 
-bool parse_forest_is_ambiguous(parse_forest_t *f);
-
 parse_tree_t *parse_forest_tree(parse_forest_t *f, int32_t ix);
 
 parse_tree_t *parse_forest_best(parse_forest_t *f);

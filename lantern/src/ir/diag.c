@@ -43,14 +43,6 @@ core_diag_severity_t ir_diag_default_severity(ir_diagcode_t c)
     return c < IR_DIAG_COUNT ? codes[c].severity : CORE_DIAG_ERROR;
 }
 
-bool ir_diag_code_lookup(core_string_t code, ir_diagcode_t *out)
-{
-    uint32_t id = 0;
-    if (!core_diag_domain_lookup(&ir_diag_domain, code, &id)) return false;
-    if (out) *out = (ir_diagcode_t)id;
-    return true;
-}
-
 typedef struct {
     core_string_t key;
     ir_outcome_t  outcome;
@@ -135,8 +127,7 @@ struct ir_diags_t {
     ir_policy_t                   *policy;
     core_diagnostics_t            *items;
     const core_translation_unit_t *unit;
-    bool                           attached;
-    ir_diag_report_fn              report;
+    ir_diag_report_fn             report;
     void                          *report_state;
     ir_text_fn                     text;
     void                          *text_state;
@@ -158,27 +149,6 @@ location_of(ir_span_t span)
     };
 }
 
-static void free_items(void *items)
-{
-    core_diagnostics_free(items);
-}
-
-ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
-{
-    if (!ctx) {
-        return nullptr;
-    }
-
-    ir_diags_t *d = ir_alloc(ctx, sizeof(ir_diags_t));
-
-    d->ctx    = ctx;
-    d->policy = policy;
-    d->items  = core_diagnostics_new();
-    ir_ctx_on_free(ctx, free_items, d->items);
-
-    return d;
-}
-
 ir_diags_t *ir_diags_new_attached(
     ir_ctx_t *ctx, ir_policy_t *policy, core_diagnostics_t *destination,
     const core_translation_unit_t *unit)
@@ -189,7 +159,6 @@ ir_diags_t *ir_diags_new_attached(
     d->policy   = policy;
     d->items    = destination;
     d->unit     = unit;
-    d->attached = true;
     return d;
 }
 
@@ -240,7 +209,7 @@ ir_span_t ir_diag_name_span(ir_span_t span, core_string_t name)
 
 core_diagnostics_t *ir_diags_destination(const ir_diags_t *d)
 {
-    return d && d->attached ? d->items : nullptr;
+    return d ? d->items : nullptr;
 }
 
 const core_translation_unit_t *ir_diags_unit(const ir_diags_t *d)
@@ -399,18 +368,6 @@ bool ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
     return ok;
 }
 
-bool ir_diag_help(ir_diags_t *d, ir_diag_t *dg, ir_message_t message)
-{
-    if (!d || !dg) return false;
-    core_string_t text = render(d, message);
-    bool ok = text.u8_bytes
-        && core_diagnostic_add_part(d->items, dg->index, CORE_DIAG_PART_HELP,
-                                    (core_string_t){},
-                                    (core_diag_location_t){}, text);
-    core_free(text.data);
-    return ok;
-}
-
 uint32_t ir_diags_count(const ir_diags_t *d)
 {
     return d ? d->n : 0;
@@ -421,77 +378,7 @@ const ir_diag_t *ir_diags_at(const ir_diags_t *d, uint32_t i)
     return d && i < d->n ? &d->v[i] : nullptr;
 }
 
-const core_diagnostic_t *ir_diag_item(const ir_diags_t *d,
-                                      const ir_diag_t *dg)
-{
-    return d && dg ? core_diagnostics_at(d->items, dg->index) : nullptr;
-}
-
 bool ir_diags_failed(const ir_diags_t *d)
 {
     return d && core_diagnostics_failed(d->items);
-}
-
-static core_string_t file_name(const ir_render_t *r, int32_t file)
-{
-    core_string_t p = r && r->module && file >= 0
-        ? ir_file_path(r->module, file) : (core_string_t){};
-
-    if (!p.data && r && file == 0 && r->path.u8_bytes) {
-        p = r->path;
-    }
-
-    return p.data ? p : CORE_STRING_STATIC("<unknown>");
-}
-
-static core_string_t source_for_path(void *context, core_string_t path)
-{
-    const ir_render_t *r = context;
-
-    if (!r || !r->source) {
-        return (core_string_t){};
-    }
-
-    size_t count = r->module ? ir_file_count(r->module) : 0;
-
-    for (size_t file = 0; file < (count ? count : 1); file++) {
-        if (core_string_eq(file_name(r, (int32_t)file), path)) {
-            return r->source(r->state, (int32_t)file);
-        }
-    }
-
-    return (core_string_t){};
-}
-
-static void name_files(ir_diags_t *d, const ir_render_t *r)
-{
-    for (uint32_t i = 0; i < d->n; i++) {
-        if (ir_span_known(d->v[i].span)) {
-            core_diagnostic_set_path(d->items, d->v[i].index,
-                                     file_name(r, d->v[i].span.file));
-        }
-    }
-}
-
-core_string_t ir_diags_render_text(ir_diags_t *d, const ir_render_t *r)
-{
-    if (!d) {
-        return (core_string_t){};
-    }
-    name_files(d, r);
-    return core_diagnostics_render(d->items, (core_diag_render_t){
-        .color = r && r->color,
-        .sorted = true,
-        .source = source_for_path,
-        .source_context = (void *)r,
-    });
-}
-
-core_string_t ir_diags_render_json(ir_diags_t *d, const ir_render_t *r)
-{
-    if (!d) {
-        return (core_string_t){};
-    }
-    name_files(d, r);
-    return core_diagnostics_render_json(d->items);
 }

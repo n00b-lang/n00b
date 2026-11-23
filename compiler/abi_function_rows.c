@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "specialize.h"
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 

@@ -409,8 +409,7 @@ core_os_is_executable(core_string_t path)
 }
 
 void *
-core_os_map(int fd, size_t size, bool writable, bool private_copy,
-            void *requested)
+core_os_map(int fd, size_t size, bool writable, bool private_copy)
 {
     HANDLE file = (HANDLE)_get_osfhandle(fd);
     if (file == INVALID_HANDLE_VALUE || !size) return nullptr;
@@ -421,7 +420,7 @@ core_os_map(int fd, size_t size, bool writable, bool private_copy,
     if (!section) return nullptr;
     DWORD access = private_copy ? FILE_MAP_COPY
                  : writable ? FILE_MAP_WRITE : FILE_MAP_READ;
-    void *view = MapViewOfFileEx(section, access, 0, 0, size, requested);
+    void *view = MapViewOfFile(section, access, 0, 0, size);
     CloseHandle(section);
     return view;
 }
@@ -916,10 +915,9 @@ core_os_is_executable(core_string_t path)
 }
 
 void *
-core_os_map(int fd, size_t size, bool writable, bool private_copy,
-            void *requested)
+core_os_map(int fd, size_t size, bool writable, bool private_copy)
 {
-    void *mapping = mmap(requested, size,
+    void *mapping = mmap(nullptr, size,
         PROT_READ | (writable ? PROT_WRITE : 0),
         private_copy ? MAP_PRIVATE : MAP_SHARED, fd, 0);
     return mapping == MAP_FAILED ? nullptr : mapping;

@@ -611,16 +611,6 @@ void ir_pdg_complete(ir_pdg_t *g)
     }
 }
 
-uint32_t ir_pdg_node_count(const ir_pdg_t *g)
-{
-    return g ? g->n_nodes : 0;
-}
-
-ir_instr_t *ir_pdg_node_at(const ir_pdg_t *g, uint32_t i)
-{
-    return g && i < g->n_nodes ? g->nodes[i] : nullptr;
-}
-
 uint32_t ir_pdg_edge_count(const ir_pdg_t *g)
 {
     return g ? g->n_edges : 0;
@@ -663,23 +653,6 @@ const ir_dep_edge_t *ir_pdg_in_at(const ir_pdg_t *g, ir_instr_t *in,
     }
 
     return &g->edges[g->in_at[g->in_off[node_of(g, in)] + i]];
-}
-
-uint32_t ir_pdg_param_out_count(const ir_pdg_t *g, const ir_value_t *param)
-{
-    uint32_t at = g ? param_node(g, param) : UINT32_MAX;
-
-    return at != UINT32_MAX ? g->out_off[at + 1] - g->out_off[at] : 0;
-}
-
-const ir_dep_edge_t *ir_pdg_param_out_at(const ir_pdg_t *g,
-                                         const ir_value_t *param, uint32_t i)
-{
-    if (i >= ir_pdg_param_out_count(g, param)) {
-        return nullptr;
-    }
-
-    return &g->edges[g->out_at[g->out_off[param_node(g, param)] + i]];
 }
 
 uint32_t ir_controllers_of(const ir_pdg_t *g, ir_block_t *b)
@@ -754,8 +727,6 @@ struct ir_group_pdg_t {
     size_t         cap_edges;
     uint32_t      *out_off;
     uint32_t      *out_at;
-    uint32_t      *in_off;
-    uint32_t      *in_at;
     uint32_t      *exit_off;
     ir_instr_t   **exits;
     uint64_t      *calls;
@@ -807,12 +778,6 @@ static uint32_t group_from(const ir_group_pdg_t *g, const ir_dep_edge_t *e)
 {
     return e->from ? group_node(g, e->from, nullptr)
                    : group_node(g, nullptr, e->param);
-}
-
-static uint32_t group_to(const ir_group_pdg_t *g, const ir_dep_edge_t *e)
-{
-    return e->to ? group_node(g, e->to, nullptr)
-                 : group_node(g, nullptr, e->param);
 }
 
 static void group_push(ir_group_pdg_t *g, ir_dep_edge_t edge)
@@ -1005,31 +970,19 @@ static void index_group_edges(ir_group_pdg_t *g)
     uint32_t      n   = g->offset[g->n_functions];
 
     g->out_off = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    g->in_off  = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
-    for (uint32_t i = 0; i < g->n_edges; i++) {
+    for (uint32_t i = 0; i < g->n_edges; i++)
         g->out_off[group_from(g, &g->edges[i]) + 1]++;
-        g->in_off[group_to(g, &g->edges[i]) + 1]++;
-    }
-    for (uint32_t i = 0; i < n; i++) {
-        g->out_off[i + 1] += g->out_off[i];
-        g->in_off[i + 1] += g->in_off[i];
-    }
+    for (uint32_t i = 0; i < n; i++) g->out_off[i + 1] += g->out_off[i];
 
     uint32_t *fo = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    uint32_t *fi = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     memcpy(fo, g->out_off, (n + 1) * sizeof(uint32_t));
-    memcpy(fi, g->in_off, (n + 1) * sizeof(uint32_t));
     g->out_at = core_arena_alloc(ctx, (g->n_edges ? g->n_edges : 1)
                                           * sizeof(uint32_t));
-    g->in_at  = core_arena_alloc(ctx, (g->n_edges ? g->n_edges : 1)
-                                          * sizeof(uint32_t));
 
-    for (uint32_t i = 0; i < g->n_edges; i++) {
+    for (uint32_t i = 0; i < g->n_edges; i++)
         g->out_at[fo[group_from(g, &g->edges[i])]++] = i;
-        g->in_at[fi[group_to(g, &g->edges[i])]++]    = i;
-    }
 }
 
 static void index_calls(ir_group_pdg_t *g)
@@ -1242,25 +1195,9 @@ ir_pdg_t *ir_group_pdg_func(const ir_group_pdg_t *g, const ir_func_t *f)
     return i == UINT32_MAX ? nullptr : g->graphs[i];
 }
 
-uint32_t ir_group_pdg_edge_count(const ir_group_pdg_t *g)
-{
-    return g ? g->n_edges : 0;
-}
-
-const ir_dep_edge_t *ir_group_pdg_edge_at(const ir_group_pdg_t *g,
-                                          uint32_t i)
-{
-    return g && i < g->n_edges ? &g->edges[i] : nullptr;
-}
-
 static uint32_t group_out_count(const ir_group_pdg_t *g, uint32_t at)
 {
     return at != UINT32_MAX ? g->out_off[at + 1] - g->out_off[at] : 0;
-}
-
-static uint32_t group_in_count(const ir_group_pdg_t *g, uint32_t at)
-{
-    return at != UINT32_MAX ? g->in_off[at + 1] - g->in_off[at] : 0;
 }
 
 uint32_t ir_group_pdg_out_count(const ir_group_pdg_t *g, const ir_instr_t *in)
@@ -1276,38 +1213,6 @@ const ir_dep_edge_t *ir_group_pdg_out_at(const ir_group_pdg_t *g,
     }
 
     return &g->edges[g->out_at[g->out_off[group_node(g, in, nullptr)] + i]];
-}
-
-uint32_t ir_group_pdg_in_count(const ir_group_pdg_t *g, const ir_instr_t *in)
-{
-    return g ? group_in_count(g, group_node(g, in, nullptr)) : 0;
-}
-
-const ir_dep_edge_t *ir_group_pdg_in_at(const ir_group_pdg_t *g,
-                                        const ir_instr_t *in, uint32_t i)
-{
-    if (i >= ir_group_pdg_in_count(g, in)) {
-        return nullptr;
-    }
-
-    return &g->edges[g->in_at[g->in_off[group_node(g, in, nullptr)] + i]];
-}
-
-uint32_t ir_group_pdg_param_in_count(const ir_group_pdg_t *g,
-                                     const ir_value_t *param)
-{
-    return g ? group_in_count(g, group_node(g, nullptr, param)) : 0;
-}
-
-const ir_dep_edge_t *ir_group_pdg_param_in_at(const ir_group_pdg_t *g,
-                                              const ir_value_t *param,
-                                              uint32_t i)
-{
-    if (i >= ir_group_pdg_param_in_count(g, param)) {
-        return nullptr;
-    }
-
-    return &g->edges[g->in_at[g->in_off[group_node(g, nullptr, param)] + i]];
 }
 
 uint32_t ir_group_pdg_callee_count(const ir_group_pdg_t *g,
@@ -1348,11 +1253,6 @@ ir_func_t *ir_group_pdg_component_at(const ir_group_pdg_t *g, uint32_t c,
     }
 
     return g->functions[g->members[g->component_off[c] + i]];
-}
-
-bool ir_group_pdg_component_recursive(const ir_group_pdg_t *g, uint32_t c)
-{
-    return g && c < g->n_components && g->recursive[c];
 }
 
 uint32_t ir_group_pdg_component_of(const ir_group_pdg_t *g,

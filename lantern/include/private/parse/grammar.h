@@ -73,22 +73,15 @@ struct parse_grammar_t {
     core_dict_t           *nt_map;
     core_dict_t           *terminal_map;
     core_string_t                   tokenizer_name;
-    uint32_t                       max_penalty;
     bool                           error_rules;
     bool                           finalized;
     bool                           has_adjacency;
-    bool                           hide_penalty_rewrites;
-    bool                           hide_groups;
-    int                            suspend_penalty_hiding;
-    bool                           suspend_group_hiding;
-    void                          *tokenize_cb;
+    void                         *tokenize_cb;
     const void                    *lex_spec;
     void                          *lex_compiled;
     bool                           lex_spec_owned;
     bool                           lex_resolved;
 
-    core_list_t(core_string_t) terminal_categories;
-    bool                      has_terminal_categories;
     core_list_t(int32_t)      contextual_sources;
 
     core_list_t(parse_annotation_ptr_t) annotations;
@@ -149,12 +142,6 @@ parse_get_rule(parse_grammar_t *g, int32_t ix)
     return &g->rules.data[ix];
 }
 
-static inline bool
-parse_is_non_terminal(parse_match_t *m)
-{
-    return m->kind == PARSE_MATCH_NT || m->kind == PARSE_MATCH_GROUP;
-}
-
 static inline parse_rule_t *
 parse_get_node_rule(parse_grammar_t *g, parse_nt_node_t *pn)
 {
@@ -169,18 +156,6 @@ parse_get_node_rule(parse_grammar_t *g, parse_nt_node_t *pn)
     int32_t global_ix = core_list_get(nt->rule_ids, pn->rule_index);
 
     return parse_get_rule(g, global_ix);
-}
-
-static inline bool
-parse_hide_groups(parse_grammar_t *g)
-{
-    return g->hide_groups && !g->suspend_group_hiding;
-}
-
-static inline bool
-parse_hide_penalties(parse_grammar_t *g)
-{
-    return g->hide_penalty_rewrites && !g->suspend_penalty_hiding;
 }
 
 bool parse_rule_is_list_step(parse_grammar_t *g, int32_t rule_ix);

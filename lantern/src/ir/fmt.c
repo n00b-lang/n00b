@@ -30,12 +30,3 @@ void ir_lit_into(core_buffer_t *b, ir_lit_t v)
         core_buffer_append(b, &c, 1);
     }
 }
-
-core_string_t ir_lit_text(ir_lit_t v)
-{
-    core_buffer_t *b = core_buffer_empty();
-
-    ir_lit_into(b, v);
-
-    return core_buffer_take_string(b);
-}

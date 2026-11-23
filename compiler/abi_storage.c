@@ -7,7 +7,6 @@
 #include <string.h>
 
 #include "ir/layout.h"
-#include "ir/typelang.h"
 #include "ir/shape.h"
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
@@ -1054,13 +1053,13 @@ graph_placement_plan(const n00bb_abi_graph_source_t *graphs,
 }
 
 static bool
-graph_type_add(n00bb_abi_type_index_t *index, ir_module_t *runtime,
-               core_string_t name, uint64_t typehash)
+graph_type_add(n00bb_abi_type_index_t *index,
+               const n00bb_abi_graph_source_t *graphs, uint64_t typehash)
 {
-    if (!name.data) return !typehash;
-    th_type *type = ir_type_parse(runtime, name);
-    return type && th_hash(ir_module_types(runtime), type) == typehash
-        && n00bb_abi_type_index_add(index, type, nullptr);
+    th_type *type = typehash ? graphs->type(graphs->context, typehash)
+                             : nullptr;
+    return !typehash || (type && n00bb_abi_type_index_add(index, type,
+                                                          nullptr));
 }
 
 bool
@@ -1083,8 +1082,7 @@ n00bb_abi_graph_types_collect(
         uint64_t typehash = 0;
         valid = graphs->node(graphs->context, i, &bytes, &size, &alignment,
                 &typehash)
-            && graph_type_add(index, runtime,
-                graphs->type_name(graphs->context, i), typehash);
+            && graph_type_add(index, graphs, typehash);
     }
     for (size_t i = 0; valid && places && i < graphs->slot_count; i++) {
         n00bb_abi_graph_slot_t slot;
@@ -1092,8 +1090,7 @@ n00bb_abi_graph_types_collect(
             && slot.node < graphs->node_count;
         if (!valid || !(places[slot.node].reachability & 1)) continue;
         if (slot.table == N00B_ABI_TABLE_TYPE)
-            valid = graph_type_add(index, runtime, slot.type_name,
-                                   slot.typehash);
+            valid = graph_type_add(index, graphs, slot.typehash);
         else if (slot.table != N00B_ABI_TABLE_NATIVE_BINDING
                  && !core_string_eq(slot.module, ir_module_name(runtime)))
             valid = slot.function_type

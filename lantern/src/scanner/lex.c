@@ -44,22 +44,8 @@ static bool is_line_whitespace(core_codepoint_t cp) {
       || cp == 0x205f || cp == 0x3000;
 }
 
-typedef struct {
-  parse_trivia_t *open;
-  parse_trivia_t *close;
-} lex_region_pair_t;
 
 bool scan_lex_finalize_regions(parse_scanner_t *s);
-
-static void clear_region_links(parse_trivia_t *trivia) {
-  parse_trivia_region_link_t *link = trivia->regions;
-  while (link) {
-    parse_trivia_region_link_t *next = link->next;
-    core_free(link);
-    link = next;
-  }
-  trivia->regions = nullptr;
-}
 
 static bool check_region_name(parse_scanner_t *s, parse_trivia_t *trivia) {
   core_string_t normalized = ucd_normalize(trivia->region_name, UCD_NFC);
@@ -73,16 +59,6 @@ static bool check_region_name(parse_scanner_t *s, parse_trivia_t *trivia) {
                      trivia->start_byte - s->source_base);
   }
   return valid;
-}
-
-static void add_region_link(parse_trivia_t *trivia, uint64_t region_id) {
-  parse_trivia_region_link_t **tail = &trivia->regions;
-  while (*tail) {
-    if ((*tail)->region_id == region_id) return;
-    tail = &(*tail)->next;
-  }
-  *tail = core_alloc(parse_trivia_region_link_t);
-  **tail = (parse_trivia_region_link_t){.region_id = region_id};
 }
 
 static int compare_trivia_span(const void *left, const void *right) {
@@ -99,81 +75,6 @@ static size_t append_trivia_ptrs(parse_trivia_t *trivia,
                                  parse_trivia_t **items, size_t at) {
   for (; trivia; trivia = trivia->next) items[at++] = trivia;
   return at;
-}
-
-static bool token_overlaps_line(const parse_token_stream_t *stream,
-                                uint32_t line) {
-  for (int32_t i = 0; i < stream->token_count; i++) {
-    const parse_token_info_t *token = stream->tokens[i];
-    if (parse_token_tid(token) != PARSE_TOK_EOF
-        && parse_token_line(token) <= line
-        && parse_token_endline(token) >= line) {
-      return true;
-    }
-  }
-  return false;
-}
-
-static bool token_between(const parse_token_stream_t *stream,
-                          size_t start_byte, size_t end_byte) {
-  for (int32_t i = 0; i < stream->token_count; i++) {
-    const parse_token_info_t *token = stream->tokens[i];
-    if (parse_token_tid(token) != PARSE_TOK_EOF
-        && parse_token_end_byte(token) > start_byte
-        && parse_token_start_byte(token) < end_byte) {
-      return true;
-    }
-  }
-  return false;
-}
-
-static void group_anchor_comments(parse_token_stream_t *stream,
-                                  parse_trivia_t **items, size_t count) {
-  for (size_t i = 0; i < count; i++) {
-    parse_trivia_t *anchor = items[i];
-    if (anchor->kind != PARSE_TRIVIA_REGION_OPEN
-        && anchor->kind != PARSE_TRIVIA_REGION_CLOSE) {
-      continue;
-    }
-    uint64_t group = anchor->anchor_order;
-    anchor->anchor_group = group;
-
-    size_t boundary = anchor->start_byte;
-    for (size_t j = i; j-- > 0;) {
-      parse_trivia_t *candidate = items[j];
-      if (candidate->kind == PARSE_TRIVIA_REGION_OPEN
-          || candidate->kind == PARSE_TRIVIA_REGION_CLOSE) {
-        break;
-      }
-      if (candidate->kind == PARSE_TRIVIA_SPACE) continue;
-      if (candidate->kind != PARSE_TRIVIA_COMMENT
-          || (candidate->anchor_group && candidate->anchor_group != group)
-          || token_overlaps_line(stream, candidate->line)
-          || token_between(stream, candidate->end_byte, boundary)) {
-        break;
-      }
-      candidate->anchor_group = group;
-      boundary = candidate->start_byte;
-    }
-
-    boundary = anchor->end_byte;
-    for (size_t j = i + 1; j < count; j++) {
-      parse_trivia_t *candidate = items[j];
-      if (candidate->kind == PARSE_TRIVIA_REGION_OPEN
-          || candidate->kind == PARSE_TRIVIA_REGION_CLOSE) {
-        break;
-      }
-      if (candidate->kind == PARSE_TRIVIA_SPACE) continue;
-      if (candidate->kind != PARSE_TRIVIA_COMMENT
-          || (candidate->anchor_group && candidate->anchor_group != group)
-          || token_overlaps_line(stream, candidate->line)
-          || token_between(stream, boundary, candidate->start_byte)) {
-        break;
-      }
-      candidate->anchor_group = group;
-      boundary = candidate->end_byte;
-    }
-  }
 }
 
 bool scan_lex_finalize_regions(parse_scanner_t *s) {
@@ -208,14 +109,9 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
 
   size_t anchor_count = 0;
   for (size_t i = 0; i < count; i++) {
-    clear_region_links(items[i]);
-    items[i]->region_id = 0;
-    items[i]->anchor_order = 0;
-    items[i]->anchor_group = 0;
     if (items[i]->kind == PARSE_TRIVIA_REGION_OPEN
         || items[i]->kind == PARSE_TRIVIA_REGION_CLOSE) {
       anchor_count++;
-      items[i]->anchor_order = anchor_count;
       if (!check_region_name(s, items[i])) {
         core_free(items);
         return false;
@@ -223,16 +119,12 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
     }
   }
 
-  lex_region_pair_t *pairs = core_alloc_array(lex_region_pair_t, anchor_count);
   parse_trivia_t **opens = core_alloc_array(parse_trivia_t *, anchor_count);
-  size_t pair_count = 0;
   size_t open_count = 0;
-  uint64_t next_id = 1;
 
   for (size_t i = 0; i < count; i++) {
     parse_trivia_t *anchor = items[i];
     if (anchor->kind == PARSE_TRIVIA_REGION_OPEN) {
-      anchor->region_id = next_id++;
       opens[open_count++] = anchor;
       continue;
     }
@@ -247,16 +139,12 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
       scan_set_invalid(s, SCAN_PROBLEM(COMMENT_REGION_UNMATCHED_CLOSE),
                        anchor->start_byte - s->source_base);
       core_free(opens);
-      core_free(pairs);
       core_free(items);
       return false;
     }
-    parse_trivia_t *open = opens[match - 1];
     memmove(opens + match - 1, opens + match,
             (open_count - match) * sizeof(*opens));
     open_count--;
-    anchor->region_id = open->region_id;
-    pairs[pair_count++] = (lex_region_pair_t){.open = open, .close = anchor};
   }
 
   if (open_count) {
@@ -264,34 +152,11 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
     scan_set_invalid(s, SCAN_PROBLEM(COMMENT_REGION_UNCLOSED),
                      open->start_byte - s->source_base);
     core_free(opens);
-    core_free(pairs);
     core_free(items);
     return false;
   }
 
-  for (size_t i = 0; i < count; i++) {
-    if (items[i]->kind != PARSE_TRIVIA_COMMENT) continue;
-    for (size_t j = 0; j < pair_count; j++) {
-      if (items[i]->start_byte >= pairs[j].open->end_byte
-          && items[i]->end_byte <= pairs[j].close->start_byte) {
-        add_region_link(items[i], pairs[j].open->region_id);
-      }
-    }
-  }
-  for (size_t i = 0; i < pair_count; i++) {
-    for (size_t j = 0; j < pair_count; j++) {
-      if (i == j) continue;
-      if (pairs[i].open->start_byte >= pairs[j].open->end_byte
-          && pairs[i].close->end_byte <= pairs[j].close->start_byte) {
-        add_region_link(pairs[i].open, pairs[j].open->region_id);
-        add_region_link(pairs[i].close, pairs[j].open->region_id);
-      }
-    }
-  }
-  group_anchor_comments(stream, items, count);
-
   core_free(opens);
-  core_free(pairs);
   core_free(items);
   return true;
 }
@@ -303,25 +168,6 @@ typedef struct {
   bool in_hole;
   bool at_open;
 } lex_mode_t;
-
-typedef enum : uint8_t {
-  NUMBER_NONE,
-  NUMBER_PREFIX,
-  NUMBER_INTEGER_DIGITS,
-  NUMBER_POINT,
-  NUMBER_FRACTION_DIGITS,
-  NUMBER_EXP_START,
-  NUMBER_EXP_SIGN,
-  NUMBER_EXP_DIGITS,
-  NUMBER_SUFFIX,
-} lex_number_phase_t;
-
-typedef enum : uint8_t {
-  HEREDOC_HEADER_NONE,
-  HEREDOC_HEADER_LEADING,
-  HEREDOC_HEADER_TAG,
-  HEREDOC_HEADER_LINE,
-} lex_heredoc_header_phase_t;
 
 core_list_decl(lex_mode_t);
 
@@ -447,28 +293,6 @@ static void term_trie_add(scan_lex_t *lex, core_string_t spelling,
                   : (core_codepoint_t)cp;
   }
   lex->term_nodes.data[node].word_boundary = id_cont_here(lex, last);
-}
-
-static void opener_trie_add(scan_lex_t *lex, core_string_t spelling) {
-  if (spelling.data && spelling.u8_bytes) {
-    trie_add(&lex->opener_nodes, &lex->opener_edges, 0, spelling, 1);
-  }
-}
-
-static void compile_recipe_openers(scan_lex_t *lex, const void *recipes,
-                                   size_t stride, size_t opener_offset) {
-  if (!recipes) {
-    return;
-  }
-  for (size_t i = 0;; i++) {
-    const char *entry = (const char *)recipes + i * stride;
-    const core_string_t *opener =
-        (const core_string_t *)(entry + opener_offset);
-    if (!opener->data) {
-      return;
-    }
-    opener_trie_add(lex, *opener);
-  }
 }
 
 typedef struct {
@@ -663,7 +487,6 @@ struct scan_lex_session_t {
   core_list_t(int32_t) indents;
   core_list_t(int32_t) layout_blocks;
   int32_t pending_dedents;
-  bool pending_dedent_mismatch;
   bool pending_block_newline;
   bool pending_layout_block;
 
@@ -674,88 +497,11 @@ struct scan_lex_session_t {
   bool sent_eof;
   bool outside;
 
-  bool pending_indent;
-  size_t pending_indent_end;
-  size_t pending_indent_first_tab;
-  int32_t pending_indent_column;
-  bool pending_indent_has_space;
-  bool pending_indent_has_tab;
 
   const scan_lex_directive_t *in_directive;
-  const scan_lex_comment_t *pending_comment;
-  int32_t pending_comment_depth;
-  uint32_t pending_comment_fill_level;
-  const scan_lex_string_t *pending_string;
-  size_t pending_string_scalars;
-  size_t pending_string_delimiter_depth;
-  bool pending_string_tail;
-  const scan_lex_regex_t *pending_regex;
-  bool pending_regex_in_class;
-  const scan_lex_fence_t *pending_fence;
-  uint32_t pending_fence_level;
-  size_t pending_fence_content;
-  size_t pending_fence_label_start;
-  size_t pending_fence_label_end;
-  bool pending_fence_open;
-  bool pending_fence_fill;
-  core_string_t pending_fence_pattern;
-  size_t *pending_fence_prefix;
-  size_t pending_fence_search;
-  size_t pending_fence_match;
   size_t *fence_probe_skip_until;
-  const scan_lex_heredoc_t *pending_heredoc;
-  size_t pending_heredoc_tag_start;
-  size_t pending_heredoc_tag_end;
-  size_t pending_heredoc_body;
-  size_t pending_heredoc_scan;
-  size_t pending_heredoc_line_start;
-  size_t pending_heredoc_match;
-  bool pending_heredoc_indent;
-  bool pending_heredoc_rejected;
-  uint8_t pending_heredoc_quote;
-  uint8_t pending_heredoc_quote_kind;
-  lex_heredoc_header_phase_t pending_heredoc_header_phase;
-  size_t pending_heredoc_header_scan;
-  size_t pending_heredoc_token_end;
   core_list_t(lex_heredoc_queue_t) heredoc_queue;
   bool heredoc_queue_ready;
-  bool heredoc_queue_scanning;
-  bool pending_identifier;
-  const scan_lex_sigil_t *pending_attached_sigil;
-  int32_t pending_identifier_tid;
-  bool pending_identifier_digits;
-  bool pending_terminal;
-  uint32_t pending_terminal_node;
-  size_t pending_terminal_consumed;
-  size_t pending_terminal_best_len;
-  int32_t pending_terminal_best_tid;
-  size_t pending_terminal_min_len;
-  lex_number_phase_t pending_number_phase;
-  const scan_lex_number_form_t *pending_number_form;
-  size_t pending_number_prefix_at;
-  uint32_t pending_number_prefix_node;
-  size_t pending_number_prefix_consumed;
-  int32_t pending_number_prefix_best;
-  uint32_t pending_number_suffix_node;
-  size_t pending_number_suffix_consumed;
-  int32_t pending_number_suffix_best;
-  size_t pending_number_digits;
-  size_t pending_number_exp_digits;
-  bool pending_number_after_digit;
-  bool pending_number_need_digit;
-  bool pending_number_malformed;
-  bool pending_number_float;
-  bool pending_number_point;
-  bool pending_number_signed_only;
-  bool pending_opener;
-  uint32_t pending_opener_node;
-  size_t pending_opener_consumed;
-
-  const scan_lex_embed_t *pending_embed;
-  size_t pending_embed_content;
-  size_t pending_embed_search;
-  size_t pending_embed_match;
-  size_t *pending_embed_prefix;
 
   size_t skip_from;
   size_t skip_to;
@@ -778,33 +524,6 @@ static void mark_literal(scan_lex_t *lex, int32_t tid) {
 
 static bool is_literal_tid(const scan_lex_t *lex, int32_t tid) {
   return tid_set_contains(&lex->is_literal, tid);
-}
-
-static int literal_hook_compare(const void *left, const void *right) {
-  const lex_literal_hook_t *a = left;
-  const lex_literal_hook_t *b = right;
-
-  return (a->tid > b->tid) - (a->tid < b->tid);
-}
-
-static const lex_literal_hook_t *literal_hook_for(const scan_lex_t *lex,
-                                                  int32_t tid) {
-  size_t lo = 0;
-  size_t hi = lex->literal_hook_count;
-
-  while (lo < hi) {
-    size_t mid = lo + (hi - lo) / 2;
-    int32_t have = lex->literal_hooks[mid].tid;
-
-    if (have < tid) {
-      lo = mid + 1;
-    } else if (have > tid) {
-      hi = mid;
-    } else {
-      return &lex->literal_hooks[mid];
-    }
-  }
-  return nullptr;
 }
 
 static int recovery_compare(const void *left, const void *right) {
@@ -849,9 +568,8 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   if (!spec || !g) {
     return nullptr;
   }
-  core_list_t(scan_lex_issue_t) issues = {};
   core_string_t analysis_error = {};
-  bool analyzed = scan_lex_analyze_spec(spec, g, &analysis_error, &issues);
+  bool analyzed = scan_lex_analyze_spec(spec, g, &analysis_error);
   lex_compile_error_set(analysis_error);
   if (!analyzed) {
     return nullptr;
@@ -862,11 +580,8 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   lex->spec = spec;
   lex->g = g;
   lex->refs = 1;
-  lex->issues = issues;
   lex->term_nodes = core_list_new(lex_term_node_t);
   lex->term_edges = core_list_new(lex_term_edge_t);
-  lex->opener_nodes = core_list_new(lex_term_node_t);
-  lex->opener_edges = core_list_new(lex_term_edge_t);
   lex->string_nodes = core_list_new(lex_term_node_t);
   lex->string_edges = core_list_new(lex_term_edge_t);
   lex->number_nodes = core_list_new(lex_term_node_t);
@@ -875,24 +590,9 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   lex->number_suffix_edges = core_list_new(lex_term_edge_t);
   lex->number_suffix_roots = core_list_new(int32_t);
   core_list_push(lex->term_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
-  core_list_push(lex->opener_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
   core_list_push(lex->string_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
   core_list_push(lex->number_nodes, ((lex_term_node_t){.edge = -1, .tid = 0}));
   compile_ascii_sets(lex);
-  compile_recipe_openers(lex, spec->comments, sizeof(scan_lex_comment_t),
-                         offsetof(scan_lex_comment_t, opener));
-  compile_recipe_openers(lex, spec->strings, sizeof(scan_lex_string_t),
-                         offsetof(scan_lex_string_t, opener));
-  compile_recipe_openers(lex, spec->sigils, sizeof(scan_lex_sigil_t),
-                         offsetof(scan_lex_sigil_t, prefix));
-  compile_recipe_openers(lex, spec->regexes, sizeof(scan_lex_regex_t),
-                         offsetof(scan_lex_regex_t, opener));
-  compile_recipe_openers(lex, spec->heredocs, sizeof(scan_lex_heredoc_t),
-                         offsetof(scan_lex_heredoc_t, opener));
-  compile_recipe_openers(lex, spec->fences, sizeof(scan_lex_fence_t),
-                         offsetof(scan_lex_fence_t, outer_open));
-  compile_recipe_openers(lex, spec->directives, sizeof(scan_lex_directive_t),
-                         offsetof(scan_lex_directive_t, open));
   lex->ident_enabled = spec->tok_ident.data || spec->tok_ident_upper.data ||
                        spec->ident_start_extra.data || spec->ident_extra.data ||
                        spec->identifier_profile.name.data;
@@ -1147,61 +847,6 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
     at = end + 1;
   }
 
-  for (const scan_lex_literal_hook_t *hook = spec->literal_hooks;
-       hook && hook->token.data; hook++) {
-    lex->literal_hook_count++;
-  }
-  if (lex->literal_hook_count) {
-    lex->literal_hooks =
-        core_alloc_array(lex_literal_hook_t, lex->literal_hook_count);
-
-    size_t index = 0;
-    for (const scan_lex_literal_hook_t *hook = spec->literal_hooks;
-         hook && hook->token.data; hook++, index++) {
-      int32_t tid = tid_for(g, hook->token, PARSE_TOK_IGNORED);
-      if (tid == PARSE_TOK_IGNORED ||
-          !scan_lex_literal_hook_exists(hook->hook)) {
-        if (tid == PARSE_TOK_IGNORED) {
-          lex_compile_error_printf(
-                   "@lex-literal-hook: unknown input token '%.*s'",
-                   (int)hook->token.u8_bytes, hook->token.data);
-        } else {
-          lex_compile_error_printf(
-                   "@lex-literal-hook: unknown hook '%.*s'",
-                   (int)hook->hook.u8_bytes, hook->hook.data);
-        }
-        scan_lex_free(lex);
-        return nullptr;
-      }
-      for (const core_string_t *name = hook->outputs; name && name->data;
-           name++) {
-        if (!parse_terminal_id(g, *name)) {
-          lex_compile_error_printf(
-                   "@lex-literal-hook: unknown output token '%.*s'",
-                   (int)name->u8_bytes, name->data);
-          scan_lex_free(lex);
-          return nullptr;
-        }
-      }
-      lex->literal_hooks[index] = (lex_literal_hook_t){
-          .recipe = hook,
-          .tid = tid,
-      };
-    }
-    qsort(lex->literal_hooks, lex->literal_hook_count,
-          sizeof(*lex->literal_hooks), literal_hook_compare);
-    for (size_t i = 1; i < lex->literal_hook_count; i++) {
-      if (lex->literal_hooks[i - 1].tid == lex->literal_hooks[i].tid) {
-        const scan_lex_literal_hook_t *hook = lex->literal_hooks[i].recipe;
-        lex_compile_error_printf(
-                 "@lex-literal-hook: duplicate input token '%.*s'",
-                 (int)hook->token.u8_bytes, hook->token.data);
-        scan_lex_free(lex);
-        return nullptr;
-      }
-    }
-  }
-
   for (const scan_lex_recovery_t *recovery = spec->recoveries;
        recovery && recovery->token.data; recovery++) {
     lex->recovery_count++;
@@ -1416,9 +1061,7 @@ void scan_lex_free(scan_lex_t *lex) {
 
   core_free(lex->is_literal.slots);
 
-  core_free(lex->literal_hooks);
   core_free(lex->recoveries);
-  scan_lex_issues_free(&lex->issues);
   scan_unicode_profile_free(lex->identifier_profile);
 
   core_free(lex->codepoint_terminals.slots);
@@ -1428,8 +1071,6 @@ void scan_lex_free(scan_lex_t *lex) {
   core_list_free(lex->term_after);
   core_list_free(lex->term_nodes);
   core_list_free(lex->term_edges);
-  core_list_free(lex->opener_nodes);
-  core_list_free(lex->opener_edges);
   core_list_free(lex->string_nodes);
   core_list_free(lex->string_edges);
   core_list_free(lex->number_nodes);
@@ -1486,292 +1127,6 @@ scan_lex_session_t *scan_lex_session_new(const scan_lex_t *program) {
   return session;
 }
 
-static parse_token_info_t *
-clone_pending_recovery_token(const parse_token_info_t *source) {
-  return parse_token_copy(source, true);
-}
-
-static scan_lex_session_t *
-scan_lex_session_clone_frame(const scan_lex_session_t *source,
-                             scan_lex_session_t *parent) {
-  if (!source) {
-    return nullptr;
-  }
-
-  scan_lex_session_t *copy = core_alloc(scan_lex_session_t);
-  *copy = *source;
-  copy->parent = parent;
-  copy->child = nullptr;
-  copy->modes = (core_list_t(lex_mode_t)){0};
-  copy->indents = (core_list_t(int32_t)){0};
-  copy->layout_blocks = (core_list_t(int32_t)){0};
-  copy->heredoc_queue = (core_list_t(lex_heredoc_queue_t)){0};
-  copy->pending_fence_pattern = (core_string_t){0};
-  copy->pending_fence_prefix = nullptr;
-  copy->pending_embed_prefix = nullptr;
-  copy->fence_probe_skip_until = nullptr;
-  copy->status_diagnostic = (scan_problem_t){0};
-  copy->pending_recovery_message = (scan_problem_t){0};
-  copy->recovery_diagnostic = (scan_problem_t){0};
-  copy->pending_recovery_token = nullptr;
-
-  if (source->modes.len) {
-    copy->modes = core_list_new_cap(lex_mode_t, source->modes.len);
-    memcpy(copy->modes.data, source->modes.data,
-           source->modes.len * sizeof(*copy->modes.data));
-    copy->modes.len = source->modes.len;
-  }
-  if (source->indents.len) {
-    copy->indents = core_list_new_cap(int32_t, source->indents.len);
-    memcpy(copy->indents.data, source->indents.data,
-           source->indents.len * sizeof(*copy->indents.data));
-    copy->indents.len = source->indents.len;
-  }
-  if (source->layout_blocks.len) {
-    copy->layout_blocks = core_list_new_cap(int32_t, source->layout_blocks.len);
-    memcpy(copy->layout_blocks.data, source->layout_blocks.data,
-           source->layout_blocks.len * sizeof(*copy->layout_blocks.data));
-    copy->layout_blocks.len = source->layout_blocks.len;
-  }
-  if (source->heredoc_queue.len) {
-    copy->heredoc_queue =
-        core_list_new_cap(lex_heredoc_queue_t, source->heredoc_queue.len);
-    for (size_t i = 0; i < source->heredoc_queue.len; i++) {
-      copy->heredoc_queue.data[i] = source->heredoc_queue.data[i];
-      copy->heredoc_queue.data[i].tag =
-          core_string_dup(source->heredoc_queue.data[i].tag);
-    }
-    copy->heredoc_queue.len = source->heredoc_queue.len;
-  }
-  if (source->pending_fence_pattern.u8_bytes) {
-    copy->pending_fence_pattern =
-        core_string_dup(source->pending_fence_pattern);
-    copy->pending_fence_prefix =
-        core_alloc_array(size_t, source->pending_fence_pattern.u8_bytes);
-    memcpy(copy->pending_fence_prefix, source->pending_fence_prefix,
-           source->pending_fence_pattern.u8_bytes *
-               sizeof(*copy->pending_fence_prefix));
-  }
-  if (source->pending_embed && source->pending_embed_prefix) {
-    size_t n = source->pending_embed->close.u8_bytes;
-    copy->pending_embed_prefix = core_alloc_array(size_t, n);
-    memcpy(copy->pending_embed_prefix, source->pending_embed_prefix,
-           n * sizeof(*copy->pending_embed_prefix));
-  }
-  if (source->program->fence_count) {
-    copy->fence_probe_skip_until =
-        core_alloc_array(size_t, source->program->fence_count);
-    memcpy(copy->fence_probe_skip_until, source->fence_probe_skip_until,
-           source->program->fence_count *
-               sizeof(*copy->fence_probe_skip_until));
-  }
-  copy->status_diagnostic = scan_problem_copy(source->status_diagnostic);
-  copy->pending_recovery_message =
-      scan_problem_copy(source->pending_recovery_message);
-  copy->recovery_diagnostic = scan_problem_copy(source->recovery_diagnostic);
-  copy->pending_recovery_token =
-      clone_pending_recovery_token(source->pending_recovery_token);
-  copy->child = scan_lex_session_clone_frame(source->child, copy);
-  return copy;
-}
-
-void *scan_lex_session_clone(const void *state) {
-  const scan_lex_session_t *current = state;
-  if (!current) {
-    return nullptr;
-  }
-
-  size_t depth = 0;
-  const scan_lex_session_t *root = current;
-  while (root->parent) {
-    root = root->parent;
-    depth++;
-  }
-
-  scan_lex_session_t *copy = scan_lex_session_clone_frame(root, nullptr);
-  scan_lex_session_t *result = copy;
-  for (size_t i = 0; i < depth; i++) {
-    result = result->child;
-  }
-  return result;
-}
-
-static void normalize_session_for_comparison(scan_lex_session_t *session) {
-  session->parent = nullptr;
-  session->child = nullptr;
-  session->modes = (core_list_t(lex_mode_t)){0};
-  session->indents = (core_list_t(int32_t)){0};
-  session->layout_blocks = (core_list_t(int32_t)){0};
-  session->heredoc_queue = (core_list_t(lex_heredoc_queue_t)){0};
-  session->pending_fence_pattern.data = nullptr;
-  session->pending_fence_prefix = nullptr;
-  session->pending_embed_prefix = nullptr;
-  session->fence_probe_skip_until = nullptr;
-  session->status_diagnostic = (scan_problem_t){0};
-  session->pending_recovery_message = (scan_problem_t){0};
-  session->recovery_diagnostic = (scan_problem_t){0};
-  session->pending_recovery_token = nullptr;
-
-  session->embed_start = 0;
-  session->pending_indent_end = 0;
-  session->pending_indent_first_tab = 0;
-  session->pending_fence_content = 0;
-  session->pending_fence_label_start = 0;
-  session->pending_fence_label_end = 0;
-  session->pending_fence_search = 0;
-  session->pending_heredoc_tag_start = 0;
-  session->pending_heredoc_tag_end = 0;
-  session->pending_heredoc_body = 0;
-  session->pending_heredoc_scan = 0;
-  session->pending_heredoc_line_start = 0;
-  session->pending_heredoc_header_scan = 0;
-  session->pending_heredoc_token_end = 0;
-  session->pending_number_prefix_at = 0;
-  session->pending_embed_content = 0;
-  session->pending_embed_search = 0;
-  session->skip_from = 0;
-  session->skip_to = 0;
-}
-
-static bool scan_lex_session_equal_frame(const scan_lex_session_t *left,
-                                         const scan_lex_session_t *right) {
-  if (!left || !right) {
-    return left == right;
-  }
-
-  scan_lex_session_t a = *left;
-  scan_lex_session_t b = *right;
-  normalize_session_for_comparison(&a);
-  normalize_session_for_comparison(&b);
-  if (memcmp(&a, &b, sizeof(a))) {
-    return false;
-  }
-  if (!!left->pending_recovery_token != !!right->pending_recovery_token) {
-    return false;
-  }
-  if (left->pending_recovery_token) {
-    const parse_token_info_t *x = left->pending_recovery_token;
-    const parse_token_info_t *y = right->pending_recovery_token;
-    core_option_t(core_string_t) x_option = parse_token_value(x);
-    core_option_t(core_string_t) y_option = parse_token_value(y);
-    bool x_value = core_option_is_set(x_option);
-    bool y_value = core_option_is_set(y_option);
-
-    if (parse_token_tid(x) != parse_token_tid(y)
-        || parse_token_start_byte(x) != parse_token_start_byte(y)
-        || parse_token_end_byte(x) != parse_token_end_byte(y)
-        || x_value != y_value
-        || (x_value && !core_string_eq(core_option_get(x_option),
-                                       core_option_get(y_option)))) {
-      return false;
-    }
-  }
-  if (left->modes.len != right->modes.len ||
-      (left->modes.len &&
-       memcmp(left->modes.data, right->modes.data,
-              left->modes.len * sizeof(*left->modes.data)))) {
-    return false;
-  }
-  if (left->indents.len != right->indents.len ||
-      (left->indents.len &&
-       memcmp(left->indents.data, right->indents.data,
-              left->indents.len * sizeof(*left->indents.data)))) {
-    return false;
-  }
-  if (left->layout_blocks.len != right->layout_blocks.len ||
-      (left->layout_blocks.len &&
-       memcmp(left->layout_blocks.data, right->layout_blocks.data,
-              left->layout_blocks.len * sizeof(*left->layout_blocks.data)))) {
-    return false;
-  }
-  if (left->heredoc_queue.len != right->heredoc_queue.len) {
-    return false;
-  }
-  for (size_t i = 0; i < left->heredoc_queue.len; i++) {
-    const lex_heredoc_queue_t *x = &left->heredoc_queue.data[i];
-    const lex_heredoc_queue_t *y = &right->heredoc_queue.data[i];
-    if (x->recipe != y->recipe || x->token_index != y->token_index ||
-        x->quote_kind != y->quote_kind || !core_string_eq(x->tag, y->tag)) {
-      return false;
-    }
-  }
-  if (!core_string_eq(left->pending_fence_pattern,
-                      right->pending_fence_pattern)) {
-    return false;
-  }
-  return scan_lex_session_equal_frame(left->child, right->child);
-}
-
-bool scan_lex_session_equal(const void *left, const void *right) {
-  const scan_lex_session_t *a = left;
-  const scan_lex_session_t *b = right;
-
-  while (a && a->parent) {
-    a = a->parent;
-  }
-  while (b && b->parent) {
-    b = b->parent;
-  }
-  return scan_lex_session_equal_frame(a, b);
-}
-
-static size_t shift_session_offset(size_t value, size_t edit_start,
-                                   size_t old_end, ptrdiff_t delta) {
-  if (value == SIZE_MAX) {
-    return value;
-  }
-  if (value >= old_end) {
-    return delta < 0 ? value - (size_t)-delta : value + (size_t)delta;
-  }
-  return value > edit_start ? edit_start : value;
-}
-
-static void scan_lex_session_shift_frame(scan_lex_session_t *run,
-                                         size_t edit_start, size_t old_end,
-                                         ptrdiff_t delta) {
-  if (!run) {
-    return;
-  }
-#define SHIFT_FIELD(name)                                                      \
-  run->name = shift_session_offset(run->name, edit_start, old_end, delta)
-  SHIFT_FIELD(embed_start);
-  SHIFT_FIELD(pending_indent_end);
-  SHIFT_FIELD(pending_indent_first_tab);
-  SHIFT_FIELD(pending_fence_content);
-  SHIFT_FIELD(pending_fence_label_start);
-  SHIFT_FIELD(pending_fence_label_end);
-  SHIFT_FIELD(pending_fence_search);
-  SHIFT_FIELD(pending_heredoc_tag_start);
-  SHIFT_FIELD(pending_heredoc_tag_end);
-  SHIFT_FIELD(pending_heredoc_body);
-  SHIFT_FIELD(pending_heredoc_scan);
-  SHIFT_FIELD(pending_heredoc_line_start);
-  SHIFT_FIELD(pending_heredoc_header_scan);
-  SHIFT_FIELD(pending_heredoc_token_end);
-  SHIFT_FIELD(pending_number_prefix_at);
-  SHIFT_FIELD(pending_embed_content);
-  SHIFT_FIELD(pending_embed_search);
-  SHIFT_FIELD(skip_from);
-  SHIFT_FIELD(skip_to);
-  SHIFT_FIELD(pending_recovery_start);
-  SHIFT_FIELD(pending_recovery_end);
-#undef SHIFT_FIELD
-  for (size_t i = 0; i < run->program->fence_count; i++) {
-    run->fence_probe_skip_until[i] = shift_session_offset(
-        run->fence_probe_skip_until[i], edit_start, old_end, delta);
-  }
-  scan_lex_session_shift_frame(run->child, edit_start, old_end, delta);
-}
-
-void scan_lex_session_shift(void *state, size_t edit_start, size_t old_end,
-                            ptrdiff_t byte_delta) {
-  scan_lex_session_t *run = state;
-  while (run && run->parent) {
-    run = run->parent;
-  }
-  scan_lex_session_shift_frame(run, edit_start, old_end, byte_delta);
-}
-
 static void free_pending_recovery_token(parse_token_info_t *token) {
   if (!token) {
     return;
@@ -1792,9 +1147,6 @@ static void scan_lex_session_free_frame(scan_lex_session_t *session) {
     core_free(session->heredoc_queue.data[i].tag.data);
   }
   core_list_free(session->heredoc_queue);
-  core_free(session->pending_fence_pattern.data);
-  core_free(session->pending_fence_prefix);
-  core_free(session->pending_embed_prefix);
   core_free(session->fence_probe_skip_until);
   core_free(session->status_diagnostic.detail.data);
   core_free(session->pending_recovery_message.detail.data);
@@ -1811,19 +1163,6 @@ void scan_lex_session_free(void *state) {
   }
 
   scan_lex_session_free_frame(session);
-}
-
-size_t scan_lex_issue_count(const scan_lex_t *lex) {
-  return lex ? lex->issues.len : 0;
-}
-
-bool scan_lex_issue(const scan_lex_t *lex, size_t index,
-                    scan_lex_issue_t *out) {
-  if (!lex || !out || index >= lex->issues.len) {
-    return false;
-  }
-  *out = lex->issues.data[index];
-  return true;
 }
 
 void scan_lex_reset_state(parse_scanner_t *s) {
@@ -1859,12 +1198,6 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->continued_line = false;
   lex->line_has_token = false;
   lex->sent_eof = false;
-  lex->pending_indent = false;
-  lex->pending_indent_end = 0;
-  lex->pending_indent_first_tab = SIZE_MAX;
-  lex->pending_indent_column = 0;
-  lex->pending_indent_has_space = false;
-  lex->pending_indent_has_tab = false;
   lex->skip_from = 0;
   lex->skip_to = 0;
   lex->outside = false;
@@ -1876,45 +1209,15 @@ void scan_lex_reset_state(parse_scanner_t *s) {
     }
   }
   lex->in_directive = nullptr;
-  lex->pending_comment = nullptr;
-  lex->pending_comment_depth = 0;
-  lex->pending_comment_fill_level = 0;
-  lex->pending_string = nullptr;
-  lex->pending_string_scalars = 0;
-  lex->pending_string_delimiter_depth = 0;
-  lex->pending_string_tail = false;
-  lex->pending_regex = nullptr;
-  lex->pending_regex_in_class = false;
-  lex->pending_fence = nullptr;
-  core_free(lex->pending_fence_pattern.data);
-  core_free(lex->pending_fence_prefix);
-  lex->pending_fence_pattern = (core_string_t){0};
-  lex->pending_fence_prefix = nullptr;
-  lex->pending_fence_search = 0;
-  lex->pending_fence_match = 0;
   if (lex->fence_probe_skip_until) {
     memset(lex->fence_probe_skip_until, 0,
            lex->program->fence_count * sizeof(*lex->fence_probe_skip_until));
   }
-  lex->pending_heredoc = nullptr;
-  lex->pending_heredoc_header_phase = HEREDOC_HEADER_NONE;
   for (size_t i = 0; i < core_list_len(lex->heredoc_queue); i++) {
     core_free(lex->heredoc_queue.data[i].tag.data);
   }
   lex->heredoc_queue.len = 0;
   lex->heredoc_queue_ready = false;
-  lex->heredoc_queue_scanning = false;
-  lex->pending_identifier = false;
-  lex->pending_attached_sigil = nullptr;
-  lex->pending_terminal = false;
-  lex->pending_number_phase = NUMBER_NONE;
-  lex->pending_opener = false;
-  lex->pending_embed = nullptr;
-  lex->pending_embed_content = 0;
-  lex->pending_embed_search = 0;
-  lex->pending_embed_match = 0;
-  core_free(lex->pending_embed_prefix);
-  lex->pending_embed_prefix = nullptr;
   core_free(lex->status_diagnostic.detail.data);
   lex->status_diagnostic = (scan_problem_t){0};
   core_free(lex->pending_recovery_message.detail.data);
@@ -1926,66 +1229,6 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->pending_recovery = nullptr;
   lex->pending_recovery_start = 0;
   lex->pending_recovery_end = 0;
-}
-
-static size_t compact_offset(size_t offset, size_t removed) {
-  return offset >= removed ? offset - removed : 0;
-}
-
-void scan_lex_compact_state(parse_scanner_t *s, size_t removed_bytes) {
-  scan_lex_session_t *run = s ? s->user_state : nullptr;
-
-  if (!run || !removed_bytes) {
-    return;
-  }
-
-  if (run->pending_indent) {
-    run->pending_indent_end =
-        compact_offset(run->pending_indent_end, removed_bytes);
-
-    if (run->pending_indent_first_tab != SIZE_MAX) {
-      run->pending_indent_first_tab =
-          compact_offset(run->pending_indent_first_tab, removed_bytes);
-    }
-  }
-
-  if (run->parent) {
-    run->embed_start = compact_offset(run->embed_start, removed_bytes);
-  }
-
-  if (run->pending_embed) {
-    run->pending_embed_content =
-        compact_offset(run->pending_embed_content, removed_bytes);
-    run->pending_embed_search =
-        compact_offset(run->pending_embed_search, removed_bytes);
-  }
-
-  run->pending_fence_content =
-      compact_offset(run->pending_fence_content, removed_bytes);
-  run->pending_fence_label_start =
-      compact_offset(run->pending_fence_label_start, removed_bytes);
-  run->pending_fence_label_end =
-      compact_offset(run->pending_fence_label_end, removed_bytes);
-  run->pending_fence_search =
-      compact_offset(run->pending_fence_search, removed_bytes);
-  run->pending_heredoc_tag_start =
-      compact_offset(run->pending_heredoc_tag_start, removed_bytes);
-  run->pending_heredoc_tag_end =
-      compact_offset(run->pending_heredoc_tag_end, removed_bytes);
-  run->pending_heredoc_body =
-      compact_offset(run->pending_heredoc_body, removed_bytes);
-  run->pending_heredoc_scan =
-      compact_offset(run->pending_heredoc_scan, removed_bytes);
-  run->pending_heredoc_line_start =
-      compact_offset(run->pending_heredoc_line_start, removed_bytes);
-  run->pending_heredoc_header_scan =
-      compact_offset(run->pending_heredoc_header_scan, removed_bytes);
-  run->pending_heredoc_token_end =
-      compact_offset(run->pending_heredoc_token_end, removed_bytes);
-  run->pending_number_prefix_at =
-      compact_offset(run->pending_number_prefix_at, removed_bytes);
-  run->skip_from = compact_offset(run->skip_from, removed_bytes);
-  run->skip_to = compact_offset(run->skip_to, removed_bytes);
 }
 
 bool scan_grammar_set_lex(parse_grammar_t *g, const scan_lex_spec_t *spec) {
@@ -2079,46 +1322,6 @@ static bool partial_at_end(parse_scanner_t *s, core_string_t lit) {
          !memcmp(s->input.data + s->cursor, lit.data, remaining);
 }
 
-static bool recipe_opener_may_continue(parse_scanner_t *s, bool resume) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
-
-  uint32_t node = resume ? run->pending_opener_node : 0;
-  size_t consumed = resume ? run->pending_opener_consumed : 0;
-  size_t before = consumed;
-
-  if (!resume) {
-    scan_mark(s);
-  }
-
-  while (s->mark + consumed < s->input.u8_bytes) {
-    uint8_t byte = (uint8_t)s->input.data[s->mark + consumed];
-    uint32_t child = trie_child(&((scan_lex_t *)lex)->opener_nodes,
-                                &((scan_lex_t *)lex)->opener_edges,
-                                node, byte, false);
-    if (child == UINT32_MAX) {
-      run->pending_opener = false;
-      s->work_bytes += consumed - before;
-      return false;
-    }
-    node = child;
-    consumed++;
-  }
-
-  s->work_bytes += consumed - before;
-  if (!s->source_final && lex->opener_nodes.data[node].edge >= 0) {
-    run->pending_opener = true;
-    run->pending_opener_node = node;
-    run->pending_opener_consumed = consumed;
-    scan_set_incomplete(s, SCAN_PROBLEM(TOKEN_OPENER_MAY_CONTINUE),
-                        s->mark);
-    return true;
-  }
-
-  run->pending_opener = false;
-  return false;
-}
-
 static bool in_set(const scan_lex_t *lex, core_string_t set,
                    core_codepoint_t c) {
   if (!set.data || c > 127) {
@@ -2198,65 +1401,49 @@ static size_t fence_trim_pad_before(parse_scanner_t *s,
 }
 
 static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
-                            uint32_t level, size_t content_start,
-                            size_t label_start, size_t label_end) {
-  scan_lex_session_t *run = s->user_state;
+                            uint32_t level, size_t content_start) {
+  size_t fill_bytes = f->fill.u8_bytes * (size_t)level;
+  size_t pattern_len =
+      f->body_close.u8_bytes + fill_bytes + f->outer_close.u8_bytes;
+  char *pattern = core_alloc_size(1, pattern_len);
+  size_t *prefix = core_alloc_array(size_t, pattern_len);
+  char *out = pattern;
 
-  if (!run->pending_fence_pattern.data) {
-    size_t fill_bytes = f->fill.u8_bytes * (size_t)level;
-    size_t pattern_len =
-        f->body_close.u8_bytes + fill_bytes + f->outer_close.u8_bytes;
+  memcpy(out, f->body_close.data, f->body_close.u8_bytes);
+  out += f->body_close.u8_bytes;
+  for (uint32_t i = 0; i < level; i++) {
+    memcpy(out, f->fill.data, f->fill.u8_bytes);
+    out += f->fill.u8_bytes;
+  }
+  memcpy(out, f->outer_close.data, f->outer_close.u8_bytes);
 
-    run->pending_fence_pattern = (core_string_t){
-        .data = core_alloc_size(1, pattern_len),
-        .u8_bytes = pattern_len,
-    };
-    run->pending_fence_prefix = core_alloc_array(size_t, pattern_len);
-    run->pending_fence_search = content_start;
-    run->pending_fence_match = 0;
-
-    char *out = run->pending_fence_pattern.data;
-
-    memcpy(out, f->body_close.data, f->body_close.u8_bytes);
-    out += f->body_close.u8_bytes;
-    for (uint32_t i = 0; i < level; i++) {
-      memcpy(out, f->fill.data, f->fill.u8_bytes);
-      out += f->fill.u8_bytes;
+  for (size_t i = 1, matched = 0; i < pattern_len; i++) {
+    while (matched && pattern[i] != pattern[matched]) {
+      matched = prefix[matched - 1];
     }
-    memcpy(out, f->outer_close.data, f->outer_close.u8_bytes);
-
-    for (size_t i = 1, matched = 0; i < pattern_len; i++) {
-      while (matched && run->pending_fence_pattern.data[i] !=
-                            run->pending_fence_pattern.data[matched]) {
-        matched = run->pending_fence_prefix[matched - 1];
-      }
-      if (run->pending_fence_pattern.data[i] ==
-          run->pending_fence_pattern.data[matched]) {
-        matched++;
-      }
-      run->pending_fence_prefix[i] = matched;
+    if (pattern[i] == pattern[matched]) {
+      matched++;
     }
+    prefix[i] = matched;
   }
 
-  size_t search = run->pending_fence_search;
-  size_t matched = run->pending_fence_match;
+  size_t search = content_start;
+  size_t matched = 0;
   size_t close_cursor = 0;
   bool closed = false;
-
-  size_t search_start = search;
 
   while (search < s->input.u8_bytes) {
     char byte = s->input.data[search];
 
-    while (matched && byte != run->pending_fence_pattern.data[matched]) {
-      matched = run->pending_fence_prefix[matched - 1];
+    while (matched && byte != pattern[matched]) {
+      matched = prefix[matched - 1];
     }
-    if (byte == run->pending_fence_pattern.data[matched]) {
+    if (byte == pattern[matched]) {
       matched++;
     }
     search++;
 
-    if (matched == run->pending_fence_pattern.u8_bytes) {
+    if (matched == pattern_len) {
       close_cursor = search - matched;
       bool has_pad = false;
       size_t trimmed = fence_trim_pad_before(s, f, close_cursor, &has_pad);
@@ -2265,25 +1452,17 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
         closed = true;
         break;
       }
-      matched = run->pending_fence_prefix[matched - 1];
+      matched = prefix[matched - 1];
     }
   }
-
-  s->work_bytes += search - search_start;
+  core_free(pattern);
+  core_free(prefix);
 
   while (s->cursor < search) {
     scan_advance(s);
   }
 
   if (closed) {
-    core_free(run->pending_fence_pattern.data);
-    core_free(run->pending_fence_prefix);
-    run->pending_fence_pattern = (core_string_t){0};
-    run->pending_fence_prefix = nullptr;
-    run->pending_fence_search = 0;
-    run->pending_fence_match = 0;
-    run->pending_fence = nullptr;
-
     emit_named(s, f->tok, PARSE_TOK_STRING_LIT);
 
     parse_token_info_t *tok = scan_prev_token(s);
@@ -2294,23 +1473,11 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
       }
       parse_token_set_content_span(tok, s->source_base + content_start,
                                    s->source_base + close_cursor);
-
-      if (label_end > label_start) {
-        parse_token_set_label_span(tok, s->source_base + label_start,
-                                   s->source_base + label_end);
-      }
     }
 
     return true;
   }
 
-  run->pending_fence = f;
-  run->pending_fence_level = level;
-  run->pending_fence_content = content_start;
-  run->pending_fence_label_start = label_start;
-  run->pending_fence_label_end = label_end;
-  run->pending_fence_search = search;
-  run->pending_fence_match = matched;
   scan_set_incomplete(s, SCAN_PROBLEM(FENCE_UNTERMINATED),
                       s->mark);
 
@@ -2362,27 +1529,12 @@ static bool try_fence(parse_scanner_t *s) {
     }
 
     if (level < f->minimum) {
-      if (!s->source_final && (scan_at_eof(s) || partial_at_end(s, f->fill))) {
-        scan_lex_session_t *run = s->user_state;
-        run->pending_fence = f;
-        run->pending_fence_level = level;
-        run->pending_fence_fill = true;
-        run->pending_fence_open = true;
-        run->pending_fence_label_start = s->cursor;
-        run->pending_fence_label_end = s->cursor;
-        scan_set_incomplete(
-            s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
-        return false;
-      }
       record_failed_fence_probe(run, s, f);
       s->cursor = start;
       s->line = start_line;
       s->column = start_col;
       continue;
     }
-
-    size_t label_start = s->cursor;
-    size_t label_end = label_start;
 
     if (!at_fence_body_open(s, f) && f->label &&
         id_start_here(lex, scan_peek(s, 0))) {
@@ -2391,19 +1543,10 @@ static bool try_fence(parse_scanner_t *s) {
       while (!scan_at_eof(s) && id_cont_here(lex, scan_peek(s, 0))) {
         scan_advance(s);
       }
-
-      label_end = s->cursor;
     }
 
     if (!at_fence_body_open(s, f)) {
       if (scan_at_eof(s) || partial_at_end(s, f->body_open)) {
-        scan_lex_session_t *run = s->user_state;
-
-        run->pending_fence = f;
-        run->pending_fence_level = level;
-        run->pending_fence_label_start = label_start;
-        run->pending_fence_label_end = label_end;
-        run->pending_fence_open = true;
         scan_set_incomplete(
             s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
 
@@ -2434,105 +1577,10 @@ static bool try_fence(parse_scanner_t *s) {
     }
     size_t content_start = s->cursor;
 
-    return scan_fence_body(s, f, level, content_start, label_start, label_end);
+    return scan_fence_body(s, f, level, content_start);
   }
 
   return false;
-}
-
-static bool resume_fence(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_fence_t *f = run->pending_fence;
-  uint32_t level = run->pending_fence_level;
-  size_t content = run->pending_fence_content;
-  size_t label_start = run->pending_fence_label_start;
-  size_t label_end = run->pending_fence_label_end;
-  bool awaiting_open = run->pending_fence_open;
-  bool awaiting_fill = run->pending_fence_fill;
-
-  run->pending_fence = nullptr;
-  run->pending_fence_open = false;
-  run->pending_fence_fill = false;
-
-  if (awaiting_fill) {
-    while (at_str(s, f->fill)) {
-      scan_advance_bytes(s, f->fill.u8_bytes);
-      level++;
-    }
-    if (!s->source_final && (scan_at_eof(s) || partial_at_end(s, f->fill))) {
-      run->pending_fence = f;
-      run->pending_fence_level = level;
-      run->pending_fence_fill = true;
-      run->pending_fence_open = true;
-      run->pending_fence_label_start = s->cursor;
-      run->pending_fence_label_end = s->cursor;
-      scan_set_incomplete(
-          s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
-      return false;
-    }
-    if (level < f->minimum) {
-      s->cursor = s->mark;
-      s->line = s->mark_line;
-      s->column = s->mark_col;
-      return scan_lex_scan(s);
-    }
-    label_start = s->cursor;
-    label_end = label_start;
-  }
-
-  if (awaiting_open) {
-    while (!scan_at_eof(s) && !at_fence_body_open(s, f)) {
-      if (partial_at_end(s, f->body_open)) {
-        break;
-      }
-
-      if (!f->label || !id_cont_here(run->program, scan_peek(s, 0))) {
-        record_failed_fence_probe(run, s, f);
-        s->cursor = s->mark;
-        s->line = s->mark_line;
-        s->column = s->mark_col;
-        return scan_lex_scan(s);
-      }
-
-      scan_advance(s);
-      label_end = s->cursor;
-    }
-
-    if (!at_fence_body_open(s, f) && !s->source_final) {
-      run->pending_fence = f;
-      run->pending_fence_level = level;
-      run->pending_fence_label_start = label_start;
-      run->pending_fence_label_end = label_end;
-      run->pending_fence_open = true;
-      scan_set_incomplete(
-          s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
-
-      return false;
-    }
-
-    if (!at_fence_body_open(s, f)) {
-      record_failed_fence_probe(run, s, f);
-      s->cursor = s->mark;
-      s->line = s->mark_line;
-      s->column = s->mark_col;
-      return scan_lex_scan(s);
-    }
-
-    scan_advance_bytes(s, f->body_open.u8_bytes);
-    content = s->cursor;
-  }
-
-  return scan_fence_body(s, f, level, content, label_start, label_end);
-}
-
-static void literal_hook_invalid(parse_scanner_t *s, scan_problem_t problem,
-                                 size_t relative_start, size_t relative_end) {
-  parse_token_info_t *token = scan_prev_token(s);
-  size_t local_start = parse_token_start_byte(token) - s->source_base
-                     + relative_start;
-
-  scan_set_invalid(s, problem, local_start);
-  s->status_end_byte = parse_token_start_byte(token) + relative_end;
 }
 
 static void previous_token_invalid(parse_scanner_t *s, scan_problem_t problem) {
@@ -2583,98 +1631,12 @@ static bool comment_fill_open(parse_scanner_t *s, const scan_lex_comment_t *c,
   return true;
 }
 
-static bool literal_hook_declares(const core_string_t *declared,
-                                  core_string_t value) {
-  for (const core_string_t *item = declared; item && item->data; item++) {
-    if (core_string_eq(*item, value)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-static void apply_literal_hook(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
-  parse_token_info_t *token = scan_prev_token(s);
-
-  if (!lex->literal_hook_count || !token || !parse_token_has_value(token)) {
-    return;
-  }
-
-  const lex_literal_hook_t *compiled =
-      literal_hook_for(lex, parse_token_tid(token));
-  if (!compiled) {
-    return;
-  }
-
-  const scan_lex_literal_hook_t *recipe = compiled->recipe;
-  scan_lex_literal_input_t input = {
-      .spelling = core_option_get(parse_token_value(token)),
-      .token = recipe->token,
-      .modifier = recipe->modifier,
-  };
-  scan_lex_literal_result_t result = {0};
-
-  if (!scan_lex_literal_hook_call(recipe->hook, &input, &result)) {
-    literal_hook_invalid(
-        s, SCAN_PROBLEM(HOOK_UNREGISTERED), 0,
-        input.spelling.u8_bytes);
-    return;
-  }
-
-  if (!result.accepted) {
-    core_free(run->status_diagnostic.detail.data);
-    run->status_diagnostic = result.problem;
-    result.problem = (scan_problem_t){0};
-    literal_hook_invalid(s, run->status_diagnostic, result.diagnostic_start,
-                         result.diagnostic_end);
-    scan_lex_literal_result_free(&result);
-    return;
-  }
-
-  if (result.token.data && !core_string_eq(result.token, recipe->token) &&
-      !literal_hook_declares(recipe->outputs, result.token)) {
-    literal_hook_invalid(
-        s, SCAN_PROBLEM(HOOK_UNDECLARED_TOKEN), 0,
-        input.spelling.u8_bytes);
-    scan_lex_literal_result_free(&result);
-    return;
-  }
-  if (result.type.data && !literal_hook_declares(recipe->types, result.type)) {
-    literal_hook_invalid(
-        s, SCAN_PROBLEM(HOOK_UNDECLARED_TYPE),
-        0, input.spelling.u8_bytes);
-    scan_lex_literal_result_free(&result);
-    return;
-  }
-
-  if (result.token.data) {
-    parse_token_set_tid(token,
-                        tid_for(lex->g, result.token, parse_token_tid(token)));
-  }
-  if (result.value.data) {
-    parse_token_set_value(token, core_option_set(core_string_t, result.value),
-                          true);
-    result.value = (core_string_t){0};
-  }
-  if (result.type.data) {
-    parse_token_set_literal_type(
-        token, core_option_set(core_string_t, result.type), true);
-    result.type = (core_string_t){0};
-  }
-  scan_lex_literal_result_free(&result);
-}
-
 static void emit_named(parse_scanner_t *s, core_string_t name,
                        int32_t fallback) {
   scan_lex_session_t *run = s->user_state;
   const scan_lex_t *lex = run->program;
 
   scan_emit_marked(s, tid_for(lex->g, name, fallback));
-  if (lex->literal_hook_count) {
-    apply_literal_hook(s);
-  }
 }
 
 static const scan_lex_t *embedded_program(const scan_lex_t *lex,
@@ -2704,7 +1666,6 @@ static bool validate_embedded_body(parse_scanner_t *outer,
       session, scan_lex_reset_state);
 
   scan_scanner_take_state(scanner, scan_lex_session_free);
-  scan_scanner_set_compact_callback(scanner, scan_lex_compact_state);
   if (program->spec->regions) {
     scan_scanner_set_finalize_callback(scanner, scan_lex_finalize_regions);
   }
@@ -2739,19 +1700,32 @@ static bool validate_embedded_body(parse_scanner_t *outer,
   return status == SCAN_STATUS_COMPLETE;
 }
 
-static bool resume_embed_token(parse_scanner_t *s) {
+static bool scan_embed_token(parse_scanner_t *s,
+                             const scan_lex_embed_t *embed) {
   scan_lex_session_t *run = s->user_state;
-  const scan_lex_embed_t *embed = run->pending_embed;
-  size_t search = run->pending_embed_search;
-  size_t matched = run->pending_embed_match;
+  size_t content_start = s->cursor;
+  size_t search = s->cursor;
+  size_t matched = 0;
   size_t close_at = 0;
   bool closed = false;
+  size_t *prefix = core_alloc_array(size_t, embed->close.u8_bytes);
+
+  prefix[0] = 0;
+  for (size_t i = 1, at = 0; i < embed->close.u8_bytes; i++) {
+    while (at && embed->close.data[i] != embed->close.data[at]) {
+      at = prefix[at - 1];
+    }
+    if (embed->close.data[i] == embed->close.data[at]) {
+      at++;
+    }
+    prefix[i] = at;
+  }
 
   while (search < s->input.u8_bytes) {
     char byte = s->input.data[search];
 
     while (matched && byte != embed->close.data[matched]) {
-      matched = run->pending_embed_prefix[matched - 1];
+      matched = prefix[matched - 1];
     }
     if (byte == embed->close.data[matched]) {
       matched++;
@@ -2764,31 +1738,19 @@ static bool resume_embed_token(parse_scanner_t *s) {
       break;
     }
   }
+  core_free(prefix);
 
-  s->work_bytes += search - run->pending_embed_search;
   while (s->cursor < search) {
     scan_advance(s);
   }
 
   if (!closed) {
-    run->pending_embed_search = search;
-    run->pending_embed_match = matched;
     scan_set_incomplete(s, SCAN_PROBLEM(EMBED_UNTERMINATED),
                         s->mark);
     return false;
   }
 
-  size_t content_start = run->pending_embed_content;
-  bool valid = validate_embedded_body(s, run, embed, content_start, close_at);
-
-  run->pending_embed = nullptr;
-  run->pending_embed_content = 0;
-  run->pending_embed_search = 0;
-  run->pending_embed_match = 0;
-  core_free(run->pending_embed_prefix);
-  run->pending_embed_prefix = nullptr;
-
-  if (!valid) {
+  if (!validate_embedded_body(s, run, embed, content_start, close_at)) {
     return false;
   }
 
@@ -2816,7 +1778,6 @@ static inline_embed_result_t try_inline_embed(parse_scanner_t *s) {
   scan_lex_session_t *run = s->user_state;
   const scan_lex_t *lex = run->program;
   const scan_lex_embed_t *hit = nullptr;
-  bool longer_partial = false;
   size_t available = scan_remaining(s);
 
   lex_bucket_t bucket = lex->embed_buckets[scan_peek_byte(s, 0)];
@@ -2836,20 +1797,12 @@ static inline_embed_result_t try_inline_embed(parse_scanner_t *s) {
     }
 
     if (available < e->open.u8_bytes) {
-      longer_partial = true;
       continue;
     }
 
     if (!hit || e->open.u8_bytes > hit->open.u8_bytes) {
       hit = e;
     }
-  }
-
-  if (!s->source_final && longer_partial &&
-      (!hit || available == hit->open.u8_bytes)) {
-    scan_set_incomplete(
-        s, SCAN_PROBLEM(EMBED_DELIMITER_MAY_CONTINUE), s->cursor);
-    return INLINE_EMBED_STOP;
   }
 
   if (!hit) {
@@ -2862,24 +1815,7 @@ static inline_embed_result_t try_inline_embed(parse_scanner_t *s) {
   scan_advance_bytes(s, hit->open.u8_bytes);
 
   if (!hit->tokens) {
-    run->pending_embed = hit;
-    run->pending_embed_content = s->cursor;
-    run->pending_embed_search = s->cursor;
-    run->pending_embed_match = 0;
-    run->pending_embed_prefix = core_alloc_array(size_t, hit->close.u8_bytes);
-    run->pending_embed_prefix[0] = 0;
-
-    for (size_t i = 1, matched = 0; i < hit->close.u8_bytes; i++) {
-      while (matched && hit->close.data[i] != hit->close.data[matched]) {
-        matched = run->pending_embed_prefix[matched - 1];
-      }
-      if (hit->close.data[i] == hit->close.data[matched]) {
-        matched++;
-      }
-      run->pending_embed_prefix[i] = matched;
-    }
-
-    return resume_embed_token(s) ? INLINE_EMBED_EMITTED : INLINE_EMBED_STOP;
+    return scan_embed_token(s, hit) ? INLINE_EMBED_EMITTED : INLINE_EMBED_STOP;
   }
 
   const scan_lex_t *program = embedded_program(lex, hit);
@@ -2920,13 +1856,6 @@ static bool scan_outside(parse_scanner_t *s) {
       if (at_str(s, e->open)) {
         hit = e;
 
-        break;
-      }
-
-      if (!s->source_final && partial_at_end(s, e->open)) {
-        scan_set_incomplete(
-            s, SCAN_PROBLEM(EMBED_DELIMITER_MAY_CONTINUE),
-            s->cursor);
         break;
       }
     }
@@ -3018,12 +1947,10 @@ typedef enum {
 
 static void emit_dedent(parse_scanner_t *s, scan_lex_session_t *run) {
   const scan_lex_t *lex = run->program;
-  bool mismatch = run->pending_dedent_mismatch && run->pending_dedents == 1;
   if (run->indents.len) {
     run->indents.len--;
   }
   uint32_t depth = (uint32_t)run->indents.len;
-  uint32_t column = depth ? (uint32_t)run->indents.data[depth - 1] : 0;
   bool in_block = run->layout_blocks.len > 0;
   while (run->layout_blocks.len &&
          depth <
@@ -3033,16 +1960,11 @@ static void emit_dedent(parse_scanner_t *s, scan_lex_session_t *run) {
                                  lex->tid_newline != PARSE_TOK_IGNORED;
   }
   run->pending_dedents--;
-  if (!run->pending_dedents) {
-    run->pending_dedent_mismatch = false;
-  }
 
   scan_mark(s);
   scan_emit_marked(s, lex->tid_dedent);
   parse_token_info_t *token = scan_prev_token(s);
   if (token) {
-    parse_token_set_layout(token, depth, column);
-    parse_token_set_layout_mismatch(token, mismatch);
     parse_token_set_ignore_if_no_match(token, !in_block);
   }
 }
@@ -3086,7 +2008,6 @@ static bool finish_embedded_layout(parse_scanner_t *s,
 
   if (run->indents.len) {
     run->pending_dedents = 1;
-    run->pending_dedent_mismatch = false;
     emit_dedent(s, run);
     return true;
   }
@@ -3131,26 +2052,9 @@ static embed_close_result_t try_embedded_close(parse_scanner_t *s) {
     return EMBED_CLOSE_EMITTED;
   }
 
-  if (scan_at_eof(s)) {
-    if (!s->source_final) {
-      scan_set_incomplete(
-          s, SCAN_PROBLEM(EMBED_CLOSE_MAY_CONTINUE),
-          s->cursor);
-    } else {
-      scan_set_incomplete(s, SCAN_PROBLEM(EMBED_UNTERMINATED),
-                          run->embed_start);
-    }
-
-    return EMBED_CLOSE_STOP;
-  }
-
-  if (partial_at_end(s, embed->close)) {
-    scan_set_incomplete(
-        s,
-        s->source_final
-            ? SCAN_PROBLEM(EMBED_UNTERMINATED)
-            : SCAN_PROBLEM(EMBED_CLOSE_MAY_CONTINUE),
-        s->source_final ? run->embed_start : s->cursor);
+  if (scan_at_eof(s) || partial_at_end(s, embed->close)) {
+    scan_set_incomplete(s, SCAN_PROBLEM(EMBED_UNTERMINATED),
+                        run->embed_start);
     return EMBED_CLOSE_STOP;
   }
 
@@ -3225,7 +2129,8 @@ static escape_result_t scan_string_escape(parse_scanner_t *s,
 }
 
 static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
-                           size_t *scalar_count, size_t *delimiter_depth) {
+                           size_t *delimiter_depth) {
+  size_t scalars = 0;
   bool raw = (str->flags & SCAN_LEX_STR_RAW) != 0;
   bool multi = (str->flags & SCAN_LEX_STR_MULTILINE) != 0;
   bool nested = (str->flags & SCAN_LEX_STR_NESTED) != 0;
@@ -3259,7 +2164,7 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
                          s->mark);
       }
 
-      (*scalar_count)++;
+      scalars++;
 
       continue;
     }
@@ -3275,7 +2180,7 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
     if (nested && at_str(s, str->nest_open)) {
       scan_advance_bytes(s, str->nest_open.u8_bytes);
       (*delimiter_depth)++;
-      (*scalar_count)++;
+      scalars++;
       continue;
     }
 
@@ -3284,11 +2189,11 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
 
       if (*delimiter_depth) {
         (*delimiter_depth)--;
-        (*scalar_count)++;
+        scalars++;
         continue;
       }
 
-      if ((str->flags & SCAN_LEX_STR_ONE_SCALAR) && *scalar_count != 1) {
+      if ((str->flags & SCAN_LEX_STR_ONE_SCALAR) && scalars != 1) {
         scan_set_invalid(
             s,
             SCAN_PROBLEM(CHARACTER_LENGTH),
@@ -3303,7 +2208,7 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
     }
 
     scan_advance(s);
-    (*scalar_count)++;
+    scalars++;
   }
 
   return BODY_UNTERMINATED;
@@ -3349,8 +2254,6 @@ static bool try_string(parse_scanner_t *s) {
     }
   }
 
-  s->work_bytes += at - s->cursor;
-
   if (!best) {
     return false;
   }
@@ -3358,9 +2261,8 @@ static bool try_string(parse_scanner_t *s) {
   scan_mark(s);
   scan_advance_bytes(s, best->opener.u8_bytes);
 
-  size_t scalars = 0;
   size_t delimiter_depth = 0;
-  body_stop stop = scan_body(s, best, &scalars, &delimiter_depth);
+  body_stop stop = scan_body(s, best, &delimiter_depth);
 
   if (stop == BODY_HOLE) {
     emit_named(s, best->tok, PARSE_TOK_STRING_LIT);
@@ -3370,10 +2272,6 @@ static bool try_string(parse_scanner_t *s) {
   }
 
   if (stop == BODY_UNTERMINATED) {
-    run->pending_string = best;
-    run->pending_string_scalars = scalars;
-    run->pending_string_delimiter_depth = delimiter_depth;
-    run->pending_string_tail = false;
     scan_set_incomplete(s, SCAN_PROBLEM(STRING_UNTERMINATED),
                         s->mark);
 
@@ -3398,8 +2296,7 @@ static bool resume_string(parse_scanner_t *s, bool mark) {
     scan_mark(s);
   }
 
-  size_t scalars = 0;
-  body_stop stop = scan_body(s, m->str, &scalars, &m->delimiter_depth);
+  body_stop stop = scan_body(s, m->str, &m->delimiter_depth);
 
   if (stop == BODY_HOLE) {
     emit_named(s, m->str->tok_mid, PARSE_TOK_STRING_LIT);
@@ -3410,10 +2307,6 @@ static bool resume_string(parse_scanner_t *s, bool mark) {
   }
 
   if (stop == BODY_UNTERMINATED) {
-    run->pending_string = m->str;
-    run->pending_string_scalars = scalars;
-    run->pending_string_delimiter_depth = m->delimiter_depth;
-    run->pending_string_tail = true;
     scan_set_incomplete(s, SCAN_PROBLEM(STRING_UNTERMINATED),
                         s->mark);
 
@@ -3422,57 +2315,6 @@ static bool resume_string(parse_scanner_t *s, bool mark) {
 
   emit_named(s, m->str->tok_end, PARSE_TOK_STRING_LIT);
   run->modes.len--;
-
-  if (stop == BODY_INVALID_NEWLINE) {
-    previous_token_invalid(s,
-                           SCAN_PROBLEM(STRING_NEWLINE));
-  }
-
-  return true;
-}
-
-static bool resume_pending_string(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_string_t *str = run->pending_string;
-  bool tail = run->pending_string_tail;
-  body_stop stop = scan_body(s, str, &run->pending_string_scalars,
-                             &run->pending_string_delimiter_depth);
-
-  if (stop == BODY_UNTERMINATED) {
-    scan_set_incomplete(s, SCAN_PROBLEM(STRING_UNTERMINATED),
-                        s->mark);
-
-    return false;
-  }
-
-  size_t delimiter_depth = run->pending_string_delimiter_depth;
-
-  run->pending_string = nullptr;
-  run->pending_string_scalars = 0;
-  run->pending_string_delimiter_depth = 0;
-  run->pending_string_tail = false;
-
-  if (stop == BODY_HOLE) {
-    emit_named(s, tail ? str->tok_mid : str->tok, PARSE_TOK_STRING_LIT);
-
-    if (tail) {
-      lex_mode_t *m = &run->modes.data[run->modes.len - 1];
-
-      m->delimiter_depth = delimiter_depth;
-      m->in_hole = true;
-      m->at_open = (str->flags & SCAN_LEX_STR_HOLE_TOKENS) != 0;
-    } else {
-      push_mode(run, str, delimiter_depth);
-    }
-
-    return true;
-  }
-
-  emit_named(s, tail ? str->tok_end : str->tok, PARSE_TOK_STRING_LIT);
-
-  if (tail) {
-    run->modes.len--;
-  }
 
   if (stop == BODY_INVALID_NEWLINE) {
     previous_token_invalid(s,
@@ -3502,11 +2344,6 @@ static region_result_t try_region(parse_scanner_t *s) {
         opening = i == 0;
         prefix_bytes = prefixes[i].u8_bytes;
       }
-      else if (!s->source_final && partial_at_end(s, prefixes[i])) {
-        scan_set_incomplete(s,
-            SCAN_PROBLEM(REGION_ANCHOR_MAY_CONTINUE), s->cursor);
-        return REGION_STOP;
-      }
     }
   }
   if (!matched) return REGION_NONE;
@@ -3524,11 +2361,6 @@ static region_result_t try_region(parse_scanner_t *s) {
          && !core_codepoint_is_line_terminator(scan_peek(s, 0))
          && !at_str(s, matched->terminator)) {
     scan_advance(s);
-  }
-  if (scan_at_eof(s) && !s->source_final) {
-    scan_set_incomplete(s,
-        SCAN_PROBLEM(REGION_ANCHOR_MAY_CONTINUE), s->mark);
-    return REGION_STOP;
   }
   if (scan_at_eof(s) || core_codepoint_is_line_terminator(scan_peek(s, 0))) {
     scan_set_invalid(s, SCAN_PROBLEM(REGION_ANCHOR_MALFORMED),
@@ -3588,17 +2420,6 @@ static bool try_comment(parse_scanner_t *s) {
       while (!scan_at_eof(s) && !core_codepoint_is_line_terminator(scan_peek(s, 0))) {
         scan_advance(s);
       }
-
-      if (scan_at_eof(s) && !s->source_final) {
-        scan_lex_session_t *run = s->user_state;
-
-        run->pending_comment = c;
-        run->pending_comment_depth = 0;
-        scan_set_incomplete(s, SCAN_PROBLEM(LINE_COMMENT_MAY_CONTINUE),
-                            s->mark);
-
-        return false;
-      }
     } else {
       int32_t depth = 1;
       core_string_t filled_close = c->fill.data
@@ -3630,11 +2451,6 @@ static bool try_comment(parse_scanner_t *s) {
       }
 
       if (depth > 0) {
-        scan_lex_session_t *run = s->user_state;
-
-        run->pending_comment = c;
-        run->pending_comment_depth = depth;
-        run->pending_comment_fill_level = fill_level;
         core_free(filled_close.data);
         scan_set_incomplete(s, SCAN_PROBLEM(BLOCK_COMMENT_UNTERMINATED),
                             s->mark);
@@ -3656,93 +2472,9 @@ static bool try_comment(parse_scanner_t *s) {
   return false;
 }
 
-static bool resume_comment(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_comment_t *c = run->pending_comment;
-  int32_t depth = run->pending_comment_depth;
-  uint32_t fill_level = run->pending_comment_fill_level;
-
-  if (c->kind == SCAN_LEX_LINE) {
-    while (!scan_at_eof(s) && !core_codepoint_is_line_terminator(scan_peek(s, 0))) {
-      scan_advance(s);
-    }
-
-    if (scan_at_eof(s) && !s->source_final) {
-      scan_set_incomplete(s, SCAN_PROBLEM(LINE_COMMENT_MAY_CONTINUE),
-                          s->mark);
-
-      return false;
-    }
-
-    run->pending_comment = nullptr;
-
-    if (c->tok.data && c->tok.u8_bytes) {
-      emit_named(s, c->tok, PARSE_TOK_OTHER);
-    } else {
-      scan_add_trivia(s, scan_extract(s), PARSE_TRIVIA_COMMENT);
-    }
-
-    return true;
-  }
-
-  core_string_t filled_close =
-      c->fill.data ? comment_close_pattern(c, fill_level) : (core_string_t){0};
-  core_string_t close = c->fill.data ? filled_close : c->closer;
-
-  while (!scan_at_eof(s) && depth > 0) {
-    if (c->nested && at_str(s, c->opener)) {
-      scan_advance_bytes(s, c->opener.u8_bytes);
-      depth++;
-
-      continue;
-    }
-
-    if (at_str(s, close)) {
-      scan_advance_bytes(s, close.u8_bytes);
-      depth--;
-
-      continue;
-    }
-
-    if (partial_at_end(s, close) ||
-        (c->nested && partial_at_end(s, c->opener))) {
-      break;
-    }
-
-    scan_advance(s);
-  }
-
-  if (depth > 0) {
-    run->pending_comment_depth = depth;
-    core_free(filled_close.data);
-    scan_set_incomplete(s, SCAN_PROBLEM(BLOCK_COMMENT_UNTERMINATED),
-                        s->mark);
-
-    return false;
-  }
-
-  run->pending_comment = nullptr;
-  run->pending_comment_depth = 0;
-  run->pending_comment_fill_level = 0;
-  core_free(filled_close.data);
-
-  if (c->tok.data && c->tok.u8_bytes) {
-    emit_named(s, c->tok, PARSE_TOK_OTHER);
-  } else {
-    scan_add_trivia(s, scan_extract(s), PARSE_TRIVIA_COMMENT);
-  }
-
-  return true;
-}
-
 static bool number_digit(const scan_lex_t *lex, core_codepoint_t c,
                          core_string_t digits) {
   return digits.data ? in_set(lex, digits, c) : unicode_cp_is_ascii_digit(c);
-}
-
-static void number_wait(parse_scanner_t *s) {
-  scan_set_incomplete(s, SCAN_PROBLEM(NUMBER_MAY_CONTINUE),
-                      s->mark);
 }
 
 static void number_scan_digits(parse_scanner_t *s, core_string_t digits,
@@ -3775,17 +2507,12 @@ static void number_scan_digits(parse_scanner_t *s, core_string_t digits,
 }
 
 static const scan_lex_number_form_t *number_form_at(parse_scanner_t *s,
-                                                    size_t at, bool *partial) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
-  uint32_t node =
-      run->pending_number_prefix_consumed ? run->pending_number_prefix_node : 0;
-  int32_t best = run->pending_number_prefix_consumed
-                     ? run->pending_number_prefix_best
-                     : lex->number_nodes.data[0].tid;
-  size_t cursor = at + run->pending_number_prefix_consumed;
+                                                    size_t at) {
+  const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
+  uint32_t node = 0;
+  int32_t best = lex->number_nodes.data[0].tid;
+  size_t cursor = at;
 
-  *partial = false;
   while (cursor < s->input.u8_bytes) {
     uint32_t child = trie_child(&((scan_lex_t *)lex)->number_nodes,
                                 &((scan_lex_t *)lex)->number_edges,
@@ -3795,40 +2522,22 @@ static const scan_lex_number_form_t *number_form_at(parse_scanner_t *s,
     }
     node = child;
     cursor++;
-    s->work_bytes++;
     if (lex->number_nodes.data[node].tid) {
       best = lex->number_nodes.data[node].tid;
     }
-  }
-  if (cursor == s->input.u8_bytes && lex->number_nodes.data[node].edge >= 0) {
-    *partial = true;
-    run->pending_number_prefix_node = node;
-    run->pending_number_prefix_consumed = cursor - at;
-    run->pending_number_prefix_best = best;
-  } else {
-    run->pending_number_prefix_node = 0;
-    run->pending_number_prefix_consumed = 0;
-    run->pending_number_prefix_best = 0;
   }
 
   return best ? &lex->spec->number_forms[best - 1] : nullptr;
 }
 
 static const scan_lex_suffix_t *
-number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form,
-                   bool *partial) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
+number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form) {
+  const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
   size_t form_index = (size_t)(form - lex->spec->number_forms);
-  uint32_t root = (uint32_t)lex->number_suffix_roots.data[form_index];
-  uint32_t node = run->pending_number_suffix_consumed
-                      ? run->pending_number_suffix_node
-                      : root;
-  int32_t best =
-      run->pending_number_suffix_consumed ? run->pending_number_suffix_best : 0;
-  size_t at = s->cursor + run->pending_number_suffix_consumed;
+  uint32_t node = (uint32_t)lex->number_suffix_roots.data[form_index];
+  int32_t best = 0;
+  size_t at = s->cursor;
 
-  *partial = false;
   while (at < s->input.u8_bytes) {
     uint32_t child = trie_child(&((scan_lex_t *)lex)->number_suffix_nodes,
                                 &((scan_lex_t *)lex)->number_suffix_edges,
@@ -3838,233 +2547,12 @@ number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form,
     }
     node = child;
     at++;
-    s->work_bytes++;
     if (lex->number_suffix_nodes.data[node].tid) {
       best = lex->number_suffix_nodes.data[node].tid;
     }
   }
-  if (at == s->input.u8_bytes &&
-      (lex->number_suffix_nodes.data[node].edge >= 0 || best)) {
-    *partial = true;
-    run->pending_number_suffix_node = node;
-    run->pending_number_suffix_consumed = at - s->cursor;
-    run->pending_number_suffix_best = best;
-  } else {
-    run->pending_number_suffix_node = 0;
-    run->pending_number_suffix_consumed = 0;
-    run->pending_number_suffix_best = 0;
-  }
 
   return best ? &form->suffixes[best - 1] : nullptr;
-}
-
-static bool continue_number(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
-  const scan_lex_number_form_t *form = run->pending_number_form;
-  core_string_t separator = form ? form->separator : (core_string_t){0};
-
-  for (;;) {
-    switch (run->pending_number_phase) {
-    case NUMBER_PREFIX: {
-      if (run->pending_number_signed_only) {
-        if (scan_at_eof(s) && !s->source_final) {
-          number_wait(s);
-          return false;
-        }
-
-        core_codepoint_t first = scan_peek(s, 0);
-        bool starts =
-            unicode_cp_is_ascii_digit(first) ||
-            (first == '.' && unicode_cp_is_ascii_digit(scan_peek(s, 1)));
-
-        if (!starts) {
-          run->pending_number_phase = NUMBER_NONE;
-          run->pending_number_signed_only = false;
-          s->cursor = s->mark;
-          s->line = s->mark_line;
-          s->column = s->mark_col;
-
-          return scan_lex_scan(s);
-        }
-        run->pending_number_signed_only = false;
-      }
-
-      bool partial = false;
-      form = number_form_at(s, run->pending_number_prefix_at, &partial);
-      if (partial && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (!form) {
-        run->pending_number_phase = NUMBER_NONE;
-        s->cursor = s->mark;
-        s->line = s->mark_line;
-        s->column = s->mark_col;
-        return false;
-      }
-      run->pending_number_form = form;
-      separator = form->separator;
-      scan_advance_bytes(s, form->prefix.u8_bytes);
-      if (form->prefix.u8_bytes &&
-          (form->flags & SCAN_LEX_NUM_SEPARATOR_AFTER_PREFIX)) {
-        run->pending_number_after_digit = true;
-      }
-      run->pending_number_phase = NUMBER_INTEGER_DIGITS;
-      continue;
-    }
-
-    case NUMBER_INTEGER_DIGITS:
-      number_scan_digits(
-          s, form->digits, separator,
-          &run->pending_number_digits, &run->pending_number_after_digit,
-          &run->pending_number_need_digit, &run->pending_number_malformed);
-      if (scan_at_eof(s) && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (run->pending_number_need_digit) {
-        run->pending_number_malformed = true;
-      }
-      run->pending_number_phase = NUMBER_POINT;
-      continue;
-
-    case NUMBER_POINT:
-      if ((form->flags & SCAN_LEX_NUM_POINT) && scan_peek(s, 0) == '.') {
-        if (scan_remaining(s) == 1 && !s->source_final) {
-          number_wait(s);
-          return false;
-        }
-        bool next_digit = number_digit(
-            lex, scan_peek(s, 1), form->digits);
-        bool trailing = (form->flags & SCAN_LEX_NUM_TRAILING_POINT) &&
-                        scan_peek(s, 1) != '.' &&
-                        !id_start_here(lex, scan_peek(s, 1));
-        if (next_digit || trailing) {
-          run->pending_number_float = true;
-          run->pending_number_point = true;
-          scan_advance(s);
-          run->pending_number_after_digit = false;
-          run->pending_number_need_digit = false;
-          run->pending_number_phase = NUMBER_FRACTION_DIGITS;
-          continue;
-        }
-      }
-      run->pending_number_phase = NUMBER_EXP_START;
-      continue;
-
-    case NUMBER_FRACTION_DIGITS:
-      number_scan_digits(
-          s, form->digits, separator,
-          &run->pending_number_digits, &run->pending_number_after_digit,
-          &run->pending_number_need_digit, &run->pending_number_malformed);
-      if (scan_at_eof(s) && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (run->pending_number_need_digit) {
-        run->pending_number_malformed = true;
-      }
-      run->pending_number_phase = NUMBER_EXP_START;
-      continue;
-
-    case NUMBER_EXP_START:
-      if (in_set(lex, form->exponent, scan_peek(s, 0))) {
-        run->pending_number_float = true;
-        scan_advance(s);
-        run->pending_number_phase = NUMBER_EXP_SIGN;
-        continue;
-      }
-      if (run->pending_number_point &&
-          (form->flags & SCAN_LEX_NUM_EXPONENT_REQUIRED_FOR_POINT)) {
-        run->pending_number_malformed = true;
-      }
-      run->pending_number_phase = NUMBER_SUFFIX;
-      continue;
-
-    case NUMBER_EXP_SIGN:
-      if (scan_at_eof(s) && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (scan_peek(s, 0) == '+' || scan_peek(s, 0) == '-') {
-        scan_advance(s);
-        run->pending_number_phase = NUMBER_EXP_DIGITS;
-        if (scan_at_eof(s) && !s->source_final) {
-          number_wait(s);
-          return false;
-        }
-      } else {
-        run->pending_number_phase = NUMBER_EXP_DIGITS;
-      }
-      run->pending_number_after_digit = false;
-      run->pending_number_need_digit = false;
-      continue;
-
-    case NUMBER_EXP_DIGITS:
-      number_scan_digits(
-          s,
-          form->exponent_digits.data ? form->exponent_digits
-                                             : (core_string_t){0},
-          separator, &run->pending_number_exp_digits,
-          &run->pending_number_after_digit, &run->pending_number_need_digit,
-          &run->pending_number_malformed);
-      if (scan_at_eof(s) && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (!run->pending_number_exp_digits || run->pending_number_need_digit) {
-        run->pending_number_malformed = true;
-      }
-      run->pending_number_phase = NUMBER_SUFFIX;
-      continue;
-
-    case NUMBER_SUFFIX: {
-      if (scan_at_eof(s) && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      bool partial = false;
-      const scan_lex_suffix_t *suffix = number_form_suffix(s, form, &partial);
-      if (partial && !s->source_final) {
-        number_wait(s);
-        return false;
-      }
-      if (suffix) {
-        scan_advance_bytes(s, suffix->suffix.u8_bytes);
-      }
-      core_string_t tok = suffix ? suffix->tok
-          : run->pending_number_float ? form->tok_float : form->tok_int;
-      int32_t fallback =
-          run->pending_number_float ? PARSE_TOK_FLOAT : PARSE_TOK_INTEGER;
-      bool malformed = run->pending_number_malformed;
-
-      if (!run->pending_number_digits) {
-        malformed = true;
-      }
-      if (suffix && suffix->forms &&
-          !(suffix->forms &
-            (run->pending_number_float ? SCAN_LEX_SUFFIX_FLOAT
-                                       : SCAN_LEX_SUFFIX_INTEGER))) {
-        malformed = true;
-      }
-      if (id_cont_here(lex, scan_peek(s, 0))) {
-        malformed = true;
-      }
-
-      run->pending_number_phase = NUMBER_NONE;
-      emit_named(s, tok, fallback);
-      if (malformed) {
-        previous_token_invalid(s,
-                               SCAN_PROBLEM(NUMBER_MALFORMED));
-      }
-      return true;
-    }
-
-    case NUMBER_NONE:
-      return false;
-    }
-  }
 }
 
 static bool try_number(parse_scanner_t *s) {
@@ -4092,59 +2580,121 @@ static bool try_number(parse_scanner_t *s) {
                              parse_token_tid(previous));
   }
 
-  if (signed_start && scan_remaining(s) == 1 && !s->source_final) {
-    scan_mark(s);
-    scan_advance(s);
-  } else {
-    int32_t lead = signed_start ? 1 : 0;
-    core_codepoint_t first = scan_peek(s, lead);
+  int32_t lead = signed_start ? 1 : 0;
+  core_codepoint_t first = scan_peek(s, lead);
 
-    bool leading_point =
-        first == '.' &&
-        plain && (plain->flags & SCAN_LEX_NUM_LEADING_POINT) &&
-        number_digit(lex, scan_peek(s, lead + 1),
-                     plain->digits);
+  bool leading_point =
+      first == '.' &&
+      plain && (plain->flags & SCAN_LEX_NUM_LEADING_POINT) &&
+      number_digit(lex, scan_peek(s, lead + 1),
+                   plain->digits);
 
-    if (!unicode_cp_is_ascii_digit(first) && !leading_point) {
-      return false;
-    }
-
-    scan_mark(s);
-    if (lead) {
-      scan_advance(s);
-    }
+  if (!unicode_cp_is_ascii_digit(first) && !leading_point) {
+    return false;
   }
 
-  scan_lex_session_t *run = s->user_state;
+  scan_mark(s);
+  if (lead) {
+    scan_advance(s);
+  }
 
-  run->pending_number_phase = NUMBER_PREFIX;
-  run->pending_number_form = nullptr;
-  run->pending_number_prefix_at = s->cursor;
-  run->pending_number_prefix_node = 0;
-  run->pending_number_prefix_consumed = 0;
-  run->pending_number_prefix_best = 0;
-  run->pending_number_suffix_node = 0;
-  run->pending_number_suffix_consumed = 0;
-  run->pending_number_suffix_best = 0;
-  run->pending_number_digits = 0;
-  run->pending_number_exp_digits = 0;
-  run->pending_number_after_digit = false;
-  run->pending_number_need_digit = false;
-  run->pending_number_malformed = false;
-  run->pending_number_float = false;
-  run->pending_number_point = false;
-  run->pending_number_signed_only =
-      signed_start && s->cursor == s->input.u8_bytes;
+  const scan_lex_number_form_t *form = plain;
+  size_t digits = 0;
+  size_t exp_digits = 0;
+  bool after_digit = false;
+  bool need_digit = false;
+  bool malformed = false;
+  bool is_float = false;
+  bool point = false;
 
   if (scan_peek(s, 0) == '.') {
-    run->pending_number_form = plain;
-    run->pending_number_float = true;
-    run->pending_number_point = true;
+    is_float = true;
+    point = true;
     scan_advance(s);
-    run->pending_number_phase = NUMBER_FRACTION_DIGITS;
+  } else {
+    form = number_form_at(s, s->cursor);
+    if (!form) {
+      s->cursor = s->mark;
+      s->line = s->mark_line;
+      s->column = s->mark_col;
+      return false;
+    }
+    scan_advance_bytes(s, form->prefix.u8_bytes);
+    if (form->prefix.u8_bytes &&
+        (form->flags & SCAN_LEX_NUM_SEPARATOR_AFTER_PREFIX)) {
+      after_digit = true;
+    }
+    number_scan_digits(s, form->digits, form->separator, &digits,
+                       &after_digit, &need_digit, &malformed);
+    if (need_digit) {
+      malformed = true;
+    }
+    if ((form->flags & SCAN_LEX_NUM_POINT) && scan_peek(s, 0) == '.') {
+      bool next_digit = number_digit(lex, scan_peek(s, 1), form->digits);
+      bool trailing = (form->flags & SCAN_LEX_NUM_TRAILING_POINT) &&
+                      scan_peek(s, 1) != '.' &&
+                      !id_start_here(lex, scan_peek(s, 1));
+      if (next_digit || trailing) {
+        is_float = true;
+        point = true;
+        scan_advance(s);
+        after_digit = false;
+        need_digit = false;
+      }
+    }
   }
 
-  return continue_number(s);
+  if (point) {
+    number_scan_digits(s, form->digits, form->separator, &digits,
+                       &after_digit, &need_digit, &malformed);
+    if (need_digit) {
+      malformed = true;
+    }
+  }
+
+  if (in_set(lex, form->exponent, scan_peek(s, 0))) {
+    is_float = true;
+    scan_advance(s);
+    if (scan_peek(s, 0) == '+' || scan_peek(s, 0) == '-') {
+      scan_advance(s);
+    }
+    after_digit = false;
+    need_digit = false;
+    number_scan_digits(s, form->exponent_digits, form->separator,
+                       &exp_digits, &after_digit, &need_digit, &malformed);
+    if (!exp_digits || need_digit) {
+      malformed = true;
+    }
+  } else if (point &&
+             (form->flags & SCAN_LEX_NUM_EXPONENT_REQUIRED_FOR_POINT)) {
+    malformed = true;
+  }
+
+  const scan_lex_suffix_t *suffix = number_form_suffix(s, form);
+  if (suffix) {
+    scan_advance_bytes(s, suffix->suffix.u8_bytes);
+  }
+  core_string_t tok = suffix ? suffix->tok
+      : is_float ? form->tok_float : form->tok_int;
+  int32_t fallback = is_float ? PARSE_TOK_FLOAT : PARSE_TOK_INTEGER;
+
+  if (!digits) {
+    malformed = true;
+  }
+  if (suffix && suffix->forms &&
+      !(suffix->forms &
+        (is_float ? SCAN_LEX_SUFFIX_FLOAT : SCAN_LEX_SUFFIX_INTEGER))) {
+    malformed = true;
+  }
+  if (id_cont_here(lex, scan_peek(s, 0))) {
+    malformed = true;
+  }
+
+  emit_named(s, tok, fallback);
+  if (malformed) {
+    previous_token_invalid(s, SCAN_PROBLEM(NUMBER_MALFORMED));
+  }
+  return true;
 }
 
 static bool sigil_attaches(parse_scanner_t *s, const scan_lex_sigil_t *sigil) {
@@ -4168,7 +2718,6 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
   lex_bucket_t bucket = lex->sigil_buckets[scan_peek_byte(s, 0)];
 
   const scan_lex_sigil_t *best = nullptr;
-  bool awaiting_body = false;
 
   for (uint32_t i = bucket.start; i < bucket.start + bucket.count; i++) {
     const scan_lex_sigil_t *g = lex->sigil_dispatch[i];
@@ -4182,11 +2731,6 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
           || (g->prefix.u8_bytes == 1
               && parse_token_tid(previous) == (uint8_t)g->prefix.data[0]))
         continue;
-    }
-
-    if (!s->source_final &&
-        s->cursor + g->prefix.u8_bytes == s->input.u8_bytes) {
-      awaiting_body = true;
     }
 
     core_codepoint_t after = scan_peek(s, (int32_t)g->prefix.u8_bytes);
@@ -4207,11 +2751,6 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
         if (cp < 0 || !unicode_is_id_continue(cp)) break;
         at = next;
       }
-      if (at == s->input.u8_bytes && !s->source_final) {
-        scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE),
-                            s->cursor);
-        return false;
-      }
       if (at + g->prefix.u8_bytes <= s->input.u8_bytes
           && !memcmp(s->input.data + at, g->prefix.data, g->prefix.u8_bytes))
         continue;
@@ -4223,10 +2762,6 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
   }
 
   if (!best) {
-    if (awaiting_body) {
-      scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_NEEDS_BODY),
-                          s->cursor);
-    }
     return false;
   }
 
@@ -4242,24 +2777,6 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     while (!scan_at_eof(s) && unicode_is_id_continue(scan_peek(s, 0))) {
       scan_advance(s);
     }
-  }
-
-  if (scan_at_eof(s) && !s->source_final) {
-    scan_lex_session_t *run = s->user_state;
-
-    if (attach) {
-      run->pending_attached_sigil = best;
-      scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE),
-                          s->mark);
-      return false;
-    }
-
-    run->pending_identifier = true;
-    run->pending_identifier_tid = tid_for(lex->g, best->tok, lex->tid_ident);
-    run->pending_identifier_digits = best->digits_only;
-    scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE), s->mark);
-
-    return false;
   }
 
   if (attach) {
@@ -4298,8 +2815,9 @@ static bool regex_may_start(const scan_lex_t *lex, const scan_lex_regex_t *r,
   return !tid_set_contains(&lex->regex_not_after[index], parse_token_tid(prev));
 }
 
-static body_stop scan_regex_body(parse_scanner_t *s, const scan_lex_regex_t *r,
-                                 bool *in_class) {
+static body_stop scan_regex_body(parse_scanner_t *s, const scan_lex_regex_t *r) {
+  bool in_class = false;
+
   while (!scan_at_eof(s)) {
     core_codepoint_t k = scan_peek(s, 0);
 
@@ -4322,20 +2840,20 @@ static body_stop scan_regex_body(parse_scanner_t *s, const scan_lex_regex_t *r,
     }
 
     if (k == '[') {
-      *in_class = true;
+      in_class = true;
       scan_advance(s);
 
       continue;
     }
 
     if (k == ']') {
-      *in_class = false;
+      in_class = false;
       scan_advance(s);
 
       continue;
     }
 
-    if (!*in_class && at_str(s, r->closer)) {
+    if (!in_class && at_str(s, r->closer)) {
       scan_advance_bytes(s, r->closer.u8_bytes);
 
       return BODY_CLOSED;
@@ -4360,15 +2878,10 @@ static bool try_regex(parse_scanner_t *s) {
     scan_mark(s);
     scan_advance_bytes(s, r->opener.u8_bytes);
 
-    bool in_class = false;
-    body_stop stop = scan_regex_body(s, r, &in_class);
+    body_stop stop = scan_regex_body(s, r);
 
     if (stop != BODY_CLOSED) {
       if (stop == BODY_UNTERMINATED) {
-        scan_lex_session_t *run = s->user_state;
-
-        run->pending_regex = r;
-        run->pending_regex_in_class = in_class;
         scan_set_incomplete(
             s, SCAN_PROBLEM(REGEX_UNTERMINATED), s->mark);
 
@@ -4392,40 +2905,6 @@ static bool try_regex(parse_scanner_t *s) {
   }
 
   return false;
-}
-
-static bool resume_regex(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_regex_t *r = run->pending_regex;
-  body_stop stop = scan_regex_body(s, r, &run->pending_regex_in_class);
-
-  if (stop == BODY_UNTERMINATED) {
-    scan_set_incomplete(
-        s, SCAN_PROBLEM(REGEX_UNTERMINATED), s->mark);
-
-    return false;
-  }
-
-  run->pending_regex = nullptr;
-  run->pending_regex_in_class = false;
-
-  if (stop == BODY_INVALID_NEWLINE) {
-    emit_named(s, r->tok, PARSE_TOK_STRING_LIT);
-    previous_token_invalid(s,
-                           SCAN_PROBLEM(REGEX_NEWLINE));
-
-    return true;
-  }
-
-  while (!scan_at_eof(s) &&
-         in_set(((scan_lex_session_t *)s->user_state)->program, r->suffix_chars,
-                scan_peek(s, 0))) {
-    scan_advance(s);
-  }
-
-  emit_named(s, r->tok, PARSE_TOK_STRING_LIT);
-
-  return true;
 }
 
 static core_string_t heredoc_token(const scan_lex_heredoc_t *h,
@@ -4487,13 +2966,12 @@ static core_string_t heredoc_body_value(parse_scanner_t *s,
 }
 
 static void emit_heredoc(parse_scanner_t *s, const scan_lex_heredoc_t *h,
-                         size_t tag_a, size_t tag_b, size_t body,
-                         size_t body_end, size_t consumed_end) {
+                         uint8_t quote_kind, size_t body, size_t body_end,
+                         size_t consumed_end) {
   scan_lex_session_t *run = s->user_state;
-  core_string_t name = heredoc_token(h, run->pending_heredoc_quote_kind);
+  core_string_t name = heredoc_token(h, quote_kind);
   core_string_t value = heredoc_body_value(s, h, body, body_end);
 
-  run->pending_heredoc = nullptr;
   run->skip_from = body;
   run->skip_to = consumed_end;
   scan_emit_owned(s, tid_for(run->program->g, name, PARSE_TOK_STRING_LIT),
@@ -4503,20 +2981,17 @@ static void emit_heredoc(parse_scanner_t *s, const scan_lex_heredoc_t *h,
   if (tok) {
     parse_token_set_content_span(tok, s->source_base + body,
                                  s->source_base + body_end);
-    parse_token_set_label_span(tok, s->source_base + tag_a,
-                               s->source_base + tag_b);
   }
 }
 
 static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
-                               size_t tag_a, size_t tag_b, size_t body,
-                               size_t scan) {
-  scan_lex_session_t *run = s->user_state;
-  size_t work_start = scan;
-  size_t matched = run->pending_heredoc_match;
-  bool at_indent = run->pending_heredoc_indent;
-  bool rejected = run->pending_heredoc_rejected;
-  size_t line_start = run->pending_heredoc_line_start;
+                               uint8_t quote_kind, size_t tag_a, size_t tag_b,
+                               size_t body) {
+  size_t scan = body;
+  size_t matched = 0;
+  bool at_indent = h->terminator_indent;
+  bool rejected = false;
+  size_t line_start = body;
   size_t tag_len = tag_b - tag_a;
 
   while (scan < s->input.u8_bytes) {
@@ -4524,8 +2999,7 @@ static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
     if (byte == '\n') {
       if (!rejected && matched == tag_len) {
         size_t end = scan + 1;
-        s->work_bytes += end - work_start;
-        emit_heredoc(s, h, tag_a, tag_b, body, line_start, end);
+        emit_heredoc(s, h, quote_kind, body, line_start, end);
         return true;
       }
 
@@ -4552,23 +3026,11 @@ static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
     scan++;
   }
 
-  if (s->source_final && !rejected && matched == tag_len) {
-    size_t end = scan;
-    s->work_bytes += end - work_start;
-    emit_heredoc(s, h, tag_a, tag_b, body, line_start, end);
+  if (!rejected && matched == tag_len) {
+    emit_heredoc(s, h, quote_kind, body, line_start, scan);
     return true;
   }
 
-  run->pending_heredoc = h;
-  run->pending_heredoc_tag_start = tag_a;
-  run->pending_heredoc_tag_end = tag_b;
-  run->pending_heredoc_body = body;
-  run->pending_heredoc_scan = scan;
-  run->pending_heredoc_line_start = line_start;
-  run->pending_heredoc_match = matched;
-  run->pending_heredoc_indent = at_indent;
-  run->pending_heredoc_rejected = rejected;
-  s->work_bytes += s->input.u8_bytes - work_start;
   scan_set_incomplete(s, SCAN_PROBLEM(HEREDOC_UNTERMINATED), s->mark);
   s->status_end_byte = s->source_base + s->input.u8_bytes;
 
@@ -4592,183 +3054,116 @@ static core_string_t heredoc_token(const scan_lex_heredoc_t *h,
   return h->tok;
 }
 
-static bool invalid_heredoc_header(parse_scanner_t *s, scan_problem_t problem,
-                                   size_t at) {
+static bool scan_heredoc(parse_scanner_t *s, const scan_lex_heredoc_t *h) {
   scan_lex_session_t *run = s->user_state;
-
-  run->pending_heredoc = nullptr;
-  run->pending_heredoc_header_phase = HEREDOC_HEADER_NONE;
-  scan_set_invalid(s, problem, at);
-  return false;
-}
-
-static bool continue_heredoc_header(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_heredoc_t *h = run->pending_heredoc;
   const scan_lex_heredoc_header_t *header = &h->header;
-  size_t scan = run->pending_heredoc_header_scan;
-  size_t work_start = scan;
+  size_t scan = s->cursor + h->opener.u8_bytes;
 
-  if (run->pending_heredoc_header_phase == HEREDOC_HEADER_LEADING) {
-    while (header->leading_space && scan < s->input.u8_bytes &&
-           (s->input.data[scan] == ' ' || s->input.data[scan] == '\t')) {
-      scan++;
-    }
-    if (scan == s->input.u8_bytes && !s->source_final) {
-      goto wait;
-    }
-
-    uint8_t quote = scan < s->input.u8_bytes ? (uint8_t)s->input.data[scan] : 0;
-    uint8_t quote_kind = SCAN_LEX_HEREDOC_UNQUOTED;
-
-    if (quote == '\'' || quote == '"') {
-      quote_kind = quote == '\'' ? SCAN_LEX_HEREDOC_SINGLE_QUOTED
-                                 : SCAN_LEX_HEREDOC_DOUBLE_QUOTED;
-      if (!(header->quotes & quote_kind)) {
-        return invalid_heredoc_header(
-            s, SCAN_PROBLEM(HEREDOC_TAG_QUOTED_NOT_PERMITTED), scan);
-      }
-      run->pending_heredoc_quote = quote;
-      scan++;
-    } else if (!(header->quotes & SCAN_LEX_HEREDOC_UNQUOTED)) {
-      return invalid_heredoc_header(
-          s, SCAN_PROBLEM(HEREDOC_TAG_MUST_BE_QUOTED), scan);
-    }
-
-    run->pending_heredoc_quote_kind = quote_kind;
-    run->pending_heredoc_tag_start = scan;
-    run->pending_heredoc_header_phase = HEREDOC_HEADER_TAG;
+  while (header->leading_space && scan < s->input.u8_bytes &&
+         (s->input.data[scan] == ' ' || s->input.data[scan] == '\t')) {
+    scan++;
   }
 
-  if (run->pending_heredoc_header_phase == HEREDOC_HEADER_TAG) {
-    uint8_t quote = run->pending_heredoc_quote;
+  uint8_t quote = scan < s->input.u8_bytes ? (uint8_t)s->input.data[scan] : 0;
+  uint8_t quote_kind = SCAN_LEX_HEREDOC_UNQUOTED;
 
-    if (quote) {
-      while (scan < s->input.u8_bytes &&
-             (uint8_t)s->input.data[scan] != quote &&
-             s->input.data[scan] != '\n') {
-        scan++;
-      }
-      if (scan == s->input.u8_bytes && !s->source_final) {
-        goto wait;
-      }
-      if (scan == s->input.u8_bytes || s->input.data[scan] == '\n') {
-        return invalid_heredoc_header(
-            s, SCAN_PROBLEM(HEREDOC_TAG_UNTERMINATED),
-            run->pending_heredoc_tag_start - 1);
-      }
-      run->pending_heredoc_tag_end = scan;
-      scan++;
-    } else {
-      if (scan == run->pending_heredoc_tag_start) {
-        uint32_t next = (uint32_t)scan;
-        int32_t cp =
-            unicode_utf8_decode(s->input.data, (uint32_t)s->input.u8_bytes,
-                                &next);
-        if (cp < 0 && !s->source_final) {
-          goto wait;
-        }
-        if (cp < 0 || (!unicode_is_id_start((core_codepoint_t)cp) &&
-                       !(cp < 128 && heredoc_tag_extra(header->tag_start_extra,
-                                                       (uint8_t)cp)))) {
-          return invalid_heredoc_header(
-              s, SCAN_PROBLEM(HEREDOC_TAG_INVALID), scan);
-        }
-        scan = next;
-      }
-      while (scan < s->input.u8_bytes) {
-        uint32_t next = (uint32_t)scan;
-        int32_t cp =
-            unicode_utf8_decode(s->input.data, (uint32_t)s->input.u8_bytes,
-                                &next);
-        if (cp < 0) {
-          if (!s->source_final) {
-            goto wait;
-          }
-          return invalid_heredoc_header(
-              s, SCAN_PROBLEM(HEREDOC_TAG_INVALID_UTF8), scan);
-        }
-        if (!unicode_is_id_continue((core_codepoint_t)cp) &&
-            !(cp < 128 &&
-              heredoc_tag_extra(header->tag_continue_extra, (uint8_t)cp))) {
-          break;
-        }
-        scan = next;
-      }
-      if (scan == s->input.u8_bytes && !s->source_final) {
-        goto wait;
-      }
-      run->pending_heredoc_tag_end = scan;
+  if (quote == '\'' || quote == '"') {
+    quote_kind = quote == '\'' ? SCAN_LEX_HEREDOC_SINGLE_QUOTED
+                               : SCAN_LEX_HEREDOC_DOUBLE_QUOTED;
+    if (!(header->quotes & quote_kind)) {
+      scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_QUOTED_NOT_PERMITTED),
+                       scan);
+      return false;
     }
-
-    if (run->pending_heredoc_tag_end == run->pending_heredoc_tag_start) {
-      return invalid_heredoc_header(s, SCAN_PROBLEM(HEREDOC_TAG_EMPTY),
-                                    scan);
+    scan++;
+  } else {
+    quote = 0;
+    if (!(header->quotes & SCAN_LEX_HEREDOC_UNQUOTED)) {
+      scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_MUST_BE_QUOTED), scan);
+      return false;
     }
-    run->pending_heredoc_header_phase = HEREDOC_HEADER_LINE;
-    run->pending_heredoc_token_end = scan;
   }
+
+  size_t tag_start = scan;
+  size_t tag_end;
+
+  if (quote) {
+    while (scan < s->input.u8_bytes &&
+           (uint8_t)s->input.data[scan] != quote &&
+           s->input.data[scan] != '\n') {
+      scan++;
+    }
+    if (scan == s->input.u8_bytes || s->input.data[scan] == '\n') {
+      scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_UNTERMINATED),
+                       tag_start - 1);
+      return false;
+    }
+    tag_end = scan;
+    scan++;
+  } else {
+    uint32_t next = (uint32_t)scan;
+    int32_t cp =
+        unicode_utf8_decode(s->input.data, (uint32_t)s->input.u8_bytes, &next);
+    if (cp < 0 || (!unicode_is_id_start((core_codepoint_t)cp) &&
+                   !(cp < 128 && heredoc_tag_extra(header->tag_start_extra,
+                                                   (uint8_t)cp)))) {
+      scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_INVALID), scan);
+      return false;
+    }
+    scan = next;
+    while (scan < s->input.u8_bytes) {
+      next = (uint32_t)scan;
+      cp = unicode_utf8_decode(s->input.data, (uint32_t)s->input.u8_bytes,
+                               &next);
+      if (cp < 0) {
+        scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_INVALID_UTF8), scan);
+        return false;
+      }
+      if (!unicode_is_id_continue((core_codepoint_t)cp) &&
+          !(cp < 128 &&
+            heredoc_tag_extra(header->tag_continue_extra, (uint8_t)cp))) {
+        break;
+      }
+      scan = next;
+    }
+    tag_end = scan;
+  }
+
+  if (tag_end == tag_start) {
+    scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_EMPTY), scan);
+    return false;
+  }
+  size_t token_end = scan;
 
   if (h->queued) {
-    core_string_t tag =
-        core_string_from_raw(s->input.data + run->pending_heredoc_tag_start,
-                             (int64_t)(run->pending_heredoc_tag_end -
-                                       run->pending_heredoc_tag_start));
-    size_t label_start = s->source_base + run->pending_heredoc_tag_start;
-    size_t label_end = s->source_base + run->pending_heredoc_tag_end;
-
-    s->work_bytes += scan - work_start;
-    scan_advance_bytes(s, run->pending_heredoc_token_end - s->cursor);
-    emit_named(s, heredoc_token(h, run->pending_heredoc_quote_kind),
-               PARSE_TOK_STRING_LIT);
+    core_string_t tag = core_string_from_raw(s->input.data + tag_start,
+                                             (int64_t)(tag_end - tag_start));
+    scan_advance_bytes(s, token_end - s->cursor);
+    emit_named(s, heredoc_token(h, quote_kind), PARSE_TOK_STRING_LIT);
 
     parse_token_info_t *token = scan_prev_token(s);
-    if (token) {
-      parse_token_set_label_span(token, label_start, label_end);
-    }
     core_list_push(run->heredoc_queue,
                    ((lex_heredoc_queue_t){
                        .recipe = h,
                        .tag = tag,
                        .token_index = token ? parse_token_index(token) : -1,
-                       .quote_kind = run->pending_heredoc_quote_kind,
+                       .quote_kind = quote_kind,
                    }));
-    run->pending_heredoc = nullptr;
-    run->pending_heredoc_header_phase = HEREDOC_HEADER_NONE;
     return true;
   }
 
   while (scan < s->input.u8_bytes && s->input.data[scan] != '\n') {
     if (!header->trailing_text && s->input.data[scan] != ' ' &&
         s->input.data[scan] != '\t') {
-      return invalid_heredoc_header(
-          s, SCAN_PROBLEM(HEREDOC_TAG_TRAILING_TEXT), scan);
+      scan_set_invalid(s, SCAN_PROBLEM(HEREDOC_TAG_TRAILING_TEXT), scan);
+      return false;
     }
     scan++;
   }
-  if (scan == s->input.u8_bytes && !s->source_final) {
-    goto wait;
-  }
 
-  s->work_bytes += scan - work_start;
-  scan_advance_bytes(s, run->pending_heredoc_token_end - s->cursor);
+  scan_advance_bytes(s, token_end - s->cursor);
   size_t body = scan < s->input.u8_bytes ? scan + 1 : scan;
-  run->pending_heredoc_body = body;
-  run->pending_heredoc_scan = body;
-  run->pending_heredoc_line_start = body;
-  run->pending_heredoc_match = 0;
-  run->pending_heredoc_indent = h->terminator_indent;
-  run->pending_heredoc_rejected = false;
-  run->pending_heredoc_header_phase = HEREDOC_HEADER_NONE;
-  return scan_heredoc_lines(s, h, run->pending_heredoc_tag_start,
-                            run->pending_heredoc_tag_end, body, body);
-
-wait:
-  s->work_bytes += scan - work_start;
-  run->pending_heredoc_header_scan = scan;
-  scan_set_incomplete(s, SCAN_PROBLEM(HEREDOC_HEADER_MAY_CONTINUE),
-                      s->mark);
-  return false;
+  return scan_heredoc_lines(s, h, quote_kind, tag_start, tag_end, body);
 }
 
 static bool try_heredoc(parse_scanner_t *s) {
@@ -4783,38 +3178,20 @@ static bool try_heredoc(parse_scanner_t *s) {
       continue;
     }
     scan_mark(s);
-    run->pending_heredoc = h;
-    run->pending_heredoc_header_phase = HEREDOC_HEADER_LEADING;
-    run->pending_heredoc_header_scan = s->cursor + h->opener.u8_bytes;
-    run->pending_heredoc_token_end = 0;
-    run->pending_heredoc_quote = 0;
-    run->pending_heredoc_quote_kind = 0;
-    return continue_heredoc_header(s);
+    return scan_heredoc(s, h);
   }
 
   return false;
 }
 
-static bool resume_heredoc(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
+static bool try_terminal_min(parse_scanner_t *s, size_t min_len) {
+  const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
+  uint32_t node = 0;
+  size_t consumed = 0;
+  size_t best_len = 0;
+  int32_t best_tid = 0;
 
-  if (run->pending_heredoc_header_phase != HEREDOC_HEADER_NONE) {
-    return continue_heredoc_header(s);
-  }
-
-  return scan_heredoc_lines(
-      s, run->pending_heredoc, run->pending_heredoc_tag_start,
-      run->pending_heredoc_tag_end, run->pending_heredoc_body,
-      run->pending_heredoc_scan);
-}
-
-static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
-                               uint32_t node, size_t consumed, size_t best_len,
-                               int32_t best_tid) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
-  size_t start_consumed = consumed;
-
+  scan_mark(s);
   while (s->mark + consumed < s->input.u8_bytes) {
     uint8_t byte = (uint8_t)s->input.data[s->mark + consumed];
     uint32_t child = trie_child(&((scan_lex_t *)lex)->term_nodes,
@@ -4835,13 +3212,7 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
     }
 
     if (candidate->word_boundary) {
-      core_codepoint_t next;
-
-      if (s->mark + consumed == s->input.u8_bytes && !s->source_final) {
-        continue;
-      }
-
-      next = scan_peek(s, (int32_t)consumed);
+      core_codepoint_t next = scan_peek(s, (int32_t)consumed);
 
       if (next > 0 && id_cont_here(lex, next)) {
         continue;
@@ -4852,24 +3223,6 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
     best_tid = candidate->tid;
   }
 
-  s->work_bytes += consumed - start_consumed;
-
-  if (s->mark + consumed == s->input.u8_bytes && !s->source_final &&
-      (lex->term_nodes.data[node].edge >= 0 ||
-       (lex->term_nodes.data[node].tid &&
-        lex->term_nodes.data[node].word_boundary))) {
-    run->pending_terminal = true;
-    run->pending_terminal_node = node;
-    run->pending_terminal_consumed = consumed;
-    run->pending_terminal_best_len = best_len;
-    run->pending_terminal_best_tid = best_tid;
-    run->pending_terminal_min_len = min_len;
-    scan_set_incomplete(s, SCAN_PROBLEM(TERMINAL_MAY_CONTINUE),
-                        s->mark);
-
-    return false;
-  }
-
   if (best_tid) {
     scan_advance_bytes(s, best_len);
     scan_emit_marked(s, best_tid);
@@ -4878,32 +3231,6 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
   }
 
   return false;
-}
-
-static bool try_terminal_min(parse_scanner_t *s, size_t min_len) {
-  scan_mark(s);
-  return scan_terminal_trie(s, min_len, 0, 0, 0, 0);
-}
-
-static bool resume_terminal(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  uint32_t node = run->pending_terminal_node;
-  size_t consumed = run->pending_terminal_consumed;
-  size_t best_len = run->pending_terminal_best_len;
-  int32_t best_tid = run->pending_terminal_best_tid;
-  size_t min_len = run->pending_terminal_min_len;
-
-  run->pending_terminal = false;
-
-  bool emitted =
-      scan_terminal_trie(s, min_len, node, consumed, best_len, best_tid);
-
-  if (!emitted && !run->pending_terminal &&
-      s->status != SCAN_STATUS_INCOMPLETE) {
-    return scan_lex_scan(s);
-  }
-
-  return emitted;
 }
 
 static bool try_terminal(parse_scanner_t *s) { return try_terminal_min(s, 1); }
@@ -4963,47 +3290,7 @@ static bool try_identifier(parse_scanner_t *s) {
   bool upper =
       lex->tid_ident_upper != PARSE_TOK_IGNORED && first >= 'A' && first <= 'Z';
 
-  if (scan_at_eof(s) && !s->source_final) {
-    scan_lex_session_t *run = s->user_state;
-
-    run->pending_identifier = true;
-    run->pending_identifier_tid = upper ? lex->tid_ident_upper : lex->tid_ident;
-    run->pending_identifier_digits = false;
-    scan_set_incomplete(s, SCAN_PROBLEM(IDENTIFIER_MAY_CONTINUE),
-                        s->mark);
-
-    return false;
-  }
-
   scan_emit_marked(s, upper ? lex->tid_ident_upper : lex->tid_ident);
-  apply_identifier_profile(s);
-
-  return true;
-}
-
-static bool resume_identifier(parse_scanner_t *s) {
-  scan_lex_session_t *run = s->user_state;
-  const scan_lex_t *lex = run->program;
-
-  while (!scan_at_eof(s) && (run->pending_identifier_digits
-                                 ? unicode_cp_is_ascii_digit(scan_peek(s, 0))
-                                 : id_cont_here(lex, scan_peek(s, 0)))) {
-    scan_advance(s);
-  }
-
-  if (scan_at_eof(s) && !s->source_final) {
-    scan_set_incomplete(s, SCAN_PROBLEM(IDENTIFIER_MAY_CONTINUE),
-                        s->mark);
-
-    return false;
-  }
-
-  int32_t tid = run->pending_identifier_tid;
-
-  run->pending_identifier = false;
-  run->pending_identifier_tid = 0;
-  run->pending_identifier_digits = false;
-  scan_emit_marked(s, tid);
   apply_identifier_profile(s);
 
   return true;
@@ -5039,7 +3326,6 @@ typedef enum {
   INDENT_LINE_CONTENT,
   INDENT_LINE_BLANK,
   INDENT_LINE_COMMENT,
-  INDENT_LINE_INCOMPLETE,
 } indent_line_kind_t;
 
 typedef enum {
@@ -5081,44 +3367,15 @@ static indent_measure_t measure_indent(parse_scanner_t *s, uint8_t tab_width,
   return result;
 }
 
-static indent_measure_t pending_indent(const parse_scanner_t *s,
-                                       const scan_lex_session_t *run) {
-  if (!run->pending_indent) {
-    return (indent_measure_t){
-        .end = s->cursor,
-        .first_tab = SIZE_MAX,
-    };
-  }
-
-  return (indent_measure_t){
-      .end = run->pending_indent_end,
-      .first_tab = run->pending_indent_first_tab,
-      .column = run->pending_indent_column,
-      .has_space = run->pending_indent_has_space,
-      .has_tab = run->pending_indent_has_tab,
-  };
-}
-
-static void save_pending_indent(scan_lex_session_t *run, indent_measure_t m) {
-  run->pending_indent = true;
-  run->pending_indent_end = m.end;
-  run->pending_indent_first_tab = m.first_tab;
-  run->pending_indent_column = m.column;
-  run->pending_indent_has_space = m.has_space;
-  run->pending_indent_has_tab = m.has_tab;
-}
-
 static indent_line_kind_t indent_line_kind(parse_scanner_t *s,
                                            const scan_lex_t *lex, size_t at) {
   if (at >= s->input.u8_bytes) {
-    return s->source_final ? INDENT_LINE_BLANK : INDENT_LINE_INCOMPLETE;
+    return INDENT_LINE_BLANK;
   }
 
   if (s->input.data[at] == '\n' || s->input.data[at] == '\r') {
     return INDENT_LINE_BLANK;
   }
-
-  bool partial = false;
 
   for (const scan_lex_comment_t *c = lex->spec->comments; c && c->opener.data;
        c++) {
@@ -5126,24 +3383,13 @@ static indent_line_kind_t indent_line_kind(parse_scanner_t *s,
       continue;
     }
 
-    size_t available = s->input.u8_bytes - at;
-    size_t compare =
-        available < c->opener.u8_bytes ? available : c->opener.u8_bytes;
-
-    if (memcmp(s->input.data + at, c->opener.data, compare)) {
-      continue;
-    }
-
-    if (available >= c->opener.u8_bytes) {
+    if (s->input.u8_bytes - at >= c->opener.u8_bytes &&
+        !memcmp(s->input.data + at, c->opener.data, c->opener.u8_bytes)) {
       return INDENT_LINE_COMMENT;
-    }
-
-    if (!s->source_final) {
-      partial = true;
     }
   }
 
-  return partial ? INDENT_LINE_INCOMPLETE : INDENT_LINE_CONTENT;
+  return INDENT_LINE_CONTENT;
 }
 
 static void invalid_indent(parse_scanner_t *s, scan_problem_t problem,
@@ -5161,18 +3407,10 @@ static layout_result_t do_layout(parse_scanner_t *s) {
     return LAYOUT_NONE;
   }
 
-  indent_measure_t m =
-      measure_indent(s, spec->indent_tab_width, pending_indent(s, run));
+  indent_measure_t m = measure_indent(
+      s, spec->indent_tab_width,
+      (indent_measure_t){.end = s->cursor, .first_tab = SIZE_MAX});
   indent_line_kind_t kind = indent_line_kind(s, lex, m.end);
-
-  if (kind == INDENT_LINE_INCOMPLETE) {
-    save_pending_indent(run, m);
-    scan_set_incomplete(s, SCAN_PROBLEM(INDENTATION_MAY_CONTINUE),
-                        s->cursor);
-    return LAYOUT_STOP;
-  }
-
-  run->pending_indent = false;
 
   bool ignore = (kind == INDENT_LINE_BLANK &&
                  spec->indent_blank_lines == SCAN_LEX_INDENT_IGNORE) ||
@@ -5224,8 +3462,6 @@ static layout_result_t do_layout(parse_scanner_t *s) {
     scan_emit_marked(s, lex->tid_indent);
     parse_token_info_t *token = scan_prev_token(s);
     if (token) {
-      parse_token_set_layout(token, (uint32_t)run->indents.len,
-                             (uint32_t)m.column);
       parse_token_set_ignore_if_no_match(token, run->layout_blocks.len == 0);
     }
     run->line_start = false;
@@ -5253,7 +3489,6 @@ static layout_result_t do_layout(parse_scanner_t *s) {
     }
 
     run->pending_dedents = (int32_t)(run->indents.len - keep);
-    run->pending_dedent_mismatch = landed != m.column;
 
     run->line_start = false;
 
@@ -5278,23 +3513,12 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
     lex_heredoc_queue_t *queued = &run->heredoc_queue.data[0];
     const scan_lex_heredoc_t *h = queued->recipe;
 
-    if (!run->heredoc_queue_scanning) {
-      run->pending_heredoc_body = s->cursor;
-      run->pending_heredoc_scan = s->cursor;
-      run->pending_heredoc_line_start = s->cursor;
-      run->pending_heredoc_match = 0;
-      run->pending_heredoc_indent = h->terminator_indent;
-      run->pending_heredoc_rejected = false;
-      run->heredoc_queue_scanning = true;
-    }
-
-    size_t body = run->pending_heredoc_body;
-    size_t scan = run->pending_heredoc_scan;
-    size_t line_start = run->pending_heredoc_line_start;
-    size_t matched = run->pending_heredoc_match;
-    bool at_indent = run->pending_heredoc_indent;
-    bool rejected = run->pending_heredoc_rejected;
-    size_t work_start = scan;
+    size_t body = s->cursor;
+    size_t scan = s->cursor;
+    size_t line_start = s->cursor;
+    size_t matched = 0;
+    bool at_indent = h->terminator_indent;
+    bool rejected = false;
     bool complete = false;
     size_t body_end = 0;
     size_t consumed = 0;
@@ -5329,20 +3553,13 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
       scan++;
     }
 
-    if (!complete && s->source_final && !rejected &&
-        matched == queued->tag.u8_bytes) {
+    if (!complete && !rejected && matched == queued->tag.u8_bytes) {
       body_end = line_start;
       consumed = scan;
       complete = true;
     }
 
-    s->work_bytes += scan - work_start;
     if (!complete) {
-      run->pending_heredoc_scan = scan;
-      run->pending_heredoc_line_start = line_start;
-      run->pending_heredoc_match = matched;
-      run->pending_heredoc_indent = at_indent;
-      run->pending_heredoc_rejected = rejected;
       scan_set_incomplete(s, SCAN_PROBLEM(HEREDOC_QUEUED_UNTERMINATED),
                           body);
       s->status_end_byte = s->source_base + s->input.u8_bytes;
@@ -5376,46 +3593,26 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
               (run->heredoc_queue.len - 1) * sizeof(*run->heredoc_queue.data));
     }
     run->heredoc_queue.len--;
-    run->heredoc_queue_scanning = false;
   }
 
   run->heredoc_queue_ready = false;
   return true;
 }
 
-typedef enum : uint8_t {
-  RECOVERY_NO_BOUNDARY,
-  RECOVERY_PARTIAL_BOUNDARY,
-  RECOVERY_BOUNDARY,
-} recovery_boundary_t;
+static size_t recovery_boundary(parse_scanner_t *s,
+                                const scan_lex_recovery_t *recipe) {
+  size_t width = 0;
 
-static recovery_boundary_t recovery_boundary(parse_scanner_t *s,
-                                             const scan_lex_recovery_t *recipe,
-                                             size_t *width) {
-  recovery_boundary_t result = RECOVERY_NO_BOUNDARY;
-
-  *width = 0;
   for (const core_string_t *sync = recipe->synchronize; sync && sync->data;
        sync++) {
-    size_t remaining = scan_remaining(s);
-    size_t compare = remaining < sync->u8_bytes ? remaining : sync->u8_bytes;
-
-    if (memcmp(s->input.data + s->cursor, sync->data, compare)) {
-      continue;
-    }
-    if (remaining < sync->u8_bytes) {
-      result = RECOVERY_PARTIAL_BOUNDARY;
-      continue;
-    }
-    if (sync->u8_bytes > *width) {
-      *width = sync->u8_bytes;
-      result = RECOVERY_BOUNDARY;
+    if (sync->u8_bytes > width && at_str(s, *sync)) {
+      width = sync->u8_bytes;
     }
   }
-  return result;
+  return width;
 }
 
-static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
+static void finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
   const lex_recovery_t *recovery = run->pending_recovery;
   parse_token_info_t *token = run->pending_recovery_token;
 
@@ -5430,7 +3627,6 @@ static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
                                parse_token_column(token), s->line, s->column);
     }
     parse_token_clear_content_span(token);
-    parse_token_clear_label_span(token);
 
     if (token_start >= s->source_base
         && token_start - s->source_base <= s->cursor
@@ -5475,49 +3671,15 @@ static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
   if (token && s->stream) {
     s->stream->tokens[s->stream->token_count++] = token;
   }
-  return true;
 }
 
-static bool continue_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
-  const scan_lex_recovery_t *recipe = run->pending_recovery->recipe;
-
-  if (!recipe->synchronize) {
-    return finish_recovery(s, run);
-  }
-
-  while (!scan_at_eof(s)) {
-    size_t width = 0;
-    recovery_boundary_t boundary = recovery_boundary(s, recipe, &width);
-
-    if (boundary == RECOVERY_BOUNDARY) {
-      if (recipe->consume) {
-        scan_advance_bytes(s, width);
-      }
-      return finish_recovery(s, run);
-    }
-    if (boundary == RECOVERY_PARTIAL_BOUNDARY && !s->source_final) {
-      scan_set_incomplete(
-          s, SCAN_PROBLEM(RECOVERY_MAY_CONTINUE), s->cursor);
-      return false;
-    }
-    scan_advance(s);
-  }
-
-  if (!s->source_final) {
-    scan_set_incomplete(s, SCAN_PROBLEM(RECOVERY_MAY_CONTINUE),
-                        s->cursor);
-    return false;
-  }
-  return finish_recovery(s, run);
-}
-
-static bool begin_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
+static void begin_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
   parse_token_info_t *token = scan_prev_token(s);
   const lex_recovery_t *recovery =
       token ? recovery_for(run->program, parse_token_tid(token)) : nullptr;
 
   if (!recovery) {
-    return false;
+    return;
   }
 
   run->pending_recovery = recovery;
@@ -5534,8 +3696,21 @@ static bool begin_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
   s->status_lexer = (core_string_t){0};
   s->status_start_byte = 0;
   s->status_end_byte = 0;
-  continue_recovery(s, run);
-  return true;
+
+  const scan_lex_recovery_t *recipe = recovery->recipe;
+  while (recipe->synchronize && !scan_at_eof(s)) {
+    size_t width = recovery_boundary(s, recipe);
+
+    if (width) {
+      if (recipe->consume) {
+        scan_advance_bytes(s, width);
+      }
+      break;
+    }
+    scan_advance(s);
+  }
+
+  finish_recovery(s, run);
 }
 
 static bool scan_lex_scan_one(parse_scanner_t *s) {
@@ -5551,73 +3726,11 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     return false;
   }
 
-  if (run->pending_embed) {
-    return resume_embed_token(s);
-  }
 
-  if (run->pending_number_phase != NUMBER_NONE) {
-    return continue_number(s);
-  }
 
-  if (run->pending_opener && recipe_opener_may_continue(s, true)) {
-    return false;
-  }
 
-  if (run->pending_terminal) {
-    return resume_terminal(s);
-  }
 
-  if (run->pending_identifier) {
-    return resume_identifier(s);
-  }
 
-  if (run->pending_attached_sigil) {
-    const scan_lex_sigil_t *sigil = run->pending_attached_sigil;
-    while (!scan_at_eof(s) && unicode_is_id_continue(scan_peek(s, 0)))
-      scan_advance(s);
-    if (scan_at_eof(s) && !s->source_final) {
-      scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE),
-                          s->mark);
-      return false;
-    }
-    run->pending_attached_sigil = nullptr;
-    parse_token_info_t *previous = scan_prev_token(s);
-    if (!previous
-        || core_option_is_set(parse_token_postfix_modifier(previous))) {
-      scan_set_invalid(s, SCAN_PROBLEM(POSTFIX_INVALID),
-                       s->mark);
-      return false;
-    }
-    core_string_t name = core_string_from_raw(
-        s->input.data + s->mark + sigil->prefix.u8_bytes,
-        (int64_t)(s->cursor - s->mark - sigil->prefix.u8_bytes));
-    parse_token_set_postfix_modifier(
-        previous, core_option_set(core_string_t, name), true);
-    parse_token_set_span(previous, parse_token_start_byte(previous),
-                         s->source_base + s->cursor);
-    return scan_lex_scan(s)
-        || (scan_at_eof(s) && s->status == SCAN_STATUS_ACTIVE);
-  }
-
-  if (run->pending_string) {
-    return resume_pending_string(s);
-  }
-
-  if (run->pending_regex) {
-    return resume_regex(s);
-  }
-
-  if (run->pending_fence) {
-    return resume_fence(s);
-  }
-
-  if (run->pending_heredoc) {
-    return resume_heredoc(s);
-  }
-
-  if (run->pending_comment) {
-    return resume_comment(s);
-  }
 
   if (run->pending_dedents > 0) {
     run->line_start = false;
@@ -5760,13 +3873,6 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
       continue;
     }
 
-    if (lex->spec->line_continue.data && !s->source_final &&
-        partial_at_end(s, lex->spec->line_continue)) {
-      scan_set_incomplete(
-          s, SCAN_PROBLEM(LINE_CONTINUATION_MAY_CONTINUE), s->cursor);
-      return false;
-    }
-
     if (lex->spec->line_continue.data && at_str(s, lex->spec->line_continue)) {
       size_t at = s->cursor + lex->spec->line_continue.u8_bytes;
 
@@ -5781,12 +3887,6 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
         run->continued_line = true;
 
         continue;
-      }
-
-      if (at == s->input.u8_bytes && !s->source_final) {
-        scan_set_incomplete(
-            s, SCAN_PROBLEM(LINE_CONTINUATION_MAY_CONTINUE), s->cursor);
-        return false;
       }
     }
 
@@ -5812,9 +3912,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
       return false;
     }
 
-    if (recipe_opener_may_continue(s, false)) {
-      return false;
-    }
+    scan_mark(s);
 
     region_result_t region = try_region(s);
     if (region == REGION_STOP) return false;
@@ -5836,10 +3934,6 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
   }
 
   if (scan_at_eof(s)) {
-    if (!s->source_final) {
-      return false;
-    }
-
     if (core_list_len(run->heredoc_queue)) {
       scan_set_incomplete(
           s, SCAN_PROBLEM(HEREDOC_QUEUED_NOT_BEGUN),
@@ -5866,7 +3960,6 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
 
     if (!run->pending_dedents) {
       run->pending_dedents = (int32_t)run->indents.len;
-      run->pending_dedent_mismatch = false;
     }
 
     if (run->pending_dedents > 0) {
@@ -6086,15 +4179,11 @@ bool scan_lex_scan(parse_scanner_t *s) {
   if (!run) {
     return false;
   }
-  if (run->pending_recovery) {
-    return continue_recovery(s, run);
-  }
 
   bool emitted = scan_lex_scan_one(s);
 
-  if (emitted && s->recovery_enabled && s->status == SCAN_STATUS_INVALID &&
-      begin_recovery(s, (scan_lex_session_t *)s->user_state)) {
-    return !((scan_lex_session_t *)s->user_state)->pending_recovery;
+  if (emitted && s->recovery_enabled && s->status == SCAN_STATUS_INVALID) {
+    begin_recovery(s, run);
   }
   return emitted;
 }

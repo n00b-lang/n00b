@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
-#include "ir/typelang.h"
 
 struct ir_parsed_scalars_t {
     const ir_profile_t  *profile;
@@ -36,12 +35,8 @@ static ir_parsed_scalars_t *parsed_scalars(ir_ctx_t *ctx,
         parsed->hashes  = ir_alloc(ctx, n * sizeof(uint64_t));
         parsed->types   = ir_alloc(ctx, n * sizeof(th_type *));
         for (size_t i = 0; i < p->n_scalars; i++) {
-            core_string_t err = {};
-            th_type      *t   = ir_typelang_parse(ctx->types,
-                                                  p->scalars[i].type_text,
-                                                  &err);
+            th_type *t = th_name(ctx->types, p->scalars[i].type_text);
 
-            core_free(err.data);
             parsed->hashes[i] = t ? th_hash(ctx->types, t) : 0;
             parsed->types[i]  = t;
         }
@@ -95,8 +90,6 @@ static const th_builtin_type_t IR_CONSTRUCTORS[] = {
     {CORE_STRING_STATIC("any"), TH_BUILTIN_ANY, 0, nullptr},
     {CORE_STRING_STATIC("array"), TH_BUILTIN_ARRAY, 1, nullptr},
     {CORE_STRING_STATIC("list"), TH_BUILTIN_LIST, 1, nullptr},
-    {CORE_STRING_STATIC("set"), TH_BUILTIN_SET, 1, nullptr},
-    {CORE_STRING_STATIC("dict"), TH_BUILTIN_DICT, 2, nullptr},
 };
 
 void ir_profile_install_builtins(ir_ctx_t *ctx, const ir_profile_t *p)
@@ -152,42 +145,6 @@ core_string_t ir_module_op_spelling(ir_module_t *m, ir_op_t op)
     const ir_opinfo_t *info = ir_module_op_info(m, op);
 
     return info ? info->spelling : (core_string_t){};
-}
-
-bool ir_module_op_lookup(ir_module_t *m, core_string_t spelling,
-                         ir_op_t *out)
-{
-    if (ir_op_lookup(spelling, out)) {
-        return true;
-    }
-
-    if (!m || !m->profile || !spelling.data) {
-        return false;
-    }
-
-    if (!m->ext_op_index) {
-        for (size_t i = 0; i < m->profile->n_ext_ops; i++) {
-            ir_index_add(m->ctx, &m->ext_op_index,
-                         m->profile->ext_ops[i].spelling,
-                         (void *)(uintptr_t)(i + 1));
-        }
-
-        if (!m->ext_op_index) {
-            return false;
-        }
-    }
-
-    uintptr_t slot = (uintptr_t)ir_index_find(m->ext_op_index, spelling);
-
-    if (!slot) {
-        return false;
-    }
-
-    if (out) {
-        *out = (ir_op_t)(IR_OP_COUNT + (slot - 1));
-    }
-
-    return true;
 }
 
 ir_machine_t ir_machine_of(ir_module_t *m, th_type *t)
@@ -265,37 +222,6 @@ th_type *ir_profile_scalar(ir_module_t *m, ir_class_t c, uint32_t width)
     }
 
     return nullptr;
-}
-
-th_type *ir_profile_role(ir_module_t *m, ir_role_t role)
-{
-    if (!m || !m->profile || role == IR_ROLE_NONE) {
-        return nullptr;
-    }
-
-    ready_scalars(m);
-
-    for (size_t i = 0; i < m->profile->n_scalars; i++) {
-        if (m->profile->scalars[i].role == role) {
-            return m->scalar_types[i];
-        }
-    }
-
-    return nullptr;
-}
-
-bool ir_profile_has(ir_module_t *m, th_type *t)
-{
-    if (!m || !t) {
-        return false;
-    }
-
-    t = th_resolve(t);
-    if (th_kind_of(t) != TH_NAMED) {
-        return false;
-    }
-
-    return find_scalar(m, t) != nullptr;
 }
 
 static const ir_scalar_t bce_scalars[] = {

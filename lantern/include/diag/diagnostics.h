@@ -85,16 +85,10 @@ typedef struct {
     const core_diag_words_t *words;
 } core_diag_render_t;
 
-typedef bool (*core_diag_policy_fn)(void *context,
-                                    core_diag_severity_t *severity,
-                                    core_string_t code);
-
 core_diagnostics_t *core_diagnostics_new(void);
 void core_diagnostics_free(core_diagnostics_t *diagnostics);
 void core_diagnostics_set_unit(core_diagnostics_t *diagnostics,
                                const core_translation_unit_t *unit);
-void core_diagnostics_set_policy(core_diagnostics_t *diagnostics,
-                                 core_diag_policy_fn policy, void *context);
 typedef bool (*core_diag_filter_fn)(void *context,
                                     const core_diagnostic_t *diagnostic);
 void core_diagnostics_set_filter(core_diagnostics_t *diagnostics,
@@ -159,5 +153,3 @@ bool core_diagnostics_failed(const core_diagnostics_t *diagnostics);
 bool core_diagnostics_has_fatal(const core_diagnostics_t *diagnostics);
 core_string_t core_diagnostics_render(const core_diagnostics_t *diagnostics,
                                       core_diag_render_t options);
-core_string_t core_diagnostics_render_json(
-    const core_diagnostics_t *diagnostics);

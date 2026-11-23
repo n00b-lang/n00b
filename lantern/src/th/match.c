@@ -197,19 +197,6 @@ bool th_compatible(th_type *a, th_type *b)
     return run_mode(a, b, true, true, false);
 }
 
-th_type *th_meet(th_ctx *ctx, th_type *a, th_type *b)
-{
-    const th_type *sources[2] = {a, b};
-    th_type       *copies[2]  = {nullptr, nullptr};
-
-    if (!ctx || !a || !b || !th_type_clone_many(ctx, sources, copies, 2)
-        || !run_mode(copies[0], copies[1], true, true, true)) {
-        return nullptr;
-    }
-
-    return th_resolve(copies[0]);
-}
-
 bool th_type_widens_to(const th_type *from, const th_type *to)
 {
     from = th_resolve((th_type *)from);

@@ -32,24 +32,6 @@ const ir_opinfo_t *ir_op_info(ir_op_t op)
     return op < IR_OP_COUNT ? &table[op] : nullptr;
 }
 
-bool ir_op_lookup(core_string_t spelling, ir_op_t *out)
-{
-    if (!spelling.data) {
-        return false;
-    }
-
-    for (uint16_t i = 0; i < IR_OP_COUNT; i++) {
-        if (core_string_eq(table[i].spelling, spelling)) {
-            if (out) {
-                *out = (ir_op_t)i;
-            }
-
-            return true;
-        }
-    }
-
-    return false;
-}
 
 core_string_t ir_op_spelling(ir_op_t op)
 {
@@ -64,11 +46,6 @@ bool ir_opinfo_has_result(const ir_opinfo_t *i)
 bool ir_opinfo_is_terminator(const ir_opinfo_t *i)
 {
     return i && (i->flags & IR_OPF_TERMINATOR);
-}
-
-bool ir_op_has_result(ir_op_t op)
-{
-    return ir_opinfo_has_result(ir_op_info(op));
 }
 
 bool ir_op_is_terminator(ir_op_t op)
@@ -216,11 +193,6 @@ bool ir_op_accepts_mod(ir_op_t op, core_string_t name)
     return ir_opinfo_accepts_mod(ir_op_info(op), name);
 }
 
-bool ir_mod_exists(core_string_t name)
-{
-    return name.data && mod_groups(name) != 0;
-}
-
 bool ir_opinfo_accepts_operands(const ir_opinfo_t *i, uint32_t n)
 {
     if (!i) {
@@ -229,16 +201,6 @@ bool ir_opinfo_accepts_operands(const ir_opinfo_t *i, uint32_t n)
 
     return n >= i->min_operands
         && (i->max_operands == IR_VAR_ARITY || n <= i->max_operands);
-}
-
-ir_opdkind_t ir_op_operand_kind(ir_op_t op, uint32_t i)
-{
-    return ir_opinfo_operand_kind(ir_op_info(op), i);
-}
-
-bool ir_op_accepts_operands(ir_op_t op, uint32_t n)
-{
-    return ir_opinfo_accepts_operands(ir_op_info(op), n);
 }
 
 bool ir_op_is_extension(ir_op_t op)
@@ -293,21 +255,4 @@ bool ir_op_is_address_operand(ir_op_t op, uint32_t operand)
     const ir_opmem_t *m = memory_of(op);
     return m && ((int32_t)operand == m->address
                  || (int32_t)operand == m->source);
-}
-
-bool ir_op_spelling_is_namespaced(core_string_t spelling,
-                                  core_string_t profile)
-{
-    if (!spelling.data || !profile.data) {
-        return false;
-    }
-
-    int64_t dot = core_string_find_byte(spelling, '.');
-
-    if (dot <= 0 || (size_t)dot + 1 >= spelling.u8_bytes) {
-        return false;
-    }
-
-    return core_string_eq(core_string_slice(spelling, 0, (size_t)dot),
-                          profile);
 }

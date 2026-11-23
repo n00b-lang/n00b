@@ -39,11 +39,6 @@ artifact_key_eq(const void *left, const void *right)
 }
 
 typedef struct {
-    core_translation_unit_t *importer;
-    core_translation_unit_t *imported;
-} core_link_import_edge_t;
-
-typedef struct {
     core_translation_unit_t **members;
     size_t member_count;
 } core_link_scc_t;
@@ -180,11 +175,7 @@ struct core_link_reference_t {
     const void *source_scope;
     core_string_t target_module;
     core_string_t declaration_key;
-    bool has_expected_kind;
     uint32_t expected_kind;
-    bool deferred;
-    core_string_t deferral_reason;
-    uint32_t deferral_prerequisite;
     core_diag_location_t source_location;
     core_string_t provenance;
     core_link_declaration_t *target;
@@ -242,9 +233,6 @@ struct core_link_unit_t {
     core_dict_t unit_index;
     core_dict_t module_index;
     uint64_t *unit_import_revisions;
-    core_link_import_edge_t *import_edges;
-    size_t import_edge_count;
-    size_t import_edge_capacity;
     core_link_scc_t *sccs;
     size_t scc_count;
     size_t scc_capacity;
@@ -731,24 +719,9 @@ build_sccs(core_link_unit_t *link)
 static void
 capture_graph_snapshot(core_link_unit_t *link)
 {
-    link->import_edge_count = 0;
-    for (size_t i = 0; i < link->unit_count; i++) {
-        core_translation_unit_t *unit = link->units[i];
-        for (size_t j = 0; j < core_translation_unit_import_count(unit); j++) {
-            if (!core_list_reserve_raw((void **)&link->import_edges,
-                                       &link->import_edge_capacity,
-                                       link->import_edge_count + 1,
-                                       sizeof(*link->import_edges)))
-                abort();
-            link->import_edges[link->import_edge_count++] =
-                (core_link_import_edge_t){
-                    .importer = unit,
-                    .imported = core_translation_unit_import(unit, j),
-                };
-        }
+    for (size_t i = 0; i < link->unit_count; i++)
         link->unit_import_revisions[i] =
-            core_translation_unit_import_revision(unit);
-    }
+            core_translation_unit_import_revision(link->units[i]);
     build_sccs(link);
 }
 
@@ -806,7 +779,6 @@ core_link_unit_free(core_link_unit_t *link)
         core_link_reference_t *ref = link->references[i];
         core_free(ref->target_module.data);
         core_free(ref->declaration_key.data);
-        core_free(ref->deferral_reason.data);
         core_free(ref->provenance.data);
         core_free(ref);
     }
@@ -832,7 +804,6 @@ core_link_unit_free(core_link_unit_t *link)
     core_free(link->roots);
     core_free(link->units);
     core_free(link->unit_import_revisions);
-    core_free(link->import_edges);
     clear_sccs(link);
     core_dict_free(&link->scc_index);
     core_free(link->sccs);
@@ -930,7 +901,6 @@ core_link_unit_collect(core_link_unit_t *link)
     }
     link->collected = false;
     link->unit_count = 0;
-    link->import_edge_count = 0;
     clear_sccs(link);
     core_dict_free(&link->unit_index);
     core_dict_free(&link->module_index);
@@ -1131,49 +1101,6 @@ core_link_unit_run_stage(core_link_unit_t *link, uint32_t stage_kind)
     return run_stage_at(link, (size_t)(stage - link->stages));
 }
 
-bool
-core_link_unit_invalidate_stage(core_link_unit_t *link, uint32_t stage_kind)
-{
-    if (!link || (link->root_count && !core_link_unit_collect(link)))
-        return false;
-    core_link_stage_record_t *target = find_stage(link, stage_kind);
-    if (!target) return false;
-    bool *invalidated = core_alloc_array(bool, link->stage_count);
-    memset(invalidated, 0, link->stage_count * sizeof(*invalidated));
-    invalidated[target - link->stages] = true;
-    for (size_t i = 0; i < link->stage_count; i++)
-        if (link->stages[i].state == CORE_LINK_STAGE_RUNNING) {
-            core_free(invalidated);
-            return false;
-        }
-    bool changed;
-    do {
-        changed = false;
-        for (size_t i = 0; i < link->stage_count; i++) {
-            if (invalidated[i]) continue;
-            core_link_stage_record_t *stage = &link->stages[i];
-            for (size_t j = 0; j < stage->prerequisite_count; j++) {
-                core_link_stage_record_t *prereq =
-                    find_stage(link, stage->prerequisites[j]);
-                if (prereq && invalidated[prereq - link->stages]) {
-                    invalidated[i] = true;
-                    changed = true;
-                    break;
-                }
-            }
-        }
-    } while (changed);
-    for (size_t i = 0; i < link->stage_count; i++)
-        if (invalidated[i]) link->stages[i].state = CORE_LINK_STAGE_PENDING;
-    reset_stage_contributions(link, invalidated);
-    reset_stage_bindings(link, invalidated);
-    remove_stage_artifacts(link, invalidated, 0);
-    remove_stage_dependencies(link, invalidated);
-    core_free(invalidated);
-    link->validated = false;
-    return true;
-}
-
 core_link_stage_state_t
 core_link_unit_stage_state(core_link_unit_t *link, uint32_t stage_kind)
 {
@@ -1215,52 +1142,6 @@ core_link_unit_translation_unit(core_link_unit_t *link, size_t index)
 {
     return link && core_link_unit_collect(link) && index < link->unit_count
         ? link->units[index] : nullptr;
-}
-
-bool
-core_link_unit_visit_sccs(core_link_unit_t *link,
-                          core_translation_unit_scc_fn callback,
-                          void *context)
-{
-    if (!link || !callback || !core_link_unit_collect(link)
-        || core_link_unit_has_fatal_diagnostics(link)) return false;
-    core_dict_t failed;
-    core_dict_init(&failed, nullptr, nullptr);
-    for (size_t i = 0; i < link->scc_count; i++) {
-        core_translation_unit_t **members = link->sccs[i].members;
-        size_t member_count = link->sccs[i].member_count;
-        bool blocked = false;
-        for (size_t e = 0; !blocked && e < link->import_edge_count; e++)
-            for (size_t m = 0; !blocked && m < member_count; m++)
-                blocked = link->import_edges[e].importer == members[m]
-                    && core_dict_contains(&failed,
-                                          link->import_edges[e].imported);
-        if (!blocked && callback(context, members, member_count)) continue;
-        for (size_t m = 0; m < member_count; m++)
-            core_dict_put(&failed, members[m], members[m]);
-    }
-    bool complete = core_dict_len(&failed) == 0;
-    core_dict_free(&failed);
-    return complete;
-}
-
-size_t
-core_link_unit_import_edge_count(core_link_unit_t *link)
-{
-    return link && core_link_unit_collect(link)
-        ? link->import_edge_count : 0;
-}
-
-bool
-core_link_unit_import_edge(core_link_unit_t *link, size_t index,
-                           core_translation_unit_t **importer,
-                           core_translation_unit_t **imported)
-{
-    if (!link || !core_link_unit_collect(link)
-        || index >= link->import_edge_count) return false;
-    if (importer) *importer = link->import_edges[index].importer;
-    if (imported) *imported = link->import_edges[index].imported;
-    return true;
 }
 
 size_t
@@ -1500,27 +1381,6 @@ register_declaration(core_link_unit_t *link, core_string_t module,
 }
 
 bool
-core_link_unit_define(core_link_unit_t *link,
-                      core_translation_unit_t *owner,
-                      core_string_t declaration_key, void *payload,
-                      core_link_payload_ownership_t ownership,
-                      core_link_payload_free_fn free_fn,
-                      core_link_declaration_t **out)
-{
-    if (!link || !owner || !core_link_unit_collect(link)) return false;
-    if (!core_dict_contains(&link->unit_index, owner)) {
-        link_internal(link, owner,
-                    CORE_STRING_STATIC("declaration owner is not part of this link unit"));
-        return false;
-    }
-    core_link_declaration_metadata_t metadata = {
-        .contract = payload,
-    };
-    return core_link_unit_register_declaration(link, owner, declaration_key,
-        &metadata, true, payload, ownership, free_fn, out);
-}
-
-bool
 core_link_unit_register_declaration(
     core_link_unit_t *link, core_translation_unit_t *owner,
     core_string_t declaration_key,
@@ -1537,18 +1397,6 @@ core_link_unit_register_declaration(
     return register_declaration(link, owner->module.identifier, owner, false,
         declaration_key, metadata, is_definition, false, payload, ownership,
         free_fn, out);
-}
-
-bool
-core_link_unit_define_external(core_link_unit_t *link, core_string_t module,
-                               core_string_t declaration_key, void *payload,
-                               core_link_payload_ownership_t ownership,
-                               core_link_payload_free_fn free_fn,
-                               core_link_declaration_t **out)
-{
-    core_link_declaration_metadata_t metadata = {.contract = payload};
-    return core_link_unit_define_external_typed(link, module, declaration_key,
-        &metadata, payload, ownership, free_fn, out);
 }
 
 bool
@@ -1618,68 +1466,6 @@ core_link_unit_overload_member_count(core_link_unit_t *link,
     return count;
 }
 
-core_link_declaration_t *
-core_link_unit_overload_member(core_link_unit_t *link, core_string_t module,
-                               core_string_t overload_group, size_t index)
-{
-    if (!link || !module.data || !overload_group.data
-        || !core_link_unit_collect(link)) return nullptr;
-    for (size_t i = 0; i < link->declaration_count; i++) {
-        core_link_declaration_t *decl = link->declarations[i];
-        if (!core_string_eq(decl->module, module)
-            || !core_string_eq(decl->overload_group, overload_group)) continue;
-        if (!index--) return decl;
-    }
-    return nullptr;
-}
-
-static bool reference_at_internal(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, const void *source_scope,
-    core_string_t target_module,
-    core_string_t declaration_key, bool has_expected_kind,
-    uint32_t expected_kind, bool allow_unresolved_target, bool add_distinct,
-    core_link_reference_t **out);
-
-bool
-core_link_unit_reference(core_link_unit_t *link,
-                         core_translation_unit_t *referrer,
-                         core_string_t target_module,
-                         core_string_t declaration_key,
-                         core_link_reference_t **out)
-{
-    return core_link_unit_reference_at(link, referrer, nullptr,
-        target_module, declaration_key, out);
-}
-
-bool
-core_link_unit_reference_at(core_link_unit_t *link,
-                            core_translation_unit_t *referrer,
-                            const void *use_site,
-                            core_string_t target_module,
-                            core_string_t declaration_key,
-                            core_link_reference_t **out)
-{
-    return reference_at_internal(link, referrer, use_site, nullptr,
-                                 target_module, declaration_key, false, 0,
-                                 false, false,
-                                 out);
-}
-
-bool
-core_link_unit_reference_at_kind(core_link_unit_t *link,
-                                 core_translation_unit_t *referrer,
-                                 const void *use_site,
-                                 core_string_t target_module,
-                                 core_string_t declaration_key,
-                                 uint32_t expected_kind,
-                                 core_link_reference_t **out)
-{
-    return reference_at_internal(link, referrer, use_site, nullptr,
-                                 target_module, declaration_key, true,
-                                 expected_kind, false, false, out);
-}
-
 bool
 core_link_unit_reference_at_scoped_kind(
     core_link_unit_t *link, core_translation_unit_t *referrer,
@@ -1687,70 +1473,9 @@ core_link_unit_reference_at_scoped_kind(
     core_string_t target_module, core_string_t declaration_key,
     uint32_t expected_kind, core_link_reference_t **out)
 {
-    return reference_at_internal(link, referrer, use_site, source_scope,
-                                 target_module, declaration_key, true,
-                                 expected_kind, false, false, out);
-}
-
-static bool
-defer_reference_at_scoped_kind_internal(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, const void *source_scope, uint32_t expected_kind,
-    core_string_t reason, uint32_t prerequisite_stage,
-    bool add_distinct, core_link_reference_t **out)
-{
     if (out) *out = nullptr;
-    if (!use_site || !reason.data || !reason.u8_bytes) return false;
-    core_link_reference_t *reference = nullptr;
-    if (!reference_at_internal(link, referrer, use_site, source_scope,
-            (core_string_t){0}, (core_string_t){0}, true, expected_kind,
-            true, add_distinct, &reference)
-        || !core_link_unit_defer_reference(link, reference, reason,
-                                           prerequisite_stage))
-        return false;
-    if (out) *out = reference;
-    return true;
-}
-
-bool
-core_link_unit_defer_reference_at_scoped_kind(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, const void *source_scope, uint32_t expected_kind,
-    core_string_t reason, uint32_t prerequisite_stage,
-    core_link_reference_t **out)
-{
-    return defer_reference_at_scoped_kind_internal(
-        link, referrer, use_site, source_scope, expected_kind, reason,
-        prerequisite_stage, false, out);
-}
-
-bool
-core_link_unit_add_deferred_reference_at_scoped_kind(
-    core_link_unit_t *link, core_translation_unit_t *referrer,
-    const void *use_site, const void *source_scope, uint32_t expected_kind,
-    core_string_t reason, uint32_t prerequisite_stage,
-    core_link_reference_t **out)
-{
-    return defer_reference_at_scoped_kind_internal(
-        link, referrer, use_site, source_scope, expected_kind, reason,
-        prerequisite_stage, true, out);
-}
-
-static bool
-reference_at_internal(core_link_unit_t *link,
-                      core_translation_unit_t *referrer,
-                      const void *use_site, const void *source_scope,
-                      core_string_t target_module,
-                      core_string_t declaration_key, bool has_expected_kind,
-                      uint32_t expected_kind, bool allow_unresolved_target,
-                      bool add_distinct,
-                      core_link_reference_t **out)
-{
-    if (out) *out = nullptr;
-    if (!link || !referrer
-        || (!allow_unresolved_target
-            && (!target_module.data || !target_module.u8_bytes
-                || !declaration_key.data || !declaration_key.u8_bytes)))
+    if (!link || !referrer || !target_module.data || !target_module.u8_bytes
+        || !declaration_key.data || !declaration_key.u8_bytes)
         return false;
     core_link_reference_t site_key = {
         .referrer = referrer, .use_site = use_site,
@@ -1758,14 +1483,12 @@ reference_at_internal(core_link_unit_t *link,
     bool found = false;
     core_link_reference_t *first = core_dict_get(&link->reference_index,
                                                  &site_key, &found);
-    for (core_link_reference_t *prior = add_distinct || !found
-             ? nullptr : first; prior; prior = prior->next_at_site) {
+    for (core_link_reference_t *prior = found ? first : nullptr; prior;
+         prior = prior->next_at_site) {
         if (core_string_eq(prior->target_module, target_module)
             && core_string_eq(prior->declaration_key, declaration_key)) {
             if (prior->source_scope != source_scope
-                || prior->has_expected_kind != has_expected_kind
-                || (has_expected_kind
-                    && prior->expected_kind != expected_kind)) {
+                || prior->expected_kind != expected_kind) {
                 link_internal(link, referrer,
                     CORE_STRING_STATIC("one source reference has conflicting expected declaration kinds"));
                 return false;
@@ -1780,11 +1503,8 @@ reference_at_internal(core_link_unit_t *link,
         .referrer = referrer,
         .use_site = use_site,
         .source_scope = source_scope,
-        .target_module = target_module.data
-            ? core_string_dup(target_module) : (core_string_t){0},
-        .declaration_key = declaration_key.data
-            ? core_string_dup(declaration_key) : (core_string_t){0},
-        .has_expected_kind = has_expected_kind,
+        .target_module = core_string_dup(target_module),
+        .declaration_key = core_string_dup(declaration_key),
         .expected_kind = expected_kind,
     };
     if (!core_list_reserve_raw((void **)&link->references,
@@ -1802,51 +1522,6 @@ reference_at_internal(core_link_unit_t *link,
     }
     link->validated = false;
     if (out) *out = ref;
-    return true;
-}
-
-bool
-core_link_unit_defer_reference(core_link_unit_t *link,
-                               core_link_reference_t *reference,
-                               core_string_t reason,
-                               uint32_t prerequisite_stage)
-{
-    if (!link || !reference || !reason.data || !reason.u8_bytes) return false;
-    if (reference->owner != link) return false;
-    core_string_t reason_copy = core_string_dup(reason);
-    core_free(reference->deferral_reason.data);
-    reference->deferral_reason = reason_copy;
-    reference->deferral_prerequisite = prerequisite_stage;
-    reference->deferred = true;
-    reference->target = nullptr;
-    link->validated = false;
-    return true;
-}
-
-bool
-core_link_unit_resolve_reference(core_link_unit_t *link,
-                                 core_link_reference_t *reference,
-                                 core_string_t target_module,
-                                 core_string_t declaration_key)
-{
-    if (!link || !reference || !target_module.data || !target_module.u8_bytes
-        || !declaration_key.data || !declaration_key.u8_bytes) return false;
-    if (reference->owner != link) return false;
-    core_string_t module_copy = core_string_dup(target_module);
-    core_string_t key_copy = core_string_dup(declaration_key);
-    core_free(reference->target_module.data);
-    core_free(reference->declaration_key.data);
-    core_free(reference->deferral_reason.data);
-    reference->target_module = module_copy;
-    reference->declaration_key = key_copy;
-    reference->deferral_reason = (core_string_t){0};
-    reference->deferral_prerequisite = 0;
-    reference->deferred = false;
-    core_link_declaration_t *target = core_link_unit_find_declaration(
-        link, reference->target_module, reference->declaration_key);
-    reference->target = target && (!reference->has_expected_kind
-        || reference->expected_kind == target->kind) ? target : nullptr;
-    link->validated = false;
     return true;
 }
 
@@ -1895,22 +1570,6 @@ core_link_unit_validate(core_link_unit_t *link)
                         CORE_STRING_STATIC("reference source is not part of this link unit"));
             link->validation_valid = false;
         }
-        if (ref->deferred) {
-            core_link_stage_record_t *prerequisite =
-                find_stage(link, ref->deferral_prerequisite);
-            if (!prerequisite) {
-                link_internal_at(link, ref->referrer, ref->source_location,
-                    CORE_STRING_STATIC("deferred reference names an unregistered prerequisite stage"));
-                link->validation_valid = false;
-            }
-            else if (prerequisite->state == CORE_LINK_STAGE_COMPLETE) {
-                link_internal_at(link, ref->referrer, ref->source_location,
-                    CORE_STRING_STATIC("reference remains deferred after its prerequisite completed"));
-                link->validation_valid = false;
-            }
-            ref->target = nullptr;
-            continue;
-        }
         ref->target = core_link_unit_find_declaration(link, ref->target_module,
                                        ref->declaration_key);
         if (!ref->target) {
@@ -1926,8 +1585,7 @@ core_link_unit_validate(core_link_unit_t *link)
             core_diag_label(link->diagnostics, CORE_STRING_STATIC("used here"));
             link->validation_valid = false;
         }
-        else if (ref->has_expected_kind
-                 && ref->expected_kind != ref->target->kind) {
+        else if (ref->expected_kind != ref->target->kind) {
             link_internal_at(link, ref->referrer, ref->source_location,
                 CORE_STRING_STATIC("reference resolves to a declaration of the wrong kind"));
             link->validation_valid = false;
@@ -2019,22 +1677,10 @@ core_link_declaration_binding(const core_link_declaration_t *declaration,
     return nullptr;
 }
 
-bool
-core_link_declaration_is_external(const core_link_declaration_t *declaration)
-{
-    return declaration && declaration->external;
-}
-
 uint32_t
 core_link_declaration_kind(const core_link_declaration_t *declaration)
 {
     return declaration ? declaration->kind : 0;
-}
-
-uint32_t
-core_link_declaration_visibility(const core_link_declaration_t *declaration)
-{
-    return declaration ? declaration->visibility : 0;
 }
 
 core_string_t
@@ -2042,12 +1688,6 @@ core_link_declaration_overload_group(
     const core_link_declaration_t *declaration)
 {
     return declaration ? declaration->overload_group : (core_string_t){0};
-}
-
-bool
-core_link_declaration_is_defined(const core_link_declaration_t *declaration)
-{
-    return declaration && declaration->is_defined;
 }
 
 bool
@@ -2101,12 +1741,6 @@ core_link_reference_use_site(const core_link_reference_t *reference)
     return reference ? reference->use_site : nullptr;
 }
 
-const void *
-core_link_reference_source_scope(const core_link_reference_t *reference)
-{
-    return reference ? reference->source_scope : nullptr;
-}
-
 core_string_t
 core_link_reference_module(const core_link_reference_t *reference)
 {
@@ -2117,15 +1751,6 @@ core_string_t
 core_link_reference_key(const core_link_reference_t *reference)
 {
     return reference ? reference->declaration_key : (core_string_t){0};
-}
-
-bool
-core_link_reference_expected_kind(const core_link_reference_t *reference,
-                                  uint32_t *out)
-{
-    if (!reference || !reference->has_expected_kind) return false;
-    if (out) *out = reference->expected_kind;
-    return true;
 }
 
 bool
@@ -2170,28 +1795,6 @@ core_link_reference_source_info(const core_link_reference_t *reference,
     if (provenance) *provenance = reference->provenance;
     return true;
 }
-
-bool
-core_link_reference_is_deferred(const core_link_reference_t *reference)
-{
-    return reference && reference->deferred;
-}
-
-core_string_t
-core_link_reference_deferral_reason(const core_link_reference_t *reference)
-{
-    return reference ? reference->deferral_reason : (core_string_t){0};
-}
-
-bool
-core_link_reference_deferral_prerequisite(
-    const core_link_reference_t *reference, uint32_t *out)
-{
-    if (!reference || !reference->deferred) return false;
-    if (out) *out = reference->deferral_prerequisite;
-    return true;
-}
-
 
 static bool
 add_artifact(core_link_unit_t *link, core_string_t module,

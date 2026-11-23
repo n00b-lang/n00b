@@ -35,30 +35,6 @@ core_string_t ir_symkind_name(ir_symkind_t k)
     }
 }
 
-bool ir_symkind_from_name(core_string_t s, ir_symkind_t *out)
-{
-    static const struct {
-        core_string_t name;
-        ir_symkind_t  k;
-    } table[] = {
-        {CORE_STRING_STATIC("sizeof"), IR_SYM_SIZEOF},
-        {CORE_STRING_STATIC("alignof"), IR_SYM_ALIGNOF},
-        {CORE_STRING_STATIC("offsetof"), IR_SYM_OFFSETOF},
-    };
-
-    for (size_t i = 0; s.data && i < sizeof(table) / sizeof(table[0]); i++) {
-        if (core_string_eq(table[i].name, s)) {
-            if (out) {
-                *out = table[i].k;
-            }
-
-            return true;
-        }
-    }
-
-    return false;
-}
-
 bool ir_layout_is_settled(const ir_layout_val_t *v)
 {
     return v && (v->state == IR_LAYOUT_PINNED || v->state == IR_LAYOUT_RESOLVED);
@@ -94,11 +70,6 @@ ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t,
                               core_string_t target)
 {
     return layout_of_exact(m, t, target.data ? target : m->target);
-}
-
-ir_descriptor_t *ir_layout_of_targetless(ir_module_t *m, th_type *t)
-{
-    return layout_of_exact(m, t, (core_string_t){});
 }
 
 static void invalidate_value(ir_layout_val_t *value)
@@ -477,15 +448,6 @@ bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes)
     return true;
 }
 
-bool ir_layout_pin_stride(ir_module_t *m, th_type *t, uint64_t bytes)
-{
-    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
-
-    if (!d || !pin(&d->stride, bytes)) return false;
-    d->final = nullptr;
-    return true;
-}
-
 bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
 {
     ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
@@ -592,23 +554,6 @@ bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r)
     r.authored                = true;
     d->variant             = r;
     d->final               = nullptr;
-
-    return true;
-}
-
-bool ir_layout_pin_indirect(ir_module_t *m, th_type *t, ir_indirect_repr_t r)
-{
-    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
-
-    if (!d || !r.words.value) {
-        return false;
-    }
-
-    r.words.state    = IR_LAYOUT_PINNED;
-    r.words.authored = true;
-    r.authored       = true;
-    d->indirect      = r;
-    d->final         = nullptr;
 
     return true;
 }

@@ -43,7 +43,6 @@ void ir_walk_run(ir_walk_t *w, ir_module_t *m);
 void ir_walk_run_func(ir_walk_t *w, ir_func_t *f);
 
 void ir_walk_stop(ir_walk_t *w);
-bool ir_walk_stopped(ir_walk_t *w);
 
 typedef bool (*ir_reachable_func_fn)(ir_func_t *function, void *user);
 typedef ir_func_t *(*ir_reachable_body_fn)(ir_func_t *function, void *user);

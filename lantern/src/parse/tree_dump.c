@@ -105,17 +105,3 @@ parse_tree_dump_str(parse_grammar_t *g, parse_tree_t *tree, bool raw)
 
     return core_buffer_take_string(b);
 }
-
-void
-parse_tree_dump(parse_grammar_t *g, parse_tree_t *tree,
-              FILE *out, bool raw)
-{
-    if (!tree || !out) {
-        return;
-    }
-
-    core_string_t s = parse_tree_dump_str(g, tree, raw);
-
-    fwrite(s.data, 1, s.u8_bytes, out);
-    core_free(s.data);
-}

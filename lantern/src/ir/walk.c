@@ -132,11 +132,6 @@ void ir_walk_stop(ir_walk_t *w)
     }
 }
 
-bool ir_walk_stopped(ir_walk_t *w)
-{
-    return w && w->stopped;
-}
-
 bool
 ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
                             ir_reachable_func_fn visit,

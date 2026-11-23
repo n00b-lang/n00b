@@ -12,7 +12,6 @@
 #include "ir/operands.h"
 #include "ir/pass.h"
 #include "ir/pdg.h"
-#include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/environment.h"
 

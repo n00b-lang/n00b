@@ -3888,7 +3888,6 @@ bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
     for (size_t i = 0; i < core_link_unit_reference_count(link); i++) {
         core_link_reference_t *reference =
             core_link_unit_reference_at_index(link, i);
-        if (core_link_reference_is_deferred(reference)) continue;
         parse_tree_t *use_site = (parse_tree_t *)
             core_link_reference_use_site(reference);
         core_link_declaration_t *target =

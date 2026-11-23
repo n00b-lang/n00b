@@ -51,13 +51,3 @@ core_free(void *ptr)
 {
     free(ptr);
 }
-
-static inline char *
-core_strndup(const char *s, size_t n)
-{
-    char *d = (char *)_core_calloc(1, n + 1);
-
-    memcpy(d, s, n);
-
-    return d;
-}

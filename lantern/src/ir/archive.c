@@ -7,7 +7,7 @@
 #include "lib/alloc.h"
 
 #define IR_ARCHIVE_MAGIC   UINT32_C(0x4e30494c)
-#define IR_ARCHIVE_VERSION UINT32_C(5)
+#define IR_ARCHIVE_VERSION UINT32_C(6)
 
 enum {
     REF_NONE,
@@ -309,8 +309,6 @@ w_init(writer_t *w, const ir_global_init_value_t *value)
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
-    case IR_GLOBAL_INIT_SET:
-    case IR_GLOBAL_INIT_DICTIONARY:
     case IR_GLOBAL_INIT_VARIANT:
         w_u64(w, value->aggregate.count);
         for (size_t i = 0; i < value->aggregate.count; i++)
@@ -540,13 +538,6 @@ w_function_details(writer_t *w, ir_func_t *function)
     }
     w_annots(w, &function->annots);
     w->function = nullptr;
-}
-
-bool
-ir_modules_save(ir_module_t *const *modules, size_t count,
-                core_buffer_t *out)
-{
-    return ir_modules_save_references(modules, count, out, nullptr);
 }
 
 bool
@@ -996,8 +987,6 @@ r_init(reader_t *r, ir_global_init_value_t *value)
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
-    case IR_GLOBAL_INIT_SET:
-    case IR_GLOBAL_INIT_DICTIONARY:
     case IR_GLOBAL_INIT_VARIANT: {
         uint64_t count = r_count(r);
         ir_global_init_value_t *items = count

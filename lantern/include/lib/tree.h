@@ -182,17 +182,6 @@
         _ok;                                                                   \
     })
 
-#define core_tree_add_node(parent, N, L, val)                                  \
-    ({                                                                         \
-        core_tree_t(N, L) *_an = core_tree_node(N, L, val);                    \
-        if (_an && !core_tree_add_child(parent, _an)) {                        \
-            core_free(_an->node->children);                                    \
-            core_free(_an);                                                    \
-            _an = nullptr;                                                     \
-        }                                                                      \
-        _an;                                                                   \
-    })
-
 #define core_tree_add_leaf(parent, N, L, val)                                  \
     ({                                                                         \
         core_tree_t(N, L) *_al = core_tree_leaf(N, L, val);                    \

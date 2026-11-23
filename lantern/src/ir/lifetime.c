@@ -37,15 +37,6 @@ ir_value_liveness_after(const ir_value_t *value, const ir_instr_t *point)
                          point);
 }
 
-ir_liveness_t
-ir_value_liveness_on_edge(const ir_value_t *value, const ir_block_t *from,
-                          const ir_block_t *to)
-{
-    if (!value || !from || !to || !from->owner || from->owner != to->owner)
-        return IR_LIVENESS_UNKNOWN;
-    return ir_live_on_edge(ir_func_liveness(from->owner), value, from, to);
-}
-
 typedef struct local_use_probe_t {
     const ir_func_t *function;
     const ir_value_t *address;

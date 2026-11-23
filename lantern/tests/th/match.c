@@ -78,17 +78,6 @@ static void fill_binds_or_compares(th_ctx *ctx)
     check(th_fill(slot, str) == nullptr, "fill rejects a different type");
 }
 
-static void meet_works_on_copies(th_ctx *ctx)
-{
-    th_type *a = th_var(ctx);
-    th_type *u8 = th_name(ctx, CORE_STRING_STATIC("u8"));
-    th_type *met = th_meet(ctx, list_of(ctx, a), list_of(ctx, u8));
-
-    check(met && th_hash(ctx, met) == th_hash(ctx, list_of(ctx, u8)),
-          "meet produces the matched type");
-    check(th_kind_of(th_resolve(a)) == TH_VAR, "meet leaves its inputs open");
-}
-
 int main(void)
 {
     th_ctx *ctx = th_ctx_new();
@@ -98,7 +87,6 @@ int main(void)
     failed_matches_roll_back(ctx);
     probes_leave_no_bindings(ctx);
     fill_binds_or_compares(ctx);
-    meet_works_on_copies(ctx);
     th_ctx_free(ctx);
 
     return failures ? 1 : 0;

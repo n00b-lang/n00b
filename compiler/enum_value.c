@@ -35,20 +35,6 @@ n00bb_enum_members_fit(const n00bb_enum_range_t *range, uint32_t bits,
     return range->magnitude_bits + 1 <= bits;
 }
 
-uint64_t
-n00bb_enum_value_bits(const n00bb_enum_range_t *range)
-{
-    if (range->is_open) return range->storage_bits;
-    uint64_t needed = range->magnitude_bits + range->is_signed;
-    return needed ? needed : 1;
-}
-
-bool
-n00bb_enum_value_signed(const n00bb_enum_range_t *range)
-{
-    return range->is_open ? range->storage_signed : range->is_signed;
-}
-
 bool
 n00bb_bind_enum_range(th_ctx *types, core_arena_t *arena,
                       parse_sym_entry_t *symbol, n00bb_enum_range_t range)

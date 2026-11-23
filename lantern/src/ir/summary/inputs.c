@@ -399,20 +399,6 @@ stored_deps_hold(ir_summaries_t *summaries, const ir_summary_t *summary,
 }
 
 static void
-put_u64(core_buffer_t *out, uint64_t value)
-{
-    put_u32(out, (uint32_t)value);
-    put_u32(out, (uint32_t)(value >> 32));
-}
-
-static uint64_t
-get_u64(summary_reader_t *r)
-{
-    uint64_t low = get_u32(r);
-    return low | (uint64_t)get_u32(r) << 32;
-}
-
-static void
 put_function(core_buffer_t *out, const ir_summary_texts_t *texts,
              const ir_func_t *function)
 {
@@ -472,10 +458,8 @@ ir_summary_encode_stored(ir_summaries_t *summaries,
             : (core_string_t){0});
         th_ctx *types = input->module
             ? ir_module_types((ir_module_t *)input->module) : nullptr;
-        put_text(out, texts, types && input->from
-            ? ir_types_text(types, input->from) : (core_string_t){0});
-        put_text(out, texts, types && input->to
-            ? ir_types_text(types, input->to) : (core_string_t){0});
+        put_type(out, texts, types, true, input->from);
+        put_type(out, texts, types, true, input->to);
         put_text(out, texts, input->effect);
         put_u64(out, input->answer);
     }
@@ -546,14 +530,8 @@ ir_summary_decode_stored(ir_summaries_t *summaries,
         }
         th_ctx *types = input.module
             ? ir_module_types((ir_module_t *)input.module) : nullptr;
-        core_string_t from = get_text(&r);
-        core_string_t to   = get_text(&r);
-        if (from.u8_bytes && !r.failed)
-            input.from = types ? ir_type_from_text(types, from) : nullptr;
-        if (to.u8_bytes && !r.failed)
-            input.to = types ? ir_type_from_text(types, to) : nullptr;
-        if ((from.u8_bytes && !input.from) || (to.u8_bytes && !input.to))
-            r.failed = true;
+        input.from = get_type(&r, types);
+        input.to   = get_type(&r, types);
         core_string_t effect = get_text(&r);
         input.effect = effect.u8_bytes && function && function->owner
             ? ir_strdup(function->owner->ctx, effect) : (core_string_t){0};

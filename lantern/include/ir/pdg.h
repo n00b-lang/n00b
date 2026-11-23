@@ -35,8 +35,6 @@ typedef struct {
 
 typedef struct ir_pdg_t ir_pdg_t;
 
-uint32_t             ir_pdg_node_count(const ir_pdg_t *g);
-ir_instr_t          *ir_pdg_node_at(const ir_pdg_t *g, uint32_t i);
 uint32_t             ir_pdg_edge_count(const ir_pdg_t *g);
 const ir_dep_edge_t *ir_pdg_edge_at(const ir_pdg_t *g, uint32_t i);
 
@@ -46,11 +44,6 @@ const ir_dep_edge_t *ir_pdg_out_at(const ir_pdg_t *g, ir_instr_t *in,
 uint32_t             ir_pdg_in_count(const ir_pdg_t *g, ir_instr_t *in);
 const ir_dep_edge_t *ir_pdg_in_at(const ir_pdg_t *g, ir_instr_t *in,
                                   uint32_t i);
-uint32_t             ir_pdg_param_out_count(const ir_pdg_t *g,
-                                            const ir_value_t *param);
-const ir_dep_edge_t *ir_pdg_param_out_at(const ir_pdg_t *g,
-                                         const ir_value_t *param,
-                                         uint32_t i);
 
 uint32_t    ir_controllers_of(const ir_pdg_t *g, ir_block_t *b);
 ir_block_t *ir_controller_at(const ir_pdg_t *g, ir_block_t *b, uint32_t i);
@@ -97,22 +90,10 @@ void            ir_group_pdg_free(ir_group_pdg_t *g);
 
 ir_pdg_t *ir_group_pdg_func(const ir_group_pdg_t *g, const ir_func_t *f);
 
-uint32_t             ir_group_pdg_edge_count(const ir_group_pdg_t *g);
-const ir_dep_edge_t *ir_group_pdg_edge_at(const ir_group_pdg_t *g,
-                                          uint32_t i);
 uint32_t             ir_group_pdg_out_count(const ir_group_pdg_t *g,
                                             const ir_instr_t *in);
 const ir_dep_edge_t *ir_group_pdg_out_at(const ir_group_pdg_t *g,
                                          const ir_instr_t *in, uint32_t i);
-uint32_t             ir_group_pdg_in_count(const ir_group_pdg_t *g,
-                                           const ir_instr_t *in);
-const ir_dep_edge_t *ir_group_pdg_in_at(const ir_group_pdg_t *g,
-                                        const ir_instr_t *in, uint32_t i);
-uint32_t             ir_group_pdg_param_in_count(const ir_group_pdg_t *g,
-                                                 const ir_value_t *param);
-const ir_dep_edge_t *ir_group_pdg_param_in_at(const ir_group_pdg_t *g,
-                                              const ir_value_t *param,
-                                              uint32_t i);
 
 uint32_t   ir_group_pdg_callee_count(const ir_group_pdg_t *g,
                                      const ir_func_t *f);
@@ -123,8 +104,6 @@ uint32_t   ir_group_pdg_component_count(const ir_group_pdg_t *g);
 uint32_t   ir_group_pdg_component_size(const ir_group_pdg_t *g, uint32_t c);
 ir_func_t *ir_group_pdg_component_at(const ir_group_pdg_t *g, uint32_t c,
                                      uint32_t i);
-bool       ir_group_pdg_component_recursive(const ir_group_pdg_t *g,
-                                            uint32_t c);
 uint32_t   ir_group_pdg_component_of(const ir_group_pdg_t *g,
                                      const ir_func_t *f);
 

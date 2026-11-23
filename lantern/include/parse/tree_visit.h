@@ -97,7 +97,6 @@ typedef struct {
 } parse_reduce_t;
 
 parse_reduce_list_t *parse_reduce_as_list(void *result);
-parse_reduce_list_t *parse_reduce_list_new(size_t n);
 
 typedef void *(*parse_reduce_fn)(parse_reduce_t *r);
 
@@ -112,11 +111,5 @@ void parse_walk_reduce_leaf_in(parse_tree_walk_t *w, int32_t unit,
 void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root);
 
 void parse_tree_walk_stop(parse_tree_walk_t *w);
-bool parse_tree_walk_stopped(parse_tree_walk_t *w);
 bool parse_tree_walk_failed(parse_tree_walk_t *w);
 parse_tree_t *parse_tree_walk_take_detached(parse_tree_walk_t *w);
-
-parse_tree_t *parse_tree_walk_rewrite(parse_tree_walk_t  *w,
-                                        parse_tree_t *root);
-
-uint32_t parse_tree_walk_replaced(const parse_tree_walk_t *w);

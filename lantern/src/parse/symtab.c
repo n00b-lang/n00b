@@ -280,22 +280,6 @@ parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name)
 }
 
 bool
-parse_symtab_visit_namespace_scopes(parse_symtab_t *st,
-                                    core_string_t ns_name,
-                                    parse_symtab_scope_visitor_fn visitor,
-                                    void *context)
-{
-    parse_namespace_t *ns = find_ns(st, ns_name);
-    if (!ns || !visitor) return false;
-
-    for (parse_scope_t *scope = st->all_scopes; scope;
-         scope = scope->all_next) {
-        if (scope->ns == ns && !visitor(scope, context)) return false;
-    }
-    return true;
-}
-
-bool
 parse_symtab_visit_name_across_namespaces(
     parse_symtab_t *st, parse_scope_t *scope, core_string_t name,
     parse_symtab_symbol_visitor_fn visitor, void *context)
@@ -312,17 +296,6 @@ parse_symtab_visit_name_across_namespaces(
         if (symbol && !visitor(symbol, context)) return false;
     }
     return true;
-}
-
-void
-parse_symtab_push_scope(parse_symtab_t *st, core_string_t ns_name,
-                      core_string_t scope_name)
-{
-    parse_namespace_t *ns = parse_symtab_ns(st, ns_name);
-
-    if (ns) {
-        push_scope_in(st, ns, scope_name);
-    }
 }
 
 void
@@ -380,12 +353,6 @@ parse_symtab_enter_scope(parse_symtab_t *st, core_string_t ns_name,
 
     ns->current = scope;
     ns->depth   = scope->depth;
-}
-
-void
-parse_symtab_leave_scope(parse_symtab_t *st, core_string_t ns_name)
-{
-    parse_symtab_pop_scope(st, ns_name);
 }
 
 parse_scope_t *
@@ -662,14 +629,6 @@ parse_sym_storage_duration_name(parse_sym_storage_duration_t duration)
 }
 
 parse_sym_entry_t *
-parse_symtab_lookup(parse_symtab_t *st, core_string_t ns_name, core_string_t name)
-{
-    parse_namespace_t *ns = find_ns(st, ns_name);
-
-    return ns ? lookup_chain(ns->current, name) : nullptr;
-}
-
-parse_sym_entry_t *
 parse_symtab_lookup_scoped(parse_symtab_t *st, parse_scope_t *scope,
                          core_string_t ns_name, core_string_t name)
 {
@@ -737,20 +696,6 @@ parse_symtab_resolve_node(parse_symtab_t *st, parse_tree_t *node,
 }
 
 void
-parse_symtab_set_scope_node(parse_symtab_t *st, core_string_t ns_name,
-                          parse_tree_t *node)
-{
-    parse_namespace_t *ns = parse_symtab_ns(st, ns_name);
-
-    if (!ns || !ns->current || !node) {
-        return;
-    }
-
-    ns->current->node = node;
-    core_dict_put(st->scope_by_node, node, ns->current);
-}
-
-void
 parse_symtab_set_scope_node_all(parse_symtab_t *st, parse_tree_t *node)
 {
     if (!st || !node) return;
@@ -778,22 +723,6 @@ parse_symtab_scope_for_node(parse_symtab_t *st, parse_tree_t *node)
     void *val   = core_dict_get(st->scope_by_node, node, &found);
 
     return found ? (parse_scope_t *)val : nullptr;
-}
-
-bool
-parse_symtab_is_typedef(parse_symtab_t *st, core_string_t name)
-{
-    parse_sym_entry_t *e = parse_symtab_lookup(st, core_string_empty(), name);
-
-    return e && e->kind == PARSE_SYM_TYPEDEF;
-}
-
-int32_t
-parse_symtab_depth(parse_symtab_t *st, core_string_t ns_name)
-{
-    parse_namespace_t *ns = find_ns(st, ns_name);
-
-    return ns ? ns->current->depth : -1;
 }
 
 parse_scope_t *

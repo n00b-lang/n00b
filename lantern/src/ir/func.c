@@ -111,21 +111,6 @@ ir_global_t *ir_global_identity(const ir_global_t *global)
     return global_identity_root((ir_global_t *)global);
 }
 
-ir_module_t *ir_global_owner(const ir_global_t *global)
-{
-    return global ? global->owner : nullptr;
-}
-
-bool ir_global_set_string_initializer(ir_module_t *m, ir_global_t *global,
-                                      core_string_t bytes)
-{
-    ir_global_init_value_t value = {
-        .kind = IR_GLOBAL_INIT_STRING,
-        .string = bytes,
-    };
-    return ir_global_set_static_initializer(m, global, &value);
-}
-
 ir_global_t *ir_global_find(ir_module_t *m, core_string_t name)
 {
     if (!m || !name.data) {
@@ -386,32 +371,6 @@ static bool global_init_value_matches(ir_module_t *module,
         return arm && global_init_value_matches(module, item, arm,
                                                  depth + 1);
     }
-    case IR_GLOBAL_INIT_SET: {
-        const th_type *element = th_builtin_item(types, type,
-                                                 TH_BUILTIN_SET, 0);
-        if (!element || (value->aggregate.count && !value->aggregate.items))
-            return false;
-        for (size_t i = 0; i < value->aggregate.count; i++)
-            if (value->aggregate.items[i].member.data
-                || !global_init_value_matches(module,
-                    &value->aggregate.items[i], element, depth + 1))
-                return false;
-        return true;
-    }
-    case IR_GLOBAL_INIT_DICTIONARY: {
-        const th_type *key = th_builtin_item(types, type, TH_BUILTIN_DICT, 0);
-        const th_type *element = key
-            ? th_builtin_item(types, type, TH_BUILTIN_DICT, 1) : nullptr;
-        size_t count = value->aggregate.count;
-        if (!key || !element || (count & 1u)
-            || (count && !value->aggregate.items)) return false;
-        for (size_t i = 0; i < count; i++)
-            if (value->aggregate.items[i].member.data
-                || !global_init_value_matches(module,
-                    &value->aggregate.items[i], i & 1u ? element : key,
-                    depth + 1)) return false;
-        return true;
-    }
     }
     return false;
 }
@@ -452,9 +411,7 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
-    case IR_GLOBAL_INIT_VARIANT:
-    case IR_GLOBAL_INIT_SET:
-    case IR_GLOBAL_INIT_DICTIONARY: {
+    case IR_GLOBAL_INIT_VARIANT: {
         size_t count = source->aggregate.count;
         if (count && !source->aggregate.items) return false;
         ir_global_init_value_t *items = count
@@ -525,17 +482,6 @@ bool ir_global_adopt_static_initializer(ir_module_t *module,
                                         const ir_global_init_value_t *value)
 {
     return attach_static_initializer(module, global, value);
-}
-
-bool ir_global_set_record_initializer(
-    ir_module_t *m, ir_global_t *global,
-    const ir_global_init_value_t *values, size_t count)
-{
-    ir_global_init_value_t value = {
-        .kind = IR_GLOBAL_INIT_RECORD,
-        .aggregate = {.items = values, .count = count},
-    };
-    return ir_global_set_static_initializer(m, global, &value);
 }
 
 size_t ir_global_count(const ir_module_t *m)
@@ -694,32 +640,6 @@ bool ir_param_is_optional(const ir_value_t *parameter)
             && annotation->b);
 }
 
-ir_value_t *ir_kwparam_add(ir_func_t *f, core_string_t name, th_type *type)
-{
-    if (!f || !name.data || !type || ir_value_find(f, name)) return nullptr;
-    const th_kwparam *declared = th_func_kw_lookup(f->type, name);
-    if (!declared || !ir_type_eq(f->owner, declared->type, type))
-        return nullptr;
-    ir_value_t *value = ir_param_add(f, name, type);
-    if (value) value->is_keyword = true;
-    return value;
-}
-
-ir_value_t *ir_restparam_add(ir_func_t *f, core_string_t name, th_type *type)
-{
-    const th_param *rest = f ? th_func_rest(f->type) : nullptr;
-    if (!rest || !name.data || !name.u8_bytes || !type
-        || ir_value_find(f, name) ||
-        !ir_type_eq(f->owner, rest->type, type))
-        return nullptr;
-    for (uint32_t i = 0; i < f->n_params; i++)
-        if (f->params[i]->is_rest)
-            return nullptr;
-    ir_value_t *value = ir_param_add(f, name, type);
-    if (value) value->is_rest = true;
-    return value;
-}
-
 ir_value_t *ir_value_find(ir_func_t *f, core_string_t name)
 {
     if (!f || !name.data) {
@@ -850,24 +770,6 @@ ir_block_t *ir_block_add(ir_func_t *f, core_string_t name)
     f->cap_blocks = (uint32_t)cap;
     f->blocks[f->n_blocks++] = b;
     ir_index_add(ctx, &f->block_index, b->name, b);
-
-    return b;
-}
-
-ir_block_t *ir_block_add_entry(ir_func_t *f, core_string_t name)
-{
-    ir_block_t *b = ir_block_add(f, name);
-
-    if (!b) {
-        return nullptr;
-    }
-
-    for (uint32_t i = f->n_blocks - 1; i > 0; i--) {
-        f->blocks[i]        = f->blocks[i - 1];
-        f->blocks[i]->index = i;
-    }
-    f->blocks[0] = b;
-    b->index     = 0;
 
     return b;
 }
@@ -1484,19 +1386,6 @@ bool ir_instr_operand_value(ir_instr_t *in, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v)
-{
-    ir_operand_t *o = in
-        && (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
-        && v && v->is_rest
-        ? push(in, IR_OPD_SPREAD) : nullptr;
-    if (o) {
-        o->value = v;
-        ir_instr_use_added(in, in->n_operands - 1);
-    }
-    return o != nullptr;
-}
-
 bool ir_instr_operand_named(ir_instr_t *in, core_string_t name,
                             ir_value_t *v)
 {
@@ -1509,14 +1398,6 @@ bool ir_instr_operand_named(ir_instr_t *in, core_string_t name,
     }
 
     return o != nullptr;
-}
-
-bool ir_instr_operand_named_out(ir_instr_t *in, core_string_t name)
-{
-    ir_operand_t *operand = name.data ? push(in, IR_OPD_NAMED_ARG) : nullptr;
-    if (!operand) return false;
-    operand->named.name = ir_strdup(in->block->owner->owner->ctx, name);
-    return operand->named.name.data != nullptr;
 }
 
 bool ir_instr_operand_missing(ir_instr_t *in)
@@ -1616,15 +1497,6 @@ ir_int_t ir_lit_signed(ir_lit_t v)
     return v.neg ? (ir_int_t)((ir_uint_t)0 - v.mag) : (ir_int_t)v.mag;
 }
 
-bool ir_lit_eq(ir_lit_t a, ir_lit_t b)
-{
-    if (!a.mag && !b.mag) {
-        return true;
-    }
-
-    return a.mag == b.mag && a.neg == b.neg;
-}
-
 bool ir_instr_operand_int_lit(ir_instr_t *in, ir_lit_t v)
 {
     ir_operand_t *o = push(in, IR_OPD_CONST);
@@ -1652,26 +1524,6 @@ bool ir_instr_operand_float(ir_instr_t *in, double v)
 
     if (o) {
         o->lit.f        = v;
-        o->lit.is_float = true;
-    }
-
-    return o != nullptr;
-}
-
-bool ir_instr_operand_float_text(ir_instr_t *in, core_string_t text)
-{
-    if (!text.data) {
-        return false;
-    }
-
-    ir_operand_t *o = push(in, IR_OPD_CONST);
-
-    if (o) {
-        double value = 0.0;
-
-        core_string_parse_f64(text, &value, nullptr);
-        o->lit.f        = value;
-        o->lit.text     = ir_strdup(in->block->owner->owner->ctx, text);
         o->lit.is_float = true;
     }
 

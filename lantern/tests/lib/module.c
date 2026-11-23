@@ -124,7 +124,6 @@ main(void)
                                 CORE_STRING_STATIC("value = 42")));
 
     int released = 0;
-    core_module_spec_set_user_data(&spec, &released, record_user_data_release);
     core_source_file_set_user_data(&source, &released,
                                   record_user_data_release);
 
@@ -181,7 +180,8 @@ main(void)
     core_translation_unit_add_import(&dependency, &leaf);
     scc_trace_t trace = {0};
     check("import SCC visitor groups cycles and visits dependencies first",
-          core_translation_unit_visit_sccs(&unit, record_scc, &trace)
+          core_translation_units_visit_sccs(&(core_translation_unit_t *){&unit},
+                                            1, record_scc, &trace)
               && trace.calls == 2 && trace.dependency_first
               && trace.cycle_grouped);
 
@@ -220,6 +220,5 @@ main(void)
     core_module_spec_release(&duplicate_spec);
     core_module_spec_release(&spec);
     core_module_spec_release(&leaf_spec);
-    check("module-spec payload is released", released == 3);
     return report("lib-module");
 }

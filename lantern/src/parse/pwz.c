@@ -2554,38 +2554,6 @@ parse_pwz_expected_at(const parse_pwz_parser_t *p, size_t index)
         ? &p->expected.data[index] : nullptr;
 }
 
-bool
-parse_pwz_parse_prefix(parse_pwz_parser_t   *p,
-                     parse_token_stream_t *ts,
-                     int32_t            *ntokens)
-{
-    parse_pwz_reset(p);
-
-    p->stream       = ts;
-    p->stream_first = 0;
-    p->stream_end   = INT32_MAX;
-
-    scan_stream_get(ts, 0);
-
-    init_parse(p);
-    run_parse(p);
-
-    if (!p->longest_top) {
-        return false;
-    }
-
-    p->result_tree = build_result_tree(p, p->longest_top);
-    if (!p->result_tree) {
-        return false;
-    }
-
-    if (ntokens) {
-        *ntokens = p->longest_end;
-    }
-
-    return true;
-}
-
 parse_tree_t *
 parse_pwz_get_tree(parse_pwz_parser_t *p)
 {
@@ -2691,14 +2659,6 @@ parse_pwz_get_forest(parse_pwz_parser_t *p)
     p->result_tree = nullptr;
     p->result_trees = (parse_tree_array_t){0};
     return forest;
-}
-
-parse_forest_t
-parse_pwz_parse_grammar(parse_grammar_t      *g,
-                        parse_nt_id_t         start,
-                        parse_token_stream_t *ts)
-{
-    return parse_pwz_parse_grammar_at(g, start, ts, nullptr);
 }
 
 parse_forest_t

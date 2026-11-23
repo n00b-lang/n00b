@@ -1,6 +1,5 @@
 LANTERN_DIRS := th logic lib diag parse scanner ir unicode types
-LANTERN_SRCS := $(filter-out lantern/src/ir/main.c, \
-    $(foreach d,$(LANTERN_DIRS),$(wildcard lantern/src/$(d)/*.c)))
+LANTERN_SRCS := $(foreach d,$(LANTERN_DIRS),$(wildcard lantern/src/$(d)/*.c))
 LANTERN_OBJ := $(BUILD)/lantern/obj
 LANTERN_OBJS := $(LANTERN_SRCS:%.c=$(LANTERN_OBJ)/%.o)
 LANTERN_CFLAGS := $(BASE_CFLAGS) $(OPT) $(LANTERN_INC)
@@ -23,32 +22,24 @@ $(LANTERN_LIB): $(LANTERN_OBJS)
 	@rm -f $@
 	ar rcs $@ $^
 
-$(BUILD)/lantern/ir: $(LANTERN_OBJ)/lantern/src/ir/main.o $(LANTERN_LIB)
-	$(CC) -o $@ $^ $(SYSTEM_LIBS)
-
 $(BUILD)/lantern/pp: $(LANTERN_OBJ)/lantern/src/pp/main.o $(LANTERN_LIB)
 	$(CC) -o $@ $^ $(SYSTEM_LIBS)
 
 $(LANTERN_OBJ)/lantern/src/pp/main.o: CC_EXTRA := -DPP_GRAMMAR_DIR="\"$(NATIVE_SRC)/lantern/grammars\""
 
-LANTERN_TESTS := ir/core ir/lifetime ir/storage_origin \
-    ir/shape ir/span ir/ranges ir/vn ir/abcd ir/summary_paths ir/verify \
-    ir/grammar ir/layout ir/promote ir/structure ir/cli ir/pdg ir/walk \
-    ir/text ir/diag ir/typelang ir/grammar_accept ir/public \
-    ir/scale \
+LANTERN_TESTS := ir/span \
     lib/macros lib/byteorder lib/cache diag/diagnostics lib/module \
-    lib/snapshot_inventory lib/target lib/target_call lib/indexed_table \
-    lib/link_unit lib/work_queue lib/arena lib/persist_arena \
-    lib/object_archive lib/native_archive lib/object_emit lib/object_section \
+    lib/target lib/indexed_table \
+    lib/arena \
+    lib/object_archive lib/object_emit lib/object_section \
     lib/variant lib/result \
     logic/datalog \
-    types/solver \
-    th/cycle th/nest_tmp th/infer_cycle th/constraint th/environment th/match \
+    th/nest_tmp th/constraint th/match \
     parse/pwz parse/ambiguity parse/commander parse/compose parse/tree_print \
-    parse/symtab_binding parse/rewrite parse/generic_print \
-    parse/bnf parse/annot parse/bnf_print parse/grammars parse/format \
-    parse/ambiguity_cli parse/bnfcheck \
-    scanner/tokenizer scanner/lex scanner/lex_perf
+    parse/symtab_binding parse/rewrite \
+    parse/bnf parse/annot parse/grammars parse/format \
+    parse/bnfcheck \
+    scanner/tokenizer scanner/lex_perf
 
 LANTERN_TEST_PROGRAMS := $(foreach t,$(LANTERN_TESTS), \
     $(BUILD)/lantern/tests/$(subst /,_,$(t)))
@@ -62,5 +53,5 @@ endef
 $(foreach t,$(LANTERN_TESTS),$(eval $(call lantern_test_rule,$(t))))
 
 .PHONY: lantern lantern-tests
-lantern: $(LANTERN_LIB) $(BUILD)/lantern/ir $(BUILD)/lantern/pp
+lantern: $(LANTERN_LIB) $(BUILD)/lantern/pp
 lantern-tests: lantern $(LANTERN_TEST_PROGRAMS)

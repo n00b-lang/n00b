@@ -14,7 +14,6 @@ typedef struct {
     uint32_t table;
     uint32_t kind;
     uint64_t typehash;
-    core_string_t type_name;
     core_string_t module;
     core_string_t function;
     th_type *function_type;
@@ -34,7 +33,7 @@ typedef struct {
                  size_t *source_offset, size_t *target,
                  size_t *target_offset);
     uint32_t (*flags)(void *context, size_t index);
-    core_string_t (*type_name)(void *context, size_t index);
+    th_type *(*type)(void *context, uint64_t typehash);
     bool (*slot)(void *context, size_t index, n00bb_abi_graph_slot_t *out);
 } n00bb_abi_graph_source_t;
 

@@ -13,7 +13,6 @@
 #include "ir/places.h"
 #include "ir/summary.h"
 #include "ir/text.h"
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
@@ -386,7 +385,6 @@ struct pt_t {
     bool                   value_flow;
     uint32_t               nodes;
     ir_pdg_t              *pdg;
-    const ir_points_to_hooks_t *hooks;
     ir_switness_t               unknown;
     uint64_t                    unknown_at;
     pt_entry_t                  entry;

@@ -14,19 +14,6 @@ typedef struct {
 } resolved_patch_t;
 
 void
-n00bb_abi_index_patch_encode(uint8_t out[N00BB_ABI_INDEX_PATCH_BYTES],
-                              const n00bb_abi_index_patch_t *patch)
-{
-    core_le_store_u32(out, patch->target_section_index);
-    core_le_store_u32(out + 4, patch->referenced_table_kind);
-    core_le_store_u64(out + 8, patch->target_byte_offset);
-    core_le_store_u32(out + 16, patch->local_index);
-    core_le_store_u32(out + 20, patch->patch_kind);
-    core_le_store_u32(out + 24, patch->reserved_zero);
-    core_le_store_u32(out + 28, patch->reserved_zero_2);
-}
-
-void
 n00bb_abi_index_patch_decode(const uint8_t in[N00BB_ABI_INDEX_PATCH_BYTES],
                               n00bb_abi_index_patch_t *patch)
 {

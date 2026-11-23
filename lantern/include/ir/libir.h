@@ -15,8 +15,6 @@
 #include "ir/region_walk.h"
 #include "ir/analyze.h"
 #include "ir/abcd.h"
-#include "ir/typelang.h"
-#include "ir/grammar.h"
 #include "ir/analyses.h"
 #include "ir/archive.h"
 #include "ir/interval.h"

@@ -19,19 +19,9 @@ typedef bool (*ir_live_point_fn)(void *context, const ir_instr_t *point);
 ir_live_t    *ir_live_build(ir_func_t *f);
 void          ir_live_free(ir_live_t *live);
 ir_live_t    *ir_func_liveness(ir_func_t *f);
-bool          ir_live_valid(const ir_live_t *live);
-uint32_t      ir_live_pred_count(const ir_live_t *live,
-                                 const ir_block_t *block);
-ir_block_t   *ir_live_pred_at(const ir_live_t *live, const ir_block_t *block,
-                              uint32_t i);
 
 ir_liveness_t ir_live_after(ir_live_t *live, const ir_value_t *value,
                             const ir_instr_t *point);
-void          ir_live_after_each(ir_live_t *live, const ir_value_t *value,
-                                 const ir_block_t *block,
-                                 ir_liveness_t *after);
-ir_liveness_t ir_live_on_edge(ir_live_t *live, const ir_value_t *value,
-                              const ir_block_t *from, const ir_block_t *to);
 bool          ir_live_set_after_each(ir_live_t *live,
                                      ir_value_t *const *values, size_t count,
                                      const ir_block_t *block, bool *after);

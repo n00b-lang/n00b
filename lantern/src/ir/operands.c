@@ -84,18 +84,6 @@ ir_call_argument_writes(const ir_call_arg_t *argument)
     return argument->role == IR_ARG_FRESH;
 }
 
-bool
-ir_call_arguments_positional(const ir_instr_t *call, uint32_t through)
-{
-    for (uint32_t param = 0; param <= through; param++) {
-        ir_call_arg_t argument = ir_call_argument(call, param);
-        if (argument.role != IR_ARG_VALUE
-            && !ir_call_argument_writes(&argument))
-            return false;
-    }
-    return true;
-}
-
 static bool
 mutable_storage(const ir_value_t *value)
 {

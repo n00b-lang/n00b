@@ -554,13 +554,6 @@ ir_pdg_memory_def_count(const ir_pdg_memory_t *m)
     return m ? (uint32_t)m->defs.len : 0;
 }
 
-uint32_t
-ir_pdg_memory_load_def(const ir_pdg_memory_t *m, uint32_t load_access)
-{
-    return m && load_access < ir_places_access_count(m->places)
-        ? m->use_def[load_access] : UINT32_MAX;
-}
-
 const ir_memdef_t *
 ir_pdg_memory_def(const ir_pdg_memory_t *m, uint32_t id)
 {
@@ -667,107 +660,6 @@ ir_pdg_memory_visit_clobbers(ir_pdg_memory_t *m, uint32_t load_access,
     core_dict_free(&seen);
     core_list_free(pending);
     return ok;
-}
-
-bool
-ir_pdg_memory_visit_element_defs(ir_pdg_memory_t *m, uint32_t load_access,
-                             ir_element_relation_fn relate,
-                             ir_memdef_visit_fn visit, void *context)
-{
-    const ir_access_t *load = m ? ir_places_access_at(m->places, load_access)
-                                : nullptr;
-    if (!load || load->kind != IR_ACCESS_LOAD || !relate
-        || m->use_def[load_access] == UINT32_MAX) return false;
-    core_list_t(uint32_t) pending = core_list_new(uint32_t);
-    core_dict_t seen;
-    core_dict_init(&seen, nullptr, nullptr);
-    core_list_push(pending, m->use_def[load_access]);
-    bool ok = true;
-    while (ok && pending.len) {
-        uint32_t index = pending.data[--pending.len];
-        if (!core_dict_add(&seen, (void *)(uintptr_t)(index + 1),
-                           (void *)(uintptr_t)(index + 1)))
-            continue;
-        const memdef_node_t *node = &m->defs.data[index];
-        switch (node->def.kind) {
-        case IR_MEMDEF_ENTRY:
-            ok = visit(context, &node->def);
-            break;
-        case IR_MEMDEF_PHI:
-            for (uint32_t i = 0; i < node->incoming_count; i++)
-                core_list_push(pending,
-                               m->incoming.data[node->first_incoming + i]);
-            break;
-        case IR_MEMDEF_CALL:
-            if (call_clobbers(m, node->def.instr, load))
-                ok = visit(context, &node->def);
-            core_list_push(pending, node->prev);
-            break;
-        case IR_MEMDEF_STORE: {
-            if (!places_overlap(m->places, node->def.access, load)) {
-                core_list_push(pending, node->prev);
-                break;
-            }
-            ir_element_relation_t relation = relate(context, node->def.instr,
-                                                    load->instr);
-            if (relation == IR_ELEMENT_DISJOINT) {
-                core_list_push(pending, node->prev);
-                break;
-            }
-            ok = visit(context, &node->def);
-            if (relation != IR_ELEMENT_SAME
-                && !covers(m, node->def.access, load))
-                core_list_push(pending, node->prev);
-            break;
-        }
-        case IR_MEMDEF_ELEMENT_PHI:
-            break;
-        }
-    }
-    core_dict_free(&seen);
-    core_list_free(pending);
-    return ok;
-}
-
-bool
-ir_pdg_memory_reads_entry(ir_pdg_memory_t *m, uint32_t load_access)
-{
-    const ir_access_t *load = m ? ir_places_access_at(m->places, load_access)
-                                : nullptr;
-    if (!load || load->kind != IR_ACCESS_LOAD
-        || m->use_def[load_access] == UINT32_MAX) return false;
-    bool *seen = core_alloc_array(bool, m->defs.len);
-    core_list_t(uint32_t) pending = core_list_new(uint32_t);
-    core_list_push(pending, m->use_def[load_access]);
-    bool entry = false;
-    while (!entry && pending.len) {
-        uint32_t index = pending.data[--pending.len];
-        if (seen[index]) continue;
-        seen[index] = true;
-        const memdef_node_t *node = &m->defs.data[index];
-        switch (node->def.kind) {
-        case IR_MEMDEF_ENTRY:
-            entry = true;
-            break;
-        case IR_MEMDEF_PHI:
-            for (uint32_t i = 0; i < node->incoming_count; i++)
-                core_list_push(pending,
-                               m->incoming.data[node->first_incoming + i]);
-            break;
-        case IR_MEMDEF_CALL:
-            core_list_push(pending, node->prev);
-            break;
-        case IR_MEMDEF_STORE:
-            if (!covers(m, node->def.access, load))
-                core_list_push(pending, node->prev);
-            break;
-        case IR_MEMDEF_ELEMENT_PHI:
-            break;
-        }
-    }
-    core_list_free(pending);
-    core_free(seen);
-    return entry;
 }
 
 static bool

@@ -105,25 +105,6 @@ reachable(const ir_live_t *live, const ir_block_t *block)
     return ir_block_reachable(live->doms, (ir_block_t *)block);
 }
 
-uint32_t
-ir_live_pred_count(const ir_live_t *live, const ir_block_t *block)
-{
-    return live && live->cfg_valid
-        ? ir_pred_count(live->doms, (ir_block_t *)block) : 0;
-}
-
-ir_block_t *
-ir_live_pred_at(const ir_live_t *live, const ir_block_t *block, uint32_t i)
-{
-    return ir_pred_at(live->doms, (ir_block_t *)block, i);
-}
-
-bool
-ir_live_valid(const ir_live_t *live)
-{
-    return live && live->cfg_valid;
-}
-
 void
 ir_live_free(ir_live_t *live)
 {
@@ -324,25 +305,6 @@ ir_live_after(ir_live_t *live, const ir_value_t *value,
                                               : IR_LIVENESS_DEAD;
 }
 
-void
-ir_live_after_each(ir_live_t *live, const ir_value_t *value,
-                   const ir_block_t *block, ir_liveness_t *after)
-{
-    uint32_t count = block->n_instrs;
-    bool known = live && live->cfg_valid && value_trackable(live, value)
-        && ir_block_belongs_to(live->f, block) && reachable(live, block)
-        && def_dominates(live, value, block);
-    bool current = known
-        && record_of(live, value, false)->live_out[block->index];
-    uint32_t defined = known && value->kind == IR_VAL_INSTR
-        && value->def->block == block ? value->def->index : 0;
-    for (uint32_t i = count; i-- > 0;) {
-        after[i] = !known || i < defined ? IR_LIVENESS_UNKNOWN
-            : current ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
-        current = current || uses(block->instrs[i], value, false);
-    }
-}
-
 static bool
 is_edge(const ir_block_t *from, const ir_block_t *to)
 {
@@ -350,27 +312,6 @@ is_edge(const ir_block_t *from, const ir_block_t *to)
     for (uint32_t s = 0; terminator && s < ir_succ_count(terminator); s++)
         if (ir_succ_at(terminator, s) == to) return true;
     return false;
-}
-
-ir_liveness_t
-ir_live_on_edge(ir_live_t *live, const ir_value_t *value,
-                const ir_block_t *from, const ir_block_t *to)
-{
-    if (!live || !live->cfg_valid || !value_trackable(live, value)
-        || !ir_block_belongs_to(live->f, from) || !ir_block_belongs_to(live->f, to)
-        || !is_edge(from, to) || !reachable(live, from))
-        return IR_LIVENESS_UNKNOWN;
-    if (value->kind == IR_VAL_INSTR) {
-        const ir_block_t *def_block = value->def->block;
-        if (def_block == from) {
-            if (value->def->index
-                >= ir_block_terminator((ir_block_t *)from)->index)
-                return IR_LIVENESS_UNKNOWN;
-        } else if (def_block == to || !def_dominates(live, value, from))
-            return IR_LIVENESS_UNKNOWN;
-    }
-    return record_of(live, value, false)->live_in[to->index]
-        ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
 }
 
 bool

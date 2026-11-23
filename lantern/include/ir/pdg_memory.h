@@ -32,7 +32,6 @@ void         ir_pdg_memory_free(ir_pdg_memory_t *memory);
 
 bool ir_pdg_memory_visit_clobbers(ir_pdg_memory_t *memory, uint32_t load_access,
                               ir_memdef_visit_fn visit, void *context);
-bool ir_pdg_memory_reads_entry(ir_pdg_memory_t *memory, uint32_t load_access);
 
 typedef enum : uint8_t {
     IR_ELEMENT_DISJOINT,
@@ -43,16 +42,10 @@ typedef enum : uint8_t {
 typedef ir_element_relation_t (*ir_element_relation_fn)(
     void *context, const ir_instr_t *store, const ir_instr_t *load);
 
-bool ir_pdg_memory_visit_element_defs(ir_pdg_memory_t *memory, uint32_t load_access,
-                                  ir_element_relation_fn relate,
-                                  ir_memdef_visit_fn visit, void *context);
-
 bool               ir_pdg_memory_defines(const ir_pdg_memory_t *memory,
                                          const ir_instr_t *in);
 uint32_t           ir_pdg_memory_def_before(const ir_pdg_memory_t *memory,
                                         const ir_instr_t *in);
-uint32_t           ir_pdg_memory_load_def(const ir_pdg_memory_t *memory,
-                                      uint32_t load_access);
 uint32_t           ir_pdg_memory_def_count(const ir_pdg_memory_t *memory);
 const ir_memdef_t *ir_pdg_memory_def(const ir_pdg_memory_t *memory, uint32_t id);
 uint32_t           ir_pdg_memory_def_prev(const ir_pdg_memory_t *memory, uint32_t id);

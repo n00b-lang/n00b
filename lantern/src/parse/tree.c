@@ -21,16 +21,6 @@ parse_node_token(parse_tree_t *t)
     return core_tree_leaf_value(t);
 }
 
-core_option_t(core_string_t)
-parse_node_name(parse_tree_t *t)
-{
-    if (!t || core_tree_is_leaf(t)) {
-        return core_option_none(core_string_t);
-    }
-
-    return core_option_set(core_string_t, core_tree_node_value(t).name);
-}
-
 core_list_decl(parse_tree_ptr_t);
 
 static void *
@@ -116,12 +106,6 @@ parse_tree_free(parse_tree_t *t)
     }
 
     core_list_free(stack);
-}
-
-parse_tree_t *
-parse_tree_new_node(parse_nt_node_t value)
-{
-    return core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, value);
 }
 
 parse_tree_t *

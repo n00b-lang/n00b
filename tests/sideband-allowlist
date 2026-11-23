@@ -418,7 +418,6 @@ key	ir.array-shape	existing
 key	ir.array.element_initialization	existing
 key	ir.binding_initialization	existing
 key	ir.binding_reentry_header	existing
-key	ir.bnf	existing
 key	ir.call_signature	existing
 key	ir.callable_contract	existing
 key	ir.callback.call	existing

@@ -17,20 +17,3 @@ unicode_is_id_continue(core_codepoint_t cp)
     return unicode_is_id_start(cp)
         || (cp >= '0' && cp <= '9');
 }
-
-static inline bool
-unicode_is_pattern_syntax(core_codepoint_t cp)
-{
-    return (cp >= '!' && cp <= '/')
-        || (cp >= ':' && cp <= '@')
-        || (cp >= '[' && cp <= '^')
-        || cp == '`'
-        || (cp >= '{' && cp <= '~');
-}
-
-static inline bool
-unicode_is_pattern_white_space(core_codepoint_t cp)
-{
-    return cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r'
-        || cp == '\f' || cp == '\v';
-}

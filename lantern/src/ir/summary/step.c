@@ -639,7 +639,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         break;
     }
     }
-    pt_define(pt, in, &out);
+    define_items(pt, in, &out);
     pt->scratch[0] = out;
     pt->scratch[1] = first;
     pt->scratch[2] = other;

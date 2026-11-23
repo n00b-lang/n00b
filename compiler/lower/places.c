@@ -631,15 +631,6 @@ n00bb_place_of(ir_lower_context_t *context, ir_value_t *value, bool writing,
         ? place : nullptr;
 }
 
-ir_value_t *
-n00bb_place_for_write(ir_lower_context_t *context, ir_value_t *value,
-                      ir_span_t span,
-                      core_list_t(n00bb_element_writeback_t) *writebacks)
-{
-    ir_value_t *place = place_in(context, value, span, writebacks);
-    return place && writable_hook(context, place, span) ? place : nullptr;
-}
-
 bool
 n00bb_emit_writebacks(ir_lower_context_t *context,
                       core_list_t(n00bb_element_writeback_t) *writebacks,

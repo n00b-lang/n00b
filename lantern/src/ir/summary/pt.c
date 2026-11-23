@@ -165,25 +165,6 @@ define_items(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
 }
 
 static void
-pt_define(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
-{
-    ir_pt_fresh_t fresh = pt->hooks && pt->hooks->fresh
-        ? pt->hooks->fresh(pt->hooks->context, in) : IR_PT_FRESH_NONE;
-    if (fresh == IR_PT_FRESH_NONE) {
-        define_items(pt, in, items);
-        return;
-    }
-    uint32_t site = allocation_site(pt, in);
-    for (size_t i = 0; fresh == IR_PT_FRESH_HOLDING && i < items->len; i++)
-        pt_add(pt, &pt->sites.data[site].contents, contents_key(site),
-               item_under(nullptr, 0, true, items->data[i]));
-    pt_set_t object = (pt_set_t){0};
-    set_add(pt, &object, item_at(site_loc(site)));
-    define_items(pt, in, &object);
-    core_list_free(object);
-}
-
-static void
 project(const pt_t *pt, const pt_set_t *from, core_string_t step,
         pt_set_t *into)
 {

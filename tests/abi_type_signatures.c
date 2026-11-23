@@ -3,7 +3,7 @@
 
 #include "abi_string.h"
 #include "abi_type_signatures.h"
-#include "ir/typelang.h"
+#include "ir/ir.h"
 #include "lib/alloc.h"
 
 int

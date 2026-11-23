@@ -3,7 +3,6 @@
 #include "ir/doms.h"
 #include "ir/pass.h"
 #include "lib/alloc.h"
-#include "ir/typelang.h"
 #include "ir/shape.h"
 #include "ir/layout.h"
 #include "ir/operands.h"

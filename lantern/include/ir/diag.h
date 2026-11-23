@@ -17,7 +17,6 @@ typedef enum : uint16_t {
 core_string_t        ir_diag_code(ir_diagcode_t c);
 core_string_t        ir_diag_default_text(ir_diagcode_t c);
 core_diag_severity_t ir_diag_default_severity(ir_diagcode_t c);
-bool                 ir_diag_code_lookup(core_string_t code, ir_diagcode_t *out);
 extern const core_diag_domain_t ir_diag_domain;
 
 typedef enum : uint16_t {
@@ -57,7 +56,6 @@ ir_outcome_t ir_policy_for(const ir_policy_t *p, core_string_t code);
 
 typedef struct ir_diags_t ir_diags_t;
 
-ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy);
 ir_diags_t *ir_diags_new_attached(
     ir_ctx_t *ctx, ir_policy_t *policy, core_diagnostics_t *destination,
     const core_translation_unit_t *unit);
@@ -88,26 +86,9 @@ bool       ir_diag_message(ir_diag_t *dg, ir_diags_t *d,
                            ir_message_t message);
 bool       ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
                              ir_message_t label);
-bool       ir_diag_help(ir_diags_t *d, ir_diag_t *dg, ir_message_t text);
 
-uint32_t                 ir_diags_count(const ir_diags_t *d);
-const ir_diag_t         *ir_diags_at(const ir_diags_t *d, uint32_t i);
-const core_diagnostic_t *ir_diag_item(const ir_diags_t *d,
-                                      const ir_diag_t *dg);
-bool                     ir_diags_failed(const ir_diags_t *d);
-uint32_t                 ir_import_type_errors(ir_module_t *m, ir_diags_t *d);
-
-typedef core_string_t (*ir_source_fn)(void *state, int32_t file);
-
-typedef struct {
-    ir_source_fn       source;
-    void              *state;
-    const ir_module_t *module;
-    core_string_t      path;
-    bool               color;
-} ir_render_t;
-
-core_string_t ir_diags_render_text(ir_diags_t *d, const ir_render_t *r);
-core_string_t ir_diags_render_json(ir_diags_t *d, const ir_render_t *r);
+uint32_t         ir_diags_count(const ir_diags_t *d);
+const ir_diag_t *ir_diags_at(const ir_diags_t *d, uint32_t i);
+bool             ir_diags_failed(const ir_diags_t *d);
 
 #endif

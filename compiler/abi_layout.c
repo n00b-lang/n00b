@@ -7,7 +7,6 @@
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/list.h"
-#include "ir/typelang.h"
 
 core_list_decl(ir_layout_bit_run_t);
 

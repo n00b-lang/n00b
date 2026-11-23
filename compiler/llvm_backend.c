@@ -10,7 +10,6 @@
 #include "ir/liveness.h"
 #include "ir/abcd.h"
 #include "ir/shape.h"
-#include "ir/typelang.h"
 #include "th/environment.h"
 #include "abi_layout.h"
 #include "abi_string.h"
@@ -12883,8 +12882,8 @@ prepare_frame_map(lower_state_t *state)
     }
     n00bb_frame_root_list_t roots;
     if (!n00bb_frame_root_list(state->function, &roots)) return false;
-    bool counted = n00bb_frame_root_list_visit(&roots, false,
-                                               count_frame_root, &selected);
+    bool counted = n00bb_frame_root_list_visit(&roots, count_frame_root,
+                                               &selected);
     size_t count = selected.count;
     bool slotted = counted && selected.possible && count
         && count <= UINT32_MAX - 2;
@@ -12893,8 +12892,7 @@ prepare_frame_map(lower_state_t *state)
             UINT32_MAX, pointer_key_hash, pointer_key_equal);
         state->frame_slots = calloc(count, sizeof(*state->frame_slots));
         slotted = state->frame_roots && state->frame_slots
-            && n00bb_frame_root_list_visit(&roots, false, frame_root_slot,
-                                           state)
+            && n00bb_frame_root_list_visit(&roots, frame_root_slot, state)
             && state->frame_slot_count == count;
     }
     n00bb_frame_root_list_release(&roots);
@@ -14212,31 +14210,6 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
     }
 
     backend->lowered = true;
-    return true;
-}
-
-bool
-n00bb_llvm_backend_write_bitcode(n00bb_llvm_backend_t *backend,
-                                  core_buffer_t *out,
-                                  core_diagnostics_t *diagnostics)
-{
-    if (!backend || !out)
-        return backend_error(diagnostics, "invalid LLVM bitcode probe arguments");
-    if (!lower_backend(backend, diagnostics)) return false;
-    LLVMModuleRef module = backend->module;
-    char *error = nullptr;
-    if (LLVMVerifyModule(module, LLVMReturnStatusAction, &error)) {
-        backend_llvm_report(diagnostics, error,
-            CORE_STRING_STATIC("LLVM module verification failed"));
-        if (error) LLVMDisposeMessage(error);
-        return false;
-    }
-    if (error) LLVMDisposeMessage(error);
-    LLVMMemoryBufferRef bitcode = LLVMWriteBitcodeToMemoryBuffer(module);
-    if (!bitcode)
-        return backend_error(diagnostics, "could not serialize LLVM bitcode");
-    core_buffer_append(out, LLVMGetBufferStart(bitcode), LLVMGetBufferSize(bitcode));
-    LLVMDisposeMemoryBuffer(bitcode);
     return true;
 }
 
@@ -15581,18 +15554,6 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     if (message) LLVMDisposeMessage(message);
     LLVMDisposeTargetMachine(machine);
     return ok;
-}
-
-bool
-n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
-                               const core_string_t *entry_initializers,
-                               size_t initializer_count,
-                               size_t metadata_bytes,
-                               core_buffer_t *out,
-                               core_diagnostics_t *diagnostics)
-{
-    return emit_image(backend, entry_initializers, initializer_count,
-        metadata_bytes, false, out, diagnostics);
 }
 
 bool

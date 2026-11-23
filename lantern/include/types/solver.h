@@ -111,7 +111,6 @@ th_ctx      *ty_solver_types(ty_solver_t *s);
 
 bool ty_declare_trait(ty_solver_t *s, core_string_t trait,
                       const core_string_t *methods, size_t n);
-bool ty_declare_method(ty_solver_t *s, th_type *type, core_string_t method);
 bool ty_declare_impl(ty_solver_t *s, th_type *type, core_string_t trait);
 bool ty_declare_trait_method(ty_solver_t *s, core_string_t trait,
                              core_string_t method, th_type *contract);
@@ -119,15 +118,10 @@ bool ty_declare_default(ty_solver_t *s, core_string_t trait, th_type *type);
 size_t   ty_open_count(ty_solver_t *s, core_string_t trait);
 th_type *ty_open_at(const ty_solver_t *s, size_t i);bool     ty_settle_open(ty_solver_t *s, core_string_t trait, th_type *var,
                         th_type *type);
-bool ty_declare_operator(ty_solver_t *s, core_string_t op, th_type *left,
-                         th_type *right, th_type *result);
-
-th_type *ty_fresh(ty_solver_t *s, ty_origin_t origin);
 bool     ty_equate(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why);
 bool     ty_unify(ty_solver_t *s, th_type *slot, th_type *value, ty_why_t why);
 th_type *ty_join(ty_solver_t *s, th_type *a, th_type *b, ty_why_t why);
 bool     ty_require(ty_solver_t *s, ty_pred_t pred, ty_why_t why);
-th_type *ty_refine(ty_solver_t *s, th_type *t, th_type *to, ty_why_t why);
 
 bool     ty_solve(ty_solver_t *s);
 th_type *ty_generalize(ty_solver_t *s, th_type *t);
@@ -141,11 +135,8 @@ const ir_instr_t *ty_conversion_at(const ty_solver_t *s, size_t i);
 void     ty_declare_rigid(ty_solver_t *s, th_type *t);
 bool     ty_declare_bound(ty_solver_t *s, th_type *var, ty_pred_t bound,
                           ty_why_t why);
-th_type *ty_resolve(ty_solver_t *s, th_type *t);
-void     ty_explain(ty_solver_t *s, th_type *t, core_buffer_t *out);
 
 size_t              ty_failure_count(const ty_solver_t *s);
 const ty_failure_t *ty_failure_at(const ty_solver_t *s, size_t i);
-size_t              ty_pending_count(const ty_solver_t *s);
 
 #endif

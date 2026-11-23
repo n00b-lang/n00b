@@ -100,16 +100,6 @@ parse_annot_free(parse_annotation_t *a)
     core_free(a);
 }
 
-core_string_t
-parse_annot_kind_name(parse_annot_kind_t kind)
-{
-    if (kind < 0 || kind >= PARSE_ANNOT_KIND_COUNT) {
-        return CORE_STRING_STATIC("?");
-    }
-
-    return kind_spellings[kind];
-}
-
 parse_annot_kind_t
 parse_annot_kind_from_name(core_string_t name)
 {
@@ -124,16 +114,6 @@ parse_annot_kind_from_name(core_string_t name)
     }
 
     return PARSE_ANNOT_NONE;
-}
-
-void
-parse_nt_annotate(parse_nonterm_t *nt, parse_annotation_t *a)
-{
-    if (!nt || !a) {
-        return;
-    }
-
-    core_list_push(nt->annotations, a);
 }
 
 void
