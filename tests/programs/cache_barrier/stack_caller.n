@@ -1,3 +1,5 @@
+import xform
+
 func decode() -> string {
     var bytes: Array[u8] = [104, 195, 169, 108, 108, 111, 32, 116, 104, 101, 114, 101, 32, 108, 111, 110, 103]
     var text: string = ""
@@ -5,4 +7,11 @@ func decode() -> string {
     return text
 }
 
+func counted(value: int) -> int {
+    __fd_write(2, "")
+    return value
+}
+
 assert decode() == "héllo there long"
+let counted_value: int = xform.apply(callback[xform.Transform](ref counted), 3)
+assert counted_value == 3

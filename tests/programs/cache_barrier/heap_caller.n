@@ -1,4 +1,12 @@
+import xform
+
+func plus_one(value: int) -> int {
+    return value + 1
+}
+
 var bytes: Array[u8] = [104, 195, 169, 108, 108, 111, 32, 116, 104, 101, 114, 101, 32, 108, 111, 110, 103]
 var texts: Array[string] = ["", ""]
 require __string_from_utf8(ref bytes, ref texts[1])
 assert texts[1] == "héllo there long"
+let plus_value: int = xform.apply(callback[xform.Transform](ref plus_one), 1)
+assert plus_value == 2

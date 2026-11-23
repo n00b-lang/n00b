@@ -1,0 +1,8 @@
+callback Transform {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func apply(t: Transform, value: int) -> int {
+    return t.call(value)
+}

@@ -62,10 +62,9 @@ intern_text(void *context, core_string_t text)
     bool      found = false;
     uintptr_t id    = (uintptr_t)core_dict_get(&interner->ids, &text, &found);
     if (found) return (uint32_t)id;
-    core_list_push(interner->texts, text);
+    core_string_t *key = core_dict_string_key_copy(text);
+    core_list_push(interner->texts, *key);
     id = interner->texts.len;
-    core_string_t *key = core_alloc(core_string_t);
-    *key = text;
     core_dict_put(&interner->ids, key, (void *)id);
     return (uint32_t)id;
 }
@@ -183,7 +182,8 @@ module_summaries(n00bb_link_analysis_t *analysis, ir_summaries_t *summaries,
     core_put_u32(out, (uint32_t)interner.texts.len);
     for (size_t t = 0; t < interner.texts.len; t++)
         core_put_text(out, interner.texts.data[t]);
-    core_dict_foreach(&interner.ids, entry) core_free(entry->key);
+    core_dict_foreach(&interner.ids, entry)
+        core_dict_string_key_free(entry->key);
     core_dict_free(&interner.ids);
     core_list_free(interner.texts);
     core_put_u32(out, count);
