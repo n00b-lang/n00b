@@ -1718,6 +1718,8 @@ n00bb_push_summary_roots(n00bb_link_analysis_t *analysis,
 void
 n00bb_unit_bodies(n00bb_link_analysis_t *analysis,
                   core_list_t(n00bb_ir_func_ptr_t) *out);
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis);
 
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global);

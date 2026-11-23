@@ -1,0 +1,13 @@
+private const letters: string = "abcdefghijklmnopqrstuvwxyz"
+
+record Word {
+    text: string
+    size: int
+}
+
+func word(name: string) -> Word? {
+    if name == "" {
+        return nil
+    }
+    return (text = letters, size = letters.len())
+}

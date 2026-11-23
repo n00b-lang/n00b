@@ -375,7 +375,7 @@ typedef struct n00bb_link_analysis_t {
     core_dict_t import_closures;
     bool visibility_ready;
     core_dict_t escaped_globals;
-    ir_summaries_t *escaped_owner;
+    bool escaped_ready;
     core_list_t(n00bb_specialization_t) specializations;
     core_list_t(n00bb_effect_check_t) effect_checks;
     core_list_t(n00bb_trait_bound_t) trait_bounds;

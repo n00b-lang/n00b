@@ -1,4 +1,5 @@
 import ids
+import letters
 import state
 import sys.threads
 
@@ -13,10 +14,33 @@ func comptime_main() {
     state.count = 77
 }
 
+func term(name: string, depth: int) -> letters.Word? {
+    if depth > 0 {
+        var nested: List[letters.Word] = []
+        spell(nested, name, depth - 1)
+        if nested.len() > 0 {
+            return nested[0]
+        }
+    }
+    return letters.word(name)
+}
+
+func spell(into: List[letters.Word], name: string, depth: int) {
+    let found: letters.Word? = term(name, depth)
+    if found != nil {
+        var word: letters.Word = found
+        word.size += 1
+        into.append(word)
+    }
+}
+
 func main() {
     require sys.threads.thread_start(
         callback[sys.threads.Thread_Entry](ref worker))
     shared += 1
     seen["count"] = state.count
+    var words: List[letters.Word] = []
+    spell(words, "alpha", 1)
+    seen["words"] = words.len()
     __fd_write(2, "ok")
 }

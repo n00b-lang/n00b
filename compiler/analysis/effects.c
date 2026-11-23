@@ -23,8 +23,6 @@ static bool
 merge_entry(ir_summary_t *into, ir_summaries_t *summaries,
             const ir_func_t *function, bool callback);
 static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis);
-static void
 dump_text(core_buffer_t *out);
 static void
 dump_param(const ir_func_t *function, uint32_t p);
@@ -793,14 +791,15 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
     return analysis->entry_summaries[slot];
 }
 
-static void
-collect_escaped_globals(n00bb_link_analysis_t *analysis)
+void
+n00bb_collect_escaped_globals(n00bb_link_analysis_t *analysis)
 {
-    if (analysis->escaped_owner == analysis->escapes) return;
-    if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
+    core_dict_free(&analysis->escaped_globals);
     core_dict_init(&analysis->escaped_globals, nullptr, nullptr);
-    analysis->escaped_owner = analysis->escapes;
-    core_list_t(n00bb_ir_func_ptr_t) program = n00bb_program_functions(analysis);
+    analysis->escaped_ready = false;
+    core_list_t(n00bb_ir_func_ptr_t) program =
+        core_list_new(n00bb_ir_func_ptr_t);
+    n00bb_unit_bodies(analysis, &program);
     for (size_t f = 0; f < program.len; f++) {
         ir_func_t *function = program.data[f];
         for (uint32_t b = 0; b < function->n_blocks; b++)
@@ -820,13 +819,14 @@ collect_escaped_globals(n00bb_link_analysis_t *analysis)
             }
     }
     core_list_free(program);
+    analysis->escaped_ready = true;
 }
 
 bool
 n00bb_summary_global_reachable(void *context, const ir_global_t *global)
 {
     n00bb_link_analysis_t *analysis = context;
-    if (!analysis->escapes) return true;
+    if (!analysis->escaped_ready) return true;
     if (!analysis->global_symbols_ready) {
         core_dict_init(&analysis->global_symbols, nullptr, nullptr);
         index_module_globals(analysis, &analysis->global_symbols);
@@ -842,7 +842,6 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
             || parse_sym_binding(symbol,
                    CORE_STRING_STATIC("n00bb.external-export"))))
         return true;
-    collect_escaped_globals(analysis);
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
 }
 

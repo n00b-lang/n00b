@@ -4080,7 +4080,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
         core_dict_free(&analysis->import_closures);
         core_dict_free(&analysis->visibility_units);
     }
-    if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
+    core_dict_free(&analysis->escaped_globals);
     if (analysis->bounded_targets_ready)
         core_dict_free(&analysis->bounded_targets);
     for (size_t e = 0; e < analysis->user_effects.len; e++) {

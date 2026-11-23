@@ -518,6 +518,13 @@ reinterpretation_sources(void *context, ir_summary_target_fn add, void *sink)
     core_list_free(bodies);
 }
 
+static void
+discard_target(void *sink, ir_func_t *target)
+{
+    (void)sink;
+    (void)target;
+}
+
 bool
 n00bb_summary_open(n00bb_link_analysis_t *analysis, const ir_module_t *module)
 {
@@ -566,6 +573,19 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
     analysis->bounded_targets_ready = true;
     collect_callback_handlers(analysis);
     analysis->entry_owner = nullptr;
+    core_list_t(n00bb_ir_func_ptr_t) bodies =
+        core_list_new(n00bb_ir_func_ptr_t);
+    n00bb_unit_bodies(analysis, &bodies);
+    for (size_t f = 0; f < bodies.len; f++)
+        for (uint32_t b = 0; b < bodies.data[f]->n_blocks; b++)
+            for (uint32_t i = 0; i < bodies.data[f]->blocks[b]->n_instrs;
+                 i++) {
+                ir_instr_t *in = bodies.data[f]->blocks[b]->instrs[i];
+                if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
+                    (void)n00bb_summary_call_targets(analysis, in,
+                                                     discard_target, nullptr);
+            }
+    core_list_free(bodies);
 }
 
 bool
