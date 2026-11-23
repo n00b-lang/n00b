@@ -117,27 +117,14 @@ parse_tree_find_flat_child_by_nt_name(parse_grammar_t *g,
 }
 
 parse_tree_t *
-parse_tree_resolve_child_ref(parse_grammar_t *g, parse_tree_t *parent,
-                           parse_child_ref_t ref)
+parse_tree_resolve_child_ref(parse_tree_t *parent, int32_t index)
 {
-    if (!parent) {
+    if (!parent || index < 0
+        || (size_t)index >= core_tree_num_children(parent)) {
         return nullptr;
     }
 
-    switch (ref.kind) {
-    case PARSE_ROLE_BY_INDEX:
-        if (ref.index < 0
-            || (size_t)ref.index >= core_tree_num_children(parent)) {
-            return nullptr;
-        }
-
-        return core_tree_child(parent, ref.index);
-
-    case PARSE_ROLE_BY_NAME:
-        return parse_tree_find_flat_child_by_nt_name(g, parent, ref.name);
-    }
-
-    return nullptr;
+    return core_tree_child(parent, index);
 }
 
 parse_nonterm_t *parse_tree_nonterm(parse_grammar_t *g, parse_tree_t *n)

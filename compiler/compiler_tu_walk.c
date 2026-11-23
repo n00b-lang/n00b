@@ -20,8 +20,7 @@ static const parse_annot_kind_t semantic_kinds[] = {
 static const parse_annot_kind_t semantic_reference_kinds[] = {
     PARSE_ANNOT_BRANCH, PARSE_ANNOT_LOOP, PARSE_ANNOT_SWITCH,
     PARSE_ANNOT_JUMP, PARSE_ANNOT_ASSIGNS,
-    PARSE_ANNOT_VARREF, PARSE_ANNOT_OPERATOR, PARSE_ANNOT_NOTRIVIA,
-    PARSE_ANNOT_CALL,
+    PARSE_ANNOT_VARREF, PARSE_ANNOT_OPERATOR, PARSE_ANNOT_CALL,
 };
 
 typedef struct {
@@ -97,11 +96,11 @@ record_definition_site(parse_grammar_t *grammar, parse_tree_t *node)
     parse_annotation_t *assign = rule
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS) : nullptr;
     if (!assign) return;
-    parse_tree_t *value = parse_tree_resolve_child_ref(grammar, node,
+    parse_tree_t *value = parse_tree_resolve_child_ref(node,
                                                        assign->value_ref);
     if (!value) return;
     parse_tree_t *target = assignment
-        ? parse_tree_resolve_child_ref(grammar, node, assign->name_ref)
+        ? parse_tree_resolve_child_ref(node, assign->name_ref)
         : nullptr;
     parse_tree_t *lvalue = n00bb_simple_lvalue(target);
     parse_sym_entry_t *holder = declaration
@@ -809,7 +808,7 @@ executable_scope_node(parse_grammar_t *grammar, parse_tree_t *node)
         : nullptr;
     for (size_t i = 0; scope
          && i < sizeof(executable) / sizeof(executable[0]); i++)
-        if (core_string_eq(scope->scope_tag, executable[i]))
+        if (core_string_eq(scope->tag, executable[i]))
             return true;
     return false;
 }

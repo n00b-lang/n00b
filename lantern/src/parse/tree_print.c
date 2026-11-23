@@ -11,7 +11,6 @@
 typedef enum {
     GAP_NONE = 0,
     GAP_SPACE,
-    GAP_SOFT,
     GAP_LINE,
     GAP_HARD,
     GAP_BLANK,
@@ -151,12 +150,9 @@ static gap_t gap_kind(parse_annot_kind_t k, bool *is_gap)
 
     switch (k) {
     case PARSE_ANNOT_NOSPACE:
-    case PARSE_ANNOT_CONCAT:
         return GAP_NONE;
     case PARSE_ANNOT_SPACE:
         return GAP_SPACE;
-    case PARSE_ANNOT_SOFTLINE:
-        return GAP_SOFT;
     case PARSE_ANNOT_NEWLINE:
         return GAP_LINE;
     case PARSE_ANNOT_HARDLINE:
@@ -168,41 +164,6 @@ static gap_t gap_kind(parse_annot_kind_t k, bool *is_gap)
 
         return GAP_NONE;
     }
-}
-
-static int32_t ref_index(pr_t *p, parse_tree_t *node, parse_child_ref_t ref)
-{
-    if (!parse_child_ref_is_set(ref)) {
-        return -1;
-    }
-
-    if (ref.kind == PARSE_ROLE_BY_INDEX) {
-        return ref.index;
-    }
-
-    parse_nonterm_t *want = parse_find_nonterm(p->g, ref.name);
-
-    if (!want) {
-        return -1;
-    }
-
-    size_t n = core_tree_num_children(node);
-
-    for (size_t i = 0; i < n; i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-
-        if (core_tree_is_leaf(child)) {
-            continue;
-        }
-
-        parse_nt_node_t *cpn = &core_tree_node_value(child);
-
-        if (!cpn->group_top && cpn->id == want->id) {
-            return (int32_t)i;
-        }
-    }
-
-    return -1;
 }
 
 static void layout_of(pr_t *p, parse_tree_t *node, parse_nonterm_t *nt,
@@ -226,7 +187,7 @@ static void layout_of(pr_t *p, parse_tree_t *node, parse_nonterm_t *nt,
             continue;
         }
 
-        int32_t ix    = ref_index(p, node, a->name_ref);
+        int32_t ix    = a->name_ref;
         bool    named = ix >= 0 && (size_t)ix < out->n;
         bool    all   = ix < 0;
         bool    is_gap = false;
@@ -407,7 +368,7 @@ static doc_t *assemble(pr_t *p, core_list_t(item_t) *items)
         item_t *it = &items->data[i];
 
         if (it->doc->empty) {
-            if (any && it->gap >= GAP_SOFT) {
+            if (any && it->gap >= GAP_LINE) {
                 pending = gap_max(pending, it->gap);
                 held    = true;
             }
@@ -426,7 +387,7 @@ static doc_t *assemble(pr_t *p, core_list_t(item_t) *items)
         held    = false;
     }
 
-    if (any && held && pending >= GAP_SOFT) {
+    if (any && held && pending >= GAP_LINE) {
         core_list_push(parts, doc_gap(p, pending));
     }
 
@@ -891,7 +852,6 @@ static core_string_t render(pr_t *p, doc_t *root)
             case GAP_SPACE:
                 spaces = 1;
                 break;
-            case GAP_SOFT:
             case GAP_LINE:
             case GAP_HARD:
                 nl     = nl > 1 ? nl : 1;

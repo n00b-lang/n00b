@@ -18,10 +18,8 @@
     X(NOSPACE, "nospace") \
     X(ADJACENT, "adjacent") \
     X(GROUP, "group") \
-    X(SOFTLINE, "softline") \
     X(HARDLINE, "hardline") \
     X(ALIGN, "align") \
-    X(CONCAT, "concat") \
     X(BLANKLINE, "blankline") \
     X(TYPE, "type") \
     X(TOKENIZER, "tokenizer") \
@@ -31,7 +29,6 @@
     X(OPERATOR, "operator") \
     X(CALL, "call") \
     X(VARREF, "varref") \
-    X(NOTRIVIA, "notrivia") \
     X(EXPOSES, "exposes") \
     X(DISAMBIG, "disambig") \
     X(NAMESPACE, "namespace") \
@@ -50,49 +47,15 @@ typedef enum {
     PARSE_ANNOT_KIND_COUNT,
 } parse_annot_kind_t;
 
-typedef enum {
-    PARSE_ROLE_BY_INDEX,
-    PARSE_ROLE_BY_NAME,
-} parse_role_kind_t;
-
-typedef struct {
-    parse_role_kind_t kind;
-    int32_t         index;
-    core_string_t    name;
-} parse_child_ref_t;
-
-core_list_decl(parse_child_ref_t);
-
-#define PARSE_CHILD_IX(i) \
-    ((parse_child_ref_t){.kind = PARSE_ROLE_BY_INDEX, .index = (i)})
-#define PARSE_CHILD_NT(n) \
-    ((parse_child_ref_t){.kind = PARSE_ROLE_BY_NAME, .index = -1, .name = (n)})
-#define PARSE_CHILD_NONE PARSE_CHILD_IX(-1)
-
-static inline bool
-parse_child_ref_is_set(parse_child_ref_t r)
-{
-    return r.kind == PARSE_ROLE_BY_INDEX ? r.index >= 0 : r.name.data != nullptr;
-}
-
 struct parse_annotation_t {
-    parse_annot_kind_t  kind;
-    core_string_t       source_origin;
+    parse_annot_kind_t kind;
+    core_string_t      source_origin;
     core_string_t      args_text;
-    parse_child_ref_t  name_ref;
-    parse_child_ref_t  type_ref;
-    parse_child_ref_t  value_ref;
-    parse_child_ref_t  notrivia_ref;
-    core_string_t     scope_tag;
-    core_string_t     visibility_spec;
-    core_string_t     op_kind;
-    core_string_t     sym_kind;
-    core_string_t     disambig_predicate;
-    int32_t          disambig_cost;
-
-    core_string_t     ns_name;
-    core_string_t     direction;
-    core_string_t     pass_by;
+    int32_t            name_ref;
+    int32_t            type_ref;
+    int32_t            value_ref;
+    core_string_t      tag;
+    int32_t            cost;
     core_list_t(core_string_t) tags;
 };
 
@@ -118,5 +81,4 @@ parse_annotation_t *parse_nt_find_direct_annot(
     const parse_nonterm_t *nt, parse_annot_kind_t kind);
 parse_annotation_t *parse_grammar_find_annot(parse_grammar_t   *g,
                                          parse_annot_kind_t kind);
-bool parse_grammar_declares_after_initializer(parse_grammar_t *g);
 

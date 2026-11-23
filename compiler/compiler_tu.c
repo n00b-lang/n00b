@@ -119,8 +119,8 @@ n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS)
             : nullptr;
         parse_tree_t *target = assign
-            ? parse_tree_resolve_child_ref(grammar, parent,
-                                           assign->name_ref) : nullptr;
+            ? parse_tree_resolve_child_ref(parent, assign->name_ref)
+            : nullptr;
         if (spine && target && node_is_within(node, target)) {
             if (compound) *compound = is_compound;
             return true;
@@ -144,7 +144,7 @@ n00bb_call_is_error_propagated(parse_grammar_t *grammar, parse_tree_t *node)
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_OPERATOR)
             : nullptr;
         if (op)
-            return core_string_eq(op->op_kind,
+            return core_string_eq(op->tag,
                                   CORE_STRING_STATIC("unwrap_result"));
         if (core_tree_num_children(parent) != 1) return false;
         current = parent;
@@ -205,7 +205,7 @@ reference_is_simple_assignment_target(parse_grammar_t *grammar,
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS)
             : nullptr;
         parse_tree_t *target = assign
-            ? parse_tree_resolve_child_ref(grammar, at, assign->name_ref)
+            ? parse_tree_resolve_child_ref(at, assign->name_ref)
             : nullptr;
         if (!target || !node_is_within(node, target)) continue;
         parse_tree_t *lvalue = n00bb_simple_lvalue(target);
@@ -7805,14 +7805,6 @@ record_function_parameter_fact(parse_grammar_t *grammar,
 parse_tree_t *
 call_arguments_node(parse_grammar_t *grammar, parse_tree_t *call)
 {
-    const parse_rule_t *rule = parse_tree_rule(grammar, call);
-    const parse_annotation_t *annotation = rule
-        ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL) : nullptr;
-    if (annotation && parse_child_ref_is_set(annotation->value_ref)) {
-        parse_tree_t *arguments = parse_tree_resolve_child_ref(
-            grammar, call, annotation->value_ref);
-        if (arguments) return arguments;
-    }
     return CHILD_NT(grammar, call, "call-args");
 }
 
@@ -8013,8 +8005,7 @@ module_variable_initializer_owner(parse_grammar_t *grammar,
                 ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS)
                 : nullptr;
             expression = assign
-                ? parse_tree_resolve_child_ref(grammar, at,
-                                               assign->value_ref)
+                ? parse_tree_resolve_child_ref(at, assign->value_ref)
                 : nullptr;
         }
         parse_tree_t *branch = node;

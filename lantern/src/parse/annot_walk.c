@@ -77,12 +77,16 @@ cached_or_leaf_name(parse_tree_t *node)
     return (core_string_t){0};
 }
 
-static core_string_t
-ref_name(parse_visit_t *v, parse_child_ref_t ref)
+static parse_tree_t *
+child(parse_visit_t *v, int32_t ref)
 {
-    parse_tree_t *node = parse_tree_resolve_child_ref(v->grammar, v->node,
-                                                       ref);
-    return cached_or_leaf_name(node);
+    return parse_tree_resolve_child_ref(v->node, ref);
+}
+
+static core_string_t
+ref_name(parse_visit_t *v, int32_t ref)
+{
+    return cached_or_leaf_name(child(v, ref));
 }
 
 static bool
@@ -90,17 +94,11 @@ scope_open(parse_visit_t *v)
 {
     actx_t           *a = (actx_t *)v->thunk;
     parse_annotation_t *an = v->annot;
-    core_string_t      scope_name = an->scope_tag;
+    core_string_t      scope_name = ref_name(v, an->name_ref);
 
     if (reentered_scope(a, v)) return true;
 
-    if (parse_child_ref_is_set(an->name_ref)) {
-        core_string_t resolved = ref_name(v, an->name_ref);
-
-        if (resolved.u8_bytes > 0) {
-            scope_name = resolved;
-        }
-    }
+    if (!scope_name.u8_bytes) scope_name = an->tag;
 
     parse_symtab_push_scope_all(a->out->symtab, scope_name);
 
@@ -110,11 +108,11 @@ scope_open(parse_visit_t *v)
     for (int32_t i = 0; i < a->out->symtab->ns_count; i++) {
         parse_scope_t *peer = parse_symtab_scope_in_namespace(
             a->out->symtab, scope, a->out->symtab->namespaces[i]->ns_name);
-        if (peer) peer->scope_tag = an->scope_tag;
+        if (peer) peer->scope_tag = an->tag;
     }
     parse_symtab_set_scope_node_all(a->out->symtab, v->node);
 
-    if (name_is(an->scope_tag, CORE_STRING_STATIC("function"))) {
+    if (name_is(an->tag, CORE_STRING_STATIC("function"))) {
         parse_sym_entry_t *result = parse_symtab_add(a->out->symtab,
             ns_default(), CORE_STRING_STATIC("$return"),
             PARSE_SYM_VARIABLE, v->node);
@@ -213,18 +211,47 @@ sym_kind_of(core_string_t spec)
     return PARSE_SYM_VARIABLE;
 }
 
-static parse_tree_t *child(parse_visit_t *v, parse_child_ref_t ref);
-
 static parse_tree_t *
 declaration_initializer(parse_visit_t *v, parse_annotation_t *declares)
 {
-    if (!parse_grammar_declares_after_initializer(v->grammar)) return nullptr;
+    parse_annotation_t *point = parse_grammar_find_annot(
+        v->grammar, PARSE_ANNOT_DECLARATION_POINT);
+    if (!point || !name_is(point->tag,
+                           CORE_STRING_STATIC("after_initializer")))
+        return nullptr;
     parse_annotation_t *assigns = parse_rule_find_annot(v->grammar, v->rule,
                                                         PARSE_ANNOT_ASSIGNS);
     if (!assigns
         || child(v, assigns->name_ref) != child(v, declares->name_ref))
         return nullptr;
     return child(v, assigns->value_ref);
+}
+
+static parse_sym_entry_t *
+declare_outside_body(actx_t *a, parse_visit_t *v, core_string_t nm,
+                     parse_sym_kind_t kind, parse_scope_t **decl_scope_out)
+{
+    core_string_t namespace_name = decl_ns(a);
+    parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, namespace_name);
+    parse_scope_t *decl_scope = ns ? ns->current : nullptr;
+    bool scope_is_decl_body = parse_tree_scope(v->node) && decl_scope
+                           && decl_scope->node == v->node
+                           && decl_scope->parent;
+
+    if (scope_is_decl_body) {
+        parse_symtab_enter_scope(a->out->symtab, namespace_name,
+                                 decl_scope->parent);
+    }
+
+    parse_sym_entry_t *sym = declare_symbol(a, namespace_name, nm, kind,
+                                            v->node);
+
+    if (scope_is_decl_body) {
+        parse_symtab_enter_scope(a->out->symtab, namespace_name, decl_scope);
+    }
+
+    if (decl_scope_out) *decl_scope_out = decl_scope;
+    return sym;
 }
 
 static bool
@@ -238,27 +265,8 @@ annot_declares(parse_visit_t *v)
         return true;
     }
 
-    parse_sym_kind_t   kind = sym_kind_of(an->sym_kind);
-    core_string_t namespace_name = decl_ns(a);
-    parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, namespace_name);
-    parse_scope_t *decl_scope = ns ? ns->current : nullptr;
-    bool scope_is_decl_body = parse_tree_scope(v->node) && decl_scope
-                           && decl_scope->node == v->node
-                           && decl_scope->parent;
-
-    if (scope_is_decl_body) {
-        parse_symtab_enter_scope(a->out->symtab,
-                                 decl_scope->ns->ns_name,
-                                 decl_scope->parent);
-    }
-
-    parse_sym_entry_t *sym  = declare_symbol(a, namespace_name, nm, kind,
-                                             v->node);
-
-    if (scope_is_decl_body) {
-        parse_symtab_enter_scope(a->out->symtab,
-                                 decl_scope->ns->ns_name, decl_scope);
-    }
+    parse_sym_kind_t   kind = sym_kind_of(an->tag);
+    parse_sym_entry_t *sym = declare_outside_body(a, v, nm, kind, nullptr);
 
     sym->mutability = kind == PARSE_SYM_PARAM ? PARSE_SYM_IMMUTABLE
                                             : PARSE_SYM_MUTABLE;
@@ -298,24 +306,9 @@ annot_type(parse_visit_t *v)
         return true;
     }
 
-    core_string_t namespace_name = decl_ns(a);
-    parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, namespace_name);
-    parse_scope_t *decl_scope = ns ? ns->current : nullptr;
-    bool scope_is_decl_body = parse_tree_scope(v->node) && decl_scope
-                           && decl_scope->node == v->node
-                           && decl_scope->parent;
-
-    if (scope_is_decl_body) {
-        parse_symtab_enter_scope(a->out->symtab, namespace_name,
-                                 decl_scope->parent);
-    }
-
-    parse_sym_entry_t *sym = declare_symbol(a, namespace_name, nm,
-                                            PARSE_SYM_TYPEDEF, v->node);
-
-    if (scope_is_decl_body) {
-        parse_symtab_enter_scope(a->out->symtab, namespace_name, decl_scope);
-    }
+    parse_scope_t     *decl_scope = nullptr;
+    parse_sym_entry_t *sym = declare_outside_body(a, v, nm, PARSE_SYM_TYPEDEF,
+                                                  &decl_scope);
 
     parse_scope_t *members = decl_scope && decl_scope->lexical_scope
         ? decl_scope->lexical_scope : decl_scope;
@@ -366,8 +359,8 @@ annot_namespace(parse_visit_t *v)
 {
     actx_t *a = (actx_t *)v->thunk;
 
-    if (v->annot->ns_name.data) {
-        a->pending_ns = v->annot->ns_name;
+    if (v->annot->tag.data) {
+        a->pending_ns = v->annot->tag;
     }
 
     return true;
@@ -379,7 +372,7 @@ annot_direction(parse_visit_t *v)
     actx_t          *a   = (actx_t *)v->thunk;
     parse_sym_entry_t *sym = subject(a, v);
 
-    if (!sym || !v->annot->direction.data) {
+    if (!sym || !v->annot->tag.data) {
         return true;
     }
 
@@ -396,10 +389,10 @@ annot_direction(parse_visit_t *v)
     };
 
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
-        if (core_string_eq(modes[i].spelling, v->annot->direction)) {
+        if (core_string_eq(modes[i].spelling, v->annot->tag)) {
             sym->mode     = modes[i].mode;
             sym->has_mode = true;
-            sym->direction = v->annot->direction;
+            sym->direction = v->annot->tag;
             break;
         }
     }
@@ -412,7 +405,7 @@ annot_pass_by(parse_visit_t *v)
 {
     actx_t *a = v->thunk;
     parse_sym_entry_t *sym = subject(a, v);
-    core_string_t mode = v->annot->pass_by;
+    core_string_t mode = v->annot->tag;
     static const core_string_t allowed[] = {
         CORE_STRING_STATIC("in"),  CORE_STRING_STATIC("out"),
         CORE_STRING_STATIC("inout"), CORE_STRING_STATIC("ref"),
@@ -449,7 +442,7 @@ annot_visibility(parse_visit_t *v)
     actx_t          *a   = (actx_t *)v->thunk;
     parse_sym_entry_t *sym = parse_tree_sym(v->node);
 
-    if (v->annot->visibility_spec.u8_bytes > 0) {
+    if (v->annot->tag.u8_bytes > 0) {
         parse_sym_entry_t *parent_declaration = parse_tree_sym(v->parent);
         parse_namespace_t *ns = parse_symtab_ns(a->out->symtab, ns_default());
         parse_scope_t *scope = ns ? ns->current : nullptr;
@@ -482,10 +475,10 @@ annot_visibility(parse_visit_t *v)
             parent_declaration->kind != PARSE_SYM_PARAM)
             sym = parent_declaration;
         if (sym && sym->kind != PARSE_SYM_PARAM) {
-            sym->visibility = v->annot->visibility_spec;
+            sym->visibility = v->annot->tag;
         }
         else {
-            a->pending_visibility = v->annot->visibility_spec;
+            a->pending_visibility = v->annot->tag;
         }
     }
 
@@ -515,16 +508,14 @@ cf_label(parse_visit_t *v, parse_cf_kind_t kind)
     return label;
 }
 
-static parse_tree_t *
-child(parse_visit_t *v, parse_child_ref_t ref)
-{
-    return parse_tree_resolve_child_ref(v->grammar, v->node, ref);
-}
-
 static bool
-cf_branch(parse_visit_t *v)
+cf_structured(parse_visit_t *v)
 {
-    parse_cf_label_t *l = cf_label(v, PARSE_CF_BRANCH);
+    parse_annot_kind_t k = v->annot->kind;
+    parse_cf_label_t  *l = cf_label(v, k == PARSE_ANNOT_BRANCH ? PARSE_CF_BRANCH
+                                     : k == PARSE_ANNOT_LOOP   ? PARSE_CF_LOOP
+                                     : k == PARSE_ANNOT_SWITCH ? PARSE_CF_SWITCH
+                                                               : PARSE_CF_CALL);
 
     l->cond      = child(v, v->annot->name_ref);
     l->then_body = child(v, v->annot->type_ref);
@@ -534,40 +525,11 @@ cf_branch(parse_visit_t *v)
 }
 
 static bool
-cf_two_part(parse_visit_t *v, parse_cf_kind_t kind)
-{
-    parse_cf_label_t *l = cf_label(v, kind);
-
-    l->cond      = child(v, v->annot->name_ref);
-    l->then_body = child(v, v->annot->type_ref);
-
-    return true;
-}
-
-static bool
-cf_loop(parse_visit_t *v)
-{
-    return cf_two_part(v, PARSE_CF_LOOP);
-}
-
-static bool
-cf_switch(parse_visit_t *v)
-{
-    return cf_two_part(v, PARSE_CF_SWITCH);
-}
-
-static bool
-cf_call(parse_visit_t *v)
-{
-    return cf_two_part(v, PARSE_CF_CALL);
-}
-
-static bool
 cf_jump(parse_visit_t *v)
 {
     parse_cf_label_t *l = cf_label(v, PARSE_CF_JUMP);
 
-    l->jump_kind = v->annot->scope_tag;
+    l->jump_kind = v->annot->tag;
 
     return true;
 }
@@ -623,25 +585,8 @@ cf_varref(parse_visit_t *v)
 static bool
 cf_operator(parse_visit_t *v)
 {
-    if (name_is(v->annot->op_kind, CORE_STRING_STATIC("unwrap_result"))) {
+    if (name_is(v->annot->tag, CORE_STRING_STATIC("unwrap_result"))) {
         cf_label(v, PARSE_CF_UNWRAP_RESULT);
-    }
-
-    return true;
-}
-
-static bool
-cf_notrivia(parse_visit_t *v)
-{
-    parse_tree_t *target = child(v, v->annot->notrivia_ref);
-    parse_token_info_t *tok    = target ? parse_tree_find_first_terminal(target)
-                                      : nullptr;
-
-    if (tok) {
-        parse_trivia_free(parse_token_leading_trivia(tok));
-        parse_trivia_free(parse_token_trailing_trivia(tok));
-        parse_token_set_leading_trivia(tok, nullptr);
-        parse_token_set_trailing_trivia(tok, nullptr);
     }
 
     return true;
@@ -734,28 +679,51 @@ annot_context(parse_annot_result_t *out)
     return a;
 }
 
+typedef struct {
+    parse_annot_kind_t kind;
+    int32_t            phase;
+    parse_visit_fn     pre;
+    parse_visit_fn     post;
+} handler_t;
+
+static const handler_t BINDING[] = {
+    {PARSE_ANNOT_SCOPE_OPEN, PHASE_SCOPE,  scope_open,       scope_close},
+    {PARSE_ANNOT_NAMESPACE,  PHASE_SCOPE,  annot_namespace,  nullptr},
+    {PARSE_ANNOT_DECLARES,   PHASE_DECL,   annot_declares,   nullptr},
+    {PARSE_ANNOT_TYPE,       PHASE_DECL,   annot_type,       nullptr},
+    {PARSE_ANNOT_FIELD,      PHASE_DECL,   annot_field,      nullptr},
+    {PARSE_ANNOT_EXPOSES,    PHASE_REFINE, annot_exposes,    nullptr},
+    {PARSE_ANNOT_VISIBILITY, PHASE_REFINE, annot_visibility, nullptr},
+    {PARSE_ANNOT_DIRECTION,  PHASE_REFINE, annot_direction,  nullptr},
+    {PARSE_ANNOT_PASS_BY,    PHASE_REFINE, annot_pass_by,    nullptr},
+};
+
+static const handler_t FLOW[] = {
+    {PARSE_ANNOT_BRANCH,   PHASE_CF, cf_structured, nullptr},
+    {PARSE_ANNOT_LOOP,     PHASE_CF, cf_structured, nullptr},
+    {PARSE_ANNOT_SWITCH,   PHASE_CF, cf_structured, nullptr},
+    {PARSE_ANNOT_CALL,     PHASE_CF, cf_structured, nullptr},
+    {PARSE_ANNOT_JUMP,     PHASE_CF, cf_jump,       nullptr},
+    {PARSE_ANNOT_ASSIGNS,  PHASE_CF, cf_assigns,    nullptr},
+    {PARSE_ANNOT_VARREF,   PHASE_CF, cf_varref,     nullptr},
+    {PARSE_ANNOT_OPERATOR, PHASE_CF, cf_operator,   nullptr},
+};
+
+static void
+register_handlers(parse_tree_walk_t *w, actx_t *a, const handler_t *h,
+                  size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        parse_walk_on_annot_phase(w, h[i].kind, h[i].phase, h[i].pre,
+                                  h[i].post, a);
+    }
+}
+
 static void
 register_binding(parse_tree_walk_t *w, actx_t *a)
 {
     parse_walk_on_node(w, node_enter, node_leave, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_SCOPE_OPEN, PHASE_SCOPE,
-                              scope_open, scope_close, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_NAMESPACE, PHASE_SCOPE,
-                              annot_namespace, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_DECLARES, PHASE_DECL,
-                              annot_declares, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_TYPE, PHASE_DECL, annot_type,
-                              nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_FIELD, PHASE_DECL, annot_field,
-                              nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_EXPOSES, PHASE_REFINE,
-                              annot_exposes, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_VISIBILITY, PHASE_REFINE,
-                              annot_visibility, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_DIRECTION, PHASE_REFINE,
-                              annot_direction, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_PASS_BY, PHASE_REFINE,
-                              annot_pass_by, nullptr, a);
+    register_handlers(w, a, BINDING, sizeof(BINDING) / sizeof(BINDING[0]));
 }
 
 void
@@ -783,24 +751,7 @@ parse_annot_register(parse_tree_walk_t *w, parse_annot_result_t *out)
     a->reentry = a->declared_ahead;
 
     register_binding(w, a);
-
-    {
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_BRANCH, PHASE_CF, cf_branch, nullptr,
-                            a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_LOOP, PHASE_CF, cf_loop, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_SWITCH, PHASE_CF, cf_switch, nullptr,
-                            a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_CALL, PHASE_CF, cf_call, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_JUMP, PHASE_CF, cf_jump, nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_ASSIGNS, PHASE_CF, cf_assigns,
-                            nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_VARREF, PHASE_CF, cf_varref, nullptr,
-                            a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_OPERATOR, PHASE_CF, cf_operator,
-                            nullptr, a);
-    parse_walk_on_annot_phase(w, PARSE_ANNOT_NOTRIVIA, PHASE_CF, cf_notrivia,
-                            nullptr, a);
-    }
+    register_handlers(w, a, FLOW, sizeof(FLOW) / sizeof(FLOW[0]));
 }
 
 void

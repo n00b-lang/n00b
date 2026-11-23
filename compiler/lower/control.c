@@ -1216,8 +1216,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
         return true;
     }
 
-    if (core_string_eq(visit->annot->scope_tag,
-                       CORE_STRING_STATIC("block"))) {
+    if (core_string_eq(visit->annot->tag, CORE_STRING_STATIC("block"))) {
         if (entering || !lower->tries.len) return true;
         n00bb_try_frame_t *frame = &lower->tries.data[lower->tries.len - 1];
         if (frame->body != visit->node) return true;
@@ -1264,8 +1263,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
         return true;
     }
 
-    if (core_string_eq(visit->annot->scope_tag,
-                       CORE_STRING_STATIC("try-error"))
+    if (core_string_eq(visit->annot->tag, CORE_STRING_STATIC("try-error"))
         && (core_string_eq(name, CORE_STRING_STATIC("try-error-clause"))
             || core_string_eq(name,
                               CORE_STRING_STATIC("try-value-error-clause")))) {
@@ -1316,7 +1314,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
     bool logical_rhs = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("and-rhs"))
         || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("or-rhs"));
     if (!lower || (!logical_rhs
-        && (!visit->annot || !core_string_eq(visit->annot->scope_tag,
+        && (!visit->annot || !core_string_eq(visit->annot->tag,
                                              CORE_STRING_STATIC("block")))))
         return true;
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("block-value-expr"))) {
@@ -2034,7 +2032,7 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     n00bb_lower_context_t *lower = context->user;
     if (!lower || !visit->annot
-        || !core_string_eq(visit->annot->scope_tag,
+        || !core_string_eq(visit->annot->tag,
                            CORE_STRING_STATIC("block"))) return true;
     for (size_t i = lower->typecases.len; i > 0; i--) {
         n00bb_typecase_frame_t *frame = &lower->typecases.data[i - 1];

@@ -2,7 +2,6 @@
 #include "parse/bnf.h"
 #include "lib/list.h"
 #include "lib/os.h"
-#include "parse/annot_args.h"
 #include "parse/annotation.h"
 #include "parse/pwz.h"
 #include "private/parse/annot_grammar.h"
@@ -1602,8 +1601,8 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
           if (a_r && a_r->tag == BNF_ANNOT && a_r->data) {
             parse_annotation_t *an = a_r->data;
 
-            if (an->kind == PARSE_ANNOT_TOKENIZER && an->scope_tag.data) {
-              scan_grammar_set_tokenizer(user_g, an->scope_tag);
+            if (an->kind == PARSE_ANNOT_TOKENIZER && an->tag.data) {
+              scan_grammar_set_tokenizer(user_g, an->tag);
             }
 
             parse_grammar_annotate(user_g, an);
@@ -1645,9 +1644,9 @@ static bool populate_grammar(parse_grammar_t *user_g, bnf_result_t *result,
         if (a_r && a_r->tag == BNF_ANNOT) {
           parse_annotation_t *info = (parse_annotation_t *)a_r->data;
 
-          if (info->disambig_predicate.data) {
-            disambig_predicate = info->disambig_predicate;
-            disambig_cost = info->disambig_cost;
+          if (info->kind == PARSE_ANNOT_DISAMBIG) {
+            disambig_predicate = info->tag;
+            disambig_cost = info->cost;
           }
 
           slist_push(line_annots, info);
@@ -2089,7 +2088,7 @@ bool parse_bnf_load_with_origin(core_string_t text, core_string_t origin,
     return true;
   }
 
-  core_string_t lexer_path = relative_to(origin, lexer->scope_tag);
+  core_string_t lexer_path = relative_to(origin, lexer->tag);
   core_list_t(scan_lex_decl_t) decls = core_list_new(scan_lex_decl_t);
   core_list_t(core_string_t) stack = core_list_new(core_string_t);
 

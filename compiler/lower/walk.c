@@ -872,14 +872,14 @@ lower_tree_track_assignment(ir_lower_tree_state_t *state,
     if (entering) {
         if (!lower_tree_declares(visit)) {
             parse_tree_t *read = parse_tree_resolve_child_ref(
-                visit->grammar, visit->node, annotation->name_ref);
+                visit->node, annotation->name_ref);
             if (read) core_dict_put(&state->snapshots, read, visit->node);
             return true;
         }
         if (core_dict_contains(&state->custom_assignments, visit->node))
             return true;
         parse_tree_t *target = parse_tree_resolve_child_ref(
-            visit->grammar, visit->node, annotation->name_ref);
+            visit->node, annotation->name_ref);
         if (!target) return true;
         ir_lower_skip_frame_t *frame = core_alloc(ir_lower_skip_frame_t);
         *frame = (ir_lower_skip_frame_t){
@@ -900,7 +900,7 @@ lower_tree_track_assignment(ir_lower_tree_state_t *state,
     }
     core_dict_remove(&state->custom_assignments, visit->node);
     parse_tree_t *target = parse_tree_resolve_child_ref(
-        visit->grammar, visit->node, annotation->name_ref);
+        visit->node, annotation->name_ref);
     if (target) core_dict_remove(&state->snapshots, target);
     return true;
 }
@@ -983,8 +983,7 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
         || !state->context->diagnostics)
         return true;
     parse_tree_t *expression = parse_tree_core(
-        parse_tree_resolve_child_ref(visit->grammar, visit->node,
-                                     visit->annot->value_ref));
+        parse_tree_resolve_child_ref(visit->node, visit->annot->name_ref));
     while (parse_tree_unwrapped(expression))
         expression = parse_tree_core(parse_tree_unwrapped(expression));
     bool found = false;
@@ -1211,11 +1210,8 @@ static ir_lower_result_t
 lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
                       parse_annotation_t *annotation, ir_span_t span)
 {
-    parse_tree_t *target = parse_tree_resolve_child_ref(
-        visit->grammar, visit->node, annotation->name_ref);
     parse_tree_t *source = parse_tree_resolve_child_ref(
-        visit->grammar, visit->node, annotation->value_ref);
-    (void)target;
+        visit->node, annotation->value_ref);
     parse_sym_entry_t *symbol = parse_tree_sym(visit->node);
     bool initializes = core_string_eq(
         parse_tree_nt_name(visit->grammar, visit->node),

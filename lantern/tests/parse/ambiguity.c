@@ -145,7 +145,7 @@ test_intentional_filter(void)
     parse_add_rule(g, s, PARSE_CHAR('a'), PARSE_CHAR('b'));
     r = parse_get_rule(g, rule_ix);
     parse_annotation_t *annotation = parse_annot_new(PARSE_ANNOT_DISAMBIG);
-    annotation->disambig_predicate = core_string_dup(S("intentional"));
+    annotation->tag = core_string_dup(S("intentional"));
     parse_rule_annotate(r, annotation);
 
     parse_ambiguity_options_t hidden = {0};
