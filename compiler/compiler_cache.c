@@ -305,6 +305,8 @@ interface_bytes(n00bb_link_analysis_t *analysis,
     return ok;
 }
 
+static core_buffer_t native_roots;
+
 static void
 append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
 {
@@ -331,17 +333,12 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         core_string_t value = n00bb_setting_at(defines, i);
         core_put_bytes(out, value.data, value.u8_bytes);
     }
-    static const core_string_t valued[] = {
-        CORE_STRING_STATIC("--native-root"),
-    };
-    for (size_t f = 0; f < sizeof(valued) / sizeof(*valued); f++) {
-        core_string_t flag = valued[f];
-        int32_t count = parse_cmdr_flag_value_count(args, flag);
-        core_put_u32(out, (uint32_t)(count > 0 ? count : 0));
-        for (int32_t i = 0; i < count; i++) {
-            core_string_t value = parse_cmdr_flag_str_at(args, flag, i);
-            core_put_bytes(out, value.data, value.u8_bytes);
-        }
+    core_string_t flag = CORE_STRING_STATIC("--native-root");
+    native_roots.byte_len = 0;
+    for (int32_t i = 0; i < parse_cmdr_flag_value_count(args, flag); i++) {
+        core_buffer_append_string(&native_roots,
+                                  parse_cmdr_flag_str_at(args, flag, i));
+        core_buffer_putc(&native_roots, '\n');
     }
 }
 
@@ -378,6 +375,20 @@ freshness_member(core_buffer_t *input, const void *name, size_t name_bytes,
 {
     core_put_bytes(input, name, name_bytes);
     core_put_bytes(input, source, source_bytes);
+    core_string_t roots = core_buffer_string(&native_roots);
+    for (size_t at = 0; at < roots.u8_bytes;) {
+        core_string_t root = core_string_slice(roots, at,
+            (size_t)core_string_find_byte(core_string_slice(roots, at,
+                roots.u8_bytes - at), '\n'));
+        at += root.u8_bytes + 1;
+        int64_t alias = core_string_find_byte(root, '=');
+        core_string_t named = alias < 0 ? root
+            : core_string_slice(root, 0, (size_t)alias);
+        int64_t dot = core_string_rfind_byte(named, '.');
+        if (dot > 0 && core_string_eq(core_string_slice(named, 0, (size_t)dot),
+                                      core_string_borrow(name, name_bytes)))
+            core_put_text(input, root);
+    }
 }
 
 static void
