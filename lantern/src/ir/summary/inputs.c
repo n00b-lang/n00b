@@ -392,8 +392,10 @@ stored_deps_hold(ir_summaries_t *summaries, const ir_summary_t *summary,
     for (size_t d = 0; holds && d < summary->deps.len; d++) {
         const summary_dep_t *dep = &summary->deps.data[d];
         if (member_index(members, count, dep->function) < count) continue;
-        holds = stable_content(dep_summary(summaries,
-                    (ir_func_t *)dep->function)) == dep->stable;
+        ir_summary_t *callee = dep_summary(summaries,
+                                           (ir_func_t *)dep->function);
+        holds = summary->stored ? stable_content(callee) == dep->stable
+                                : summary_content(callee) == dep->content;
     }
     summaries->recording = recording;
     return holds;
