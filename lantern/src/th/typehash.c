@@ -57,26 +57,6 @@ static void free_index(core_dict_t *index)
     }
 }
 
-th_type *th_text_type(th_ctx *ctx, core_string_t text)
-{
-    return ctx && ctx->text_types
-        ? core_dict_get(ctx->text_types, &text, nullptr) : nullptr;
-}
-
-void th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type)
-{
-    if (!ctx || !type) {
-        return;
-    }
-    if (!ctx->text_types) {
-        ctx->text_types = core_alloc(core_dict_t);
-        core_dict_init_string(ctx->text_types);
-    }
-    if (!core_dict_contains(ctx->text_types, &text)) {
-        core_dict_put(ctx->text_types, core_dict_string_key_copy(text), type);
-    }
-}
-
 th_type *th_hashed_type(th_ctx *ctx, uint64_t hash)
 {
     return ctx && ctx->hashed_types
@@ -111,12 +91,6 @@ void th_ctx_free(th_ctx *ctx)
     free_index(ctx->generic_type_heads);
     free_index(ctx->implements_memo);
     free_index(ctx->method_memo);
-    if (ctx->text_types) {
-        core_dict_foreach(ctx->text_types, entry)
-            core_dict_string_key_free(entry->key);
-        core_dict_free(ctx->text_types);
-        core_free(ctx->text_types);
-    }
     free_index(ctx->hashed_types);
     core_arena_free(&ctx->arena);
     core_arena_free(&ctx->memo_arena);
@@ -1481,39 +1455,11 @@ th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *r)
     return t;
 }
 
-bool th_indirection_attrs(core_string_t name, uint8_t *attrs)
-{
-    if (!name.data || !attrs) return false;
-    if (core_string_eq(name, CORE_STRING_STATIC("ref"))) *attrs = 0;
-    else if (core_string_eq(name, CORE_STRING_STATIC("ptr")))
-        *attrs = TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
-    else if (core_string_eq(name, CORE_STRING_STATIC("mutref")))
-        *attrs = TH_EXCLUSIVE;
-    else if (core_string_eq(name, CORE_STRING_STATIC("own")))
-        *attrs = TH_OWNING;
-    else if (core_string_eq(name, CORE_STRING_STATIC("gcref")))
-        *attrs = TH_NULLABLE | TH_RESEATABLE;
-    else if (core_string_eq(name, CORE_STRING_STATIC("tmpref")))
-        *attrs = TH_TEMPORARY;
-    else return false;
-    return true;
-}
-
 th_type *th_array(th_ctx *ctx, th_type *e)
 {
     th_type *t = node(ctx, TH_SEQUENCE);
 
     t->seq.elem = e;
-
-    return t;
-}
-
-th_type *th_array_n(th_ctx *ctx, th_type *e, uint64_t n)
-{
-    th_type *t = th_array(ctx, e);
-
-    t->seq.has_extent = true;
-    t->seq.extent     = n;
 
     return t;
 }

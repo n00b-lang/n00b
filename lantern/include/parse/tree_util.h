@@ -5,9 +5,6 @@
 #include "parse/grammar.h"
 #include "parse/annotation.h"
 
-bool parse_alt_leads_with(parse_grammar_t *g, core_string_t nt_name,
-                        int32_t rule_ix, core_string_t word);
-
 typedef bool (*parse_leaf_fn)(parse_tree_t *leaf, void *arg);
 
 parse_tree_t *parse_tree_scan_leaves(parse_tree_t *root, bool reverse,

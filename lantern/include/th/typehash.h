@@ -233,9 +233,7 @@ th_type *th_variant(th_ctx *ctx, core_string_t name, const th_arg *args,
 th_type *th_bitint(th_ctx *ctx, uint64_t width, bool is_signed);
 th_type *th_bits(th_ctx *ctx, uint64_t width);
 th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *referent);
-bool     th_indirection_attrs(core_string_t name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
-th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
 th_type *th_record_sorted(th_ctx *ctx, th_member *members, size_t n);
 th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
@@ -398,8 +396,6 @@ bool     th_is_poison(const th_type *type);
 bool     th_mentions_poison(th_type *type);
 size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
-th_type *th_text_type(th_ctx *ctx, core_string_t text);
-void     th_remember_text_type(th_ctx *ctx, core_string_t text, th_type *type);
 th_type *th_hashed_type(th_ctx *ctx, uint64_t hash);
 void     th_remember_hashed_type(th_ctx *ctx, uint64_t hash, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);

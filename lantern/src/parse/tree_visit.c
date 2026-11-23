@@ -944,14 +944,3 @@ parse_reduce_list_t *parse_reduce_as_list(void *result)
 
     return l && l->magic == REDUCE_LIST_MAGIC ? l : nullptr;
 }
-
-parse_reduce_list_t *parse_reduce_list_new(size_t n)
-{
-    parse_reduce_list_t *l = core_alloc(parse_reduce_list_t);
-
-    l->magic = REDUCE_LIST_MAGIC;
-    l->n     = n;
-    l->v     = n ? core_alloc_array(vptr_t, n) : nullptr;
-
-    return l;
-}

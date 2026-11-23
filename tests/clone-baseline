@@ -318,7 +318,6 @@ fac22ead9f59a047	2	pending	lantern/src/ir/structure.c
 7d83ce568feced8f	2	pending	lantern/src/ir/summary/pt.c
 3e03715886c38487	2	pending	lantern/src/ir/summary_facts.c
 613f3a81b6a7641a	2	pending	lantern/src/ir/summary_facts.c
-269a532acbcea96d	2	pending	lantern/src/ir/typelang.c
 06c0d8a65dc08b7b	2	pending	lantern/src/lib/module.c
 08d3f858d078533b	2	pending	lantern/src/lib/module.c
 10510af229cb2531	2	pending	lantern/src/lib/module.c

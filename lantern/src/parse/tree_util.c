@@ -13,27 +13,6 @@ const parse_rule_t *parse_tree_rule(parse_grammar_t *g, parse_tree_t *node)
     return parse_get_rule(g, nt->rule_ids.data[pn->rule_index]);
 }
 
-bool
-parse_alt_leads_with(parse_grammar_t *g, core_string_t nt_name, int32_t rule_ix,
-                   core_string_t word)
-{
-    parse_nonterm_t *nt = parse_find_nonterm(g, nt_name);
-
-    if (!nt || rule_ix < 0 || (size_t)rule_ix >= core_list_len(nt->rule_ids)) {
-        return false;
-    }
-
-    parse_rule_t *rule = parse_get_rule(g, nt->rule_ids.data[rule_ix]);
-
-    if (!rule || !core_list_len(rule->contents)
-        || rule->contents.data[0].kind != PARSE_MATCH_TERMINAL) {
-        return false;
-    }
-
-    return rule->contents.data[0].terminal_id
-        == parse_lookup_terminal(g, word);
-}
-
 core_list_decl(parse_tree_ptr_t);
 
 parse_tree_t *

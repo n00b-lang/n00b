@@ -97,7 +97,6 @@ typedef struct {
 } parse_reduce_t;
 
 parse_reduce_list_t *parse_reduce_as_list(void *result);
-parse_reduce_list_t *parse_reduce_list_new(size_t n);
 
 typedef void *(*parse_reduce_fn)(parse_reduce_t *r);
 

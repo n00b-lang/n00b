@@ -13,7 +13,6 @@
 #include "ir/places.h"
 #include "ir/summary.h"
 #include "ir/text.h"
-#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
