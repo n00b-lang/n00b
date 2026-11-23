@@ -97,6 +97,15 @@ var tag_extractor_row_bytes: uint       = 0
 var tag_extractor_row_count: u32        = 0
 var u32_rows:                Ref[byte]? = nil
 var u32_row_count:           u32        = 0
+thread var tls_relocated:    bool       = false
+
+func claim_tls_relocation() -> bool {
+    if tls_relocated {
+        return false
+    }
+    tls_relocated = true
+    return true
+}
 
 func cache_tables() {
     type_rows = __abi_table_base(table_type)

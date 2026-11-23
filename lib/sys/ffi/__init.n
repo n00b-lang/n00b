@@ -1,0 +1,5 @@
+import internal.ffi
+
+package sys.ffi {
+    export internal.ffi
+}

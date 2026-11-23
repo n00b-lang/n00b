@@ -1,4 +1,5 @@
 import string.core
+import sys.abi
 
 enum Type_Kind {
     nil_type = 0, primitive_type = 1, record_type, variant_type, enum_type,
@@ -236,8 +237,6 @@ func string_backing_at(s: string) -> uint {
 
 private const tls_segment: u32 = 3
 
-thread var tls_relocated: bool = false
-
 func relocate_thread_storage(index: u32, row: Ref[Storage_Record]) {
     var ordinal: u32 = 0
     while ordinal < row.__value.tls_relocations.count {
@@ -264,10 +263,9 @@ func relocate_thread_storage(index: u32, row: Ref[Storage_Record]) {
 }
 
 func tls_relocate() {
-    if tls_relocated {
+    if !sys.abi.claim_tls_relocation() {
         return
     }
-    tls_relocated = true
     var index: u32 = 1
     while index < __abi_storage_count() {
         let row: Ref[Storage_Record]? = __abi_storage(index)
