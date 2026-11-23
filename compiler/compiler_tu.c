@@ -6990,6 +6990,7 @@ free_tu_state(void *data)
     core_list_free(state->mark_owners);
     core_list_free(state->assignment_patterns);
     core_list_free(state->call_nodes);
+    core_list_free(state->failed_statements);
     core_list_free(state->value_owners);
     core_list_free(state->function_defs);
     core_list_free(state->rewrite_sites);
@@ -7059,6 +7060,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->mark_owners = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
     state->call_nodes = core_list_new(parse_tree_ptr_t);
+    state->failed_statements = core_list_new(parse_tree_ptr_t);
     state->value_owners = core_list_new(parse_tree_ptr_t);
     state->function_defs = core_list_new(parse_tree_ptr_t);
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);

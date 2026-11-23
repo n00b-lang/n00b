@@ -450,7 +450,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             remember_link_use_site(grammar, unit, state, node);
         if (dotted_symbol_path_node(grammar, node)
             && !n00bb_assignment_target(grammar, node, nullptr)
-            && !resolve_module_member_site(grammar, unit, node)) return;
+            && !resolve_module_member_site(grammar, unit, node)) {
+            (void)n00bb_note_failed_statement(grammar, unit, node);
+            return;
+        }
         if (type_reference && dotted_symbol_path_node(grammar, node)) {
             parse_node_resolution_t resolution = parse_tree_resolution(node);
             bool typed = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
@@ -878,6 +881,20 @@ recover_failed_statement(semantic_walk_context_t *walk,
             (void)register_record_semantic_shape(walk->context->grammar,
                                                  walk->unit, scope->node);
     }
+}
+
+parse_tree_t *
+n00bb_note_failed_statement(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_tree_t *statement = node;
+    while (statement && !NT_IS(grammar, statement, "top-level-stmt")
+           && !NT_IS(grammar, statement, "body-stmt"))
+        statement = parse_tree_parent(statement);
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (statement && state)
+        core_list_push(state->failed_statements, statement);
+    return statement;
 }
 
 static parse_visit_outcome_t

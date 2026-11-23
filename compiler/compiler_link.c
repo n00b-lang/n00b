@@ -2438,9 +2438,10 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 core_buffer_release(&path);
             }
             if (site->dotted_path
-                && !resolve_module_member_site(grammar, unit, site->node)
-                && !site->unresolved)
-                all_resolved = false;
+                && !resolve_module_member_site(grammar, unit, site->node)) {
+                (void)n00bb_note_failed_statement(grammar, unit, site->node);
+                if (!site->unresolved) all_resolved = false;
+            }
             if (site->dotted_path
                 && is_type_reference_node(grammar, site->node)) {
                 parse_node_resolution_t type_resolution =
