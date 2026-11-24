@@ -148,12 +148,6 @@ f17f4d45ee1707d2	2	pending	lib/text/internal/table.n
 46f20504700180b4	2	pending	lib/text/internal/table_layout.n
 d9825fba6750c4ec	2	pending	lib/text/internal/table_layout.n
 9030b395bcc04ac5	2	pending	lib/unicode/internal/encoding.n
-24cead8c365374b7	2	pending	runtime/builtin_abi.c
-516ac35761e0e091	2	pending	runtime/builtin_abi.c
-552501cbf8f511aa	2	pending	runtime/builtin_abi.c
-6592fae60fb2c99a	2	pending	runtime/builtin_abi.c
-6e1adcc2b2f8d0a5	2	pending	runtime/builtin_abi.c
-7e61cc828d4e4274	2	pending	runtime/builtin_abi.c
 6e24b87ead9b506e	2	pending	writ/src/core/model/rust.c
 a504d8c1814a780e	2	pending	writ/src/core/model/rust.c
 a735d8b2d77d7e53	2	pending	writ/src/core/model/rust.c

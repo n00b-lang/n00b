@@ -7,6 +7,15 @@
 #include <stdatomic.h>
 #include "builtin_abi.h"
 
+static const void *
+sized_row(uint32_t table, uint32_t index, uint32_t size)
+{
+    uint32_t bytes = 0;
+    const void *row = n00b_abi_v1_record(n00b_abi_v1_current_snapshot(),
+                                         table, index, &bytes);
+    return bytes == size ? row : NULL;
+}
+
 const n00b_abi_type_v1 *
 n00b_builtin_abi_type(uint32_t index)
 {
@@ -28,20 +37,15 @@ n00b_builtin_abi_field(uint32_t index)
 const n00b_abi_arm_v1 *
 n00b_builtin_abi_arm(uint32_t index)
 {
-    uint32_t bytes = 0;
-    const n00b_abi_arm_v1 *row = n00b_abi_v1_record(
-        n00b_abi_v1_current_snapshot(), N00B_ABI_TABLE_ARM, index, &bytes);
-    return bytes == sizeof(*row) ? row : NULL;
+    return sized_row(N00B_ABI_TABLE_ARM, index,
+                     sizeof(n00b_abi_arm_v1));
 }
 
 const n00b_abi_physical_run_v1 *
 n00b_builtin_abi_physical_run(uint32_t index)
 {
-    uint32_t bytes = 0;
-    const n00b_abi_physical_run_v1 *row = n00b_abi_v1_record(
-        n00b_abi_v1_current_snapshot(), N00B_ABI_TABLE_PHYSICAL_RUN, index,
-        &bytes);
-    return bytes == sizeof(*row) ? row : NULL;
+    return sized_row(N00B_ABI_TABLE_PHYSICAL_RUN, index,
+                     sizeof(n00b_abi_physical_run_v1));
 }
 
 const n00b_abi_trace_v1 *
@@ -53,41 +57,29 @@ n00b_builtin_abi_trace(uint32_t index)
 const n00b_abi_trace_child_v1 *
 n00b_builtin_abi_trace_child(uint32_t index)
 {
-    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
-    uint32_t bytes = 0;
-    const n00b_abi_trace_child_v1 *row = n00b_abi_v1_record(snapshot,
-        N00B_ABI_TABLE_TRACE_CHILD, index, &bytes);
-    return bytes == sizeof(*row) ? row : NULL;
+    return sized_row(N00B_ABI_TABLE_TRACE_CHILD, index,
+                     sizeof(n00b_abi_trace_child_v1));
 }
 
 const n00b_abi_trace_arm_v1 *
 n00b_builtin_abi_trace_arm(uint32_t index)
 {
-    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
-    uint32_t bytes = 0;
-    const n00b_abi_trace_arm_v1 *row = n00b_abi_v1_record(snapshot,
-        N00B_ABI_TABLE_TRACE_ARM, index, &bytes);
-    return bytes == sizeof(*row) ? row : NULL;
+    return sized_row(N00B_ABI_TABLE_TRACE_ARM, index,
+                     sizeof(n00b_abi_trace_arm_v1));
 }
 
 const n00b_abi_tag_extractor_v1 *
 n00b_builtin_abi_tag_extractor(uint32_t index)
 {
-    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
-    uint32_t bytes = 0;
-    const n00b_abi_tag_extractor_v1 *row = n00b_abi_v1_record(snapshot,
-        N00B_ABI_TABLE_TAG_EXTRACTOR, index, &bytes);
-    return bytes == sizeof(*row) ? row : NULL;
+    return sized_row(N00B_ABI_TABLE_TAG_EXTRACTOR, index,
+                     sizeof(n00b_abi_tag_extractor_v1));
 }
 
 const n00b_abi_layout_v1 *
 n00b_builtin_abi_layout(uint32_t index)
 {
-    const n00b_abi_snapshot_v1 *snapshot = n00b_abi_v1_current_snapshot();
-    uint32_t bytes = 0;
-    const n00b_abi_layout_v1 *row = n00b_abi_v1_record(snapshot,
-        N00B_ABI_TABLE_LAYOUT, index, &bytes);
-    return bytes == sizeof(*row) ? row : NULL;
+    return sized_row(N00B_ABI_TABLE_LAYOUT, index,
+                     sizeof(n00b_abi_layout_v1));
 }
 
 const n00b_abi_frame_layout_v1 *
