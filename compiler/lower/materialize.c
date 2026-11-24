@@ -224,15 +224,15 @@ widened_value(ir_lower_context_t *context, ir_value_t *value, th_type *target,
     return ok ? aggregate->dest : nullptr;
 }
 
-static ir_value_t *
-temporary_place(ir_lower_context_t *context, ir_value_t *value,
-                ir_span_t span)
+ir_value_t *
+n00bb_temporary_place(ir_lower_context_t *context, ir_value_t *value,
+                      const char *prefix, ir_span_t span)
 {
     char buffer[48];
-    ir_local_t *local = ir_local_add(context->function,
-        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_viewed_%llu",
+    ir_local_t *local = value ? ir_local_add(context->function,
+        n00bb_format_name(buffer, sizeof(buffer), "%s%llu", prefix,
                           (unsigned long long)context->next_value_id++),
-        value->type);
+        value->type) : nullptr;
     if (local) local->synthetic = true;
     ir_instr_t *copy = local
         ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
@@ -293,7 +293,9 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
         return view_of_reference(context, value, target, span);
     if (n00bb_value_views(value->type, target)) {
         ir_value_t *place = n00bb_place_of(context, value, false, span);
-        if (!place) place = temporary_place(context, value, span);
+        if (!place)
+            place = n00bb_temporary_place(context, value, "__n00bb_viewed_",
+                                          span);
         n00bb_lower_context_t *lower = context->user;
         core_string_t text = node && lower
             ? source_text_of(lower->unit, node) : (core_string_t){0};

@@ -1039,23 +1039,8 @@ static ir_value_t *
 n00bb_rewrite_temporary_place(n00bb_rewrite_t *rewrite, ir_value_t *value,
                               ir_span_t span)
 {
-    ir_lower_context_t *context = &rewrite->context;
-    char buffer[48];
-    ir_local_t *local = value ? ir_local_add(context->function,
-        n00bb_format_name(buffer, sizeof(buffer), "__n00bb_receiver_%llu",
-                          (unsigned long long)context->next_value_id++),
-        value->type) : nullptr;
-    if (local) local->synthetic = true;
-    ir_instr_t *copy = local
-        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
-    ir_instr_t *take = copy && ir_instr_set_dest_local(copy, local)
-            && ir_instr_operand_value(copy, value)
-        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-        : nullptr;
-    return take && ir_lower_set_temp_dest(context, take,
-            CORE_STRING_STATIC("__n00bb_place_"),
-            th_ind(ir_module_types(context->module), 0, local->type))
-        && ir_instr_operand_local(take, local) ? take->dest : nullptr;
+    return n00bb_temporary_place(&rewrite->context, value,
+                                 "__n00bb_receiver_", span);
 }
 
 static ir_value_t *

@@ -24,11 +24,6 @@ ee21ef007e6456fa	2	pending	compiler/llvm_backend.c
 1871669a97eb3f86	2	pending	compiler/lower/literals.c
 3fd1917b0bc4ca69	2	pending	compiler/lower/literals.c
 fe1613ed540af8b7	2	pending	compiler/lower/literals.c
-1b42d218edf3697f	2	pending	compiler/lower/materialize.c
-507703840e8c56f1	2	pending	compiler/lower/materialize.c
-86aa2dc8def34095	2	pending	compiler/lower/materialize.c
-bf697932c43f9dae	2	pending	compiler/lower/materialize.c
-f635694c4c963ba9	2	pending	compiler/lower/materialize.c
 7b1223194b0cc426	2	pending	compiler/lower/members.c
 e78f04a58018234c	2	pending	compiler/lower/places.c
 6c43edce63a6e31f	2	pending	compiler/lower/rewrite.c

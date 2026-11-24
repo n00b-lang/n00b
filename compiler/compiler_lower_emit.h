@@ -104,6 +104,9 @@ bool n00bb_emit_indirect_write(ir_lower_context_t *context,
                                ir_span_t span);
 ir_value_t *n00bb_place_of(ir_lower_context_t *context, ir_value_t *value,
                            bool writing, ir_span_t span);
+ir_value_t *n00bb_temporary_place(ir_lower_context_t *context,
+                                  ir_value_t *value, const char *prefix,
+                                  ir_span_t span);
 bool n00bb_from_reference_address(ir_value_t *value);
 bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
                      ir_span_t span);
