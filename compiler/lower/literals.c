@@ -266,6 +266,31 @@ n00bb_object_from_fields(ir_lower_context_t *context, ir_value_t *fields,
         ? object : nullptr;
 }
 
+static n00bb_litmod_site_t *
+explicit_site(ir_lower_context_t *context, parse_visit_t *visit)
+{
+    n00bb_lower_context_t *lower = context->user;
+    return lower && tu_state(lower->unit) ? n00bb_explicit_literal_site(
+        visit->grammar, lower->unit, visit->node) : nullptr;
+}
+
+static ir_instr_t *
+literal_aggregate(ir_lower_context_t *context, ir_aggregate_form_t form,
+                  core_string_t prefix, th_type *type,
+                  core_list_t(n00bb_ir_value_ptr_t) *values, ir_span_t span,
+                  bool later)
+{
+    ir_instr_t *instruction =
+        ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span);
+    bool ok = instruction
+        && ir_lower_set_temp_dest(context, instruction, prefix, type)
+        && ir_instr_set_aggregate_form(instruction, form);
+    for (size_t i = 0; ok && i < values->len; i++)
+        ok = ir_instr_operand_value(instruction, values->data[i]);
+    if (ok && later) n00bb_rewrite_later(context, instruction);
+    return ok ? instruction : nullptr;
+}
+
 bool
 n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
@@ -560,9 +585,7 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         ? n00bb_literal_handler(modifier, N00BB_LITERAL_STRING_SHAPE)
         : nullptr;
     n00bb_lower_context_t *lower = context->user;
-    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
-    n00bb_litmod_site_t *user_site = tu
-        ? n00bb_explicit_literal_site(visit->grammar, lower->unit, visit->node) : nullptr;
+    n00bb_litmod_site_t *user_site = explicit_site(context, visit);
     if (user_site)
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
@@ -679,17 +702,11 @@ n00bb_lower_open_sequence_literal(ir_lower_context_t *context,
     bool ok = collect_sequence_literal_values(context, visit, visit->node,
                                               &values);
     ir_instr_t *instruction = ok
-        ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span)
-        : nullptr;
-    ok = instruction
-        && ir_lower_set_temp_dest(context, instruction,
-               CORE_STRING_STATIC("__n00bb_literal_"), result_type)
-        && ir_instr_set_aggregate_form(instruction, IR_AGGREGATE_ELEMENTS);
-    for (size_t i = 0; ok && i < values.len; i++)
-        ok = ir_instr_operand_value(instruction, values.data[i]);
+        ? literal_aggregate(context, IR_AGGREGATE_ELEMENTS,
+              CORE_STRING_STATIC("__n00bb_literal_"), result_type, &values,
+              span, true) : nullptr;
     core_list_free(values);
-    if (ok) n00bb_rewrite_later(context, instruction);
-    return ok ? (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest}
+    return instruction ? (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest}
         : lower_internal(context, span,
                          "could not lower an open sequence literal");
 }
@@ -807,10 +824,7 @@ n00bb_lower_sequence_literal(ir_lower_context_t *context,
                              size_t operand_count, th_type *result_type,
                              ir_span_t span, void *state)
 {
-    n00bb_lower_context_t *lower = context->user;
-    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
-    n00bb_litmod_site_t *site = tu
-        ? n00bb_explicit_literal_site(visit->grammar, lower->unit, visit->node) : nullptr;
+    n00bb_litmod_site_t *site = explicit_site(context, visit);
     if (!site && n00bb_literal_modifier_rejected(visit->node))
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     return site
@@ -844,18 +858,12 @@ n00bb_lower_open_brace_literal(ir_lower_context_t *context,
         if (ok) core_list_push(items, nil->dest);
     }
     ir_instr_t *instruction = ok
-        ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span)
-        : nullptr;
-    ok = instruction
-        && ir_lower_set_temp_dest(context, instruction,
-               CORE_STRING_STATIC("__n00bb_literal_"), result_type)
-        && ir_instr_set_aggregate_form(instruction, IR_AGGREGATE_PAIRS);
-    for (size_t i = 0; ok && i < items.len; i++)
-        ok = ir_instr_operand_value(instruction, items.data[i]);
+        ? literal_aggregate(context, IR_AGGREGATE_PAIRS,
+              CORE_STRING_STATIC("__n00bb_literal_"), result_type, &items,
+              span, true) : nullptr;
     core_list_free(values);
     core_list_free(items);
-    if (ok) n00bb_rewrite_later(context, instruction);
-    return ok ? (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest}
+    return instruction ? (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest}
         : lower_internal(context, span, "could not lower an open brace literal");
 }
 
@@ -869,10 +877,7 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     (void)operands;
     (void)operand_count;
     (void)state;
-    n00bb_lower_context_t *lower = context->user;
-    n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
-    n00bb_litmod_site_t *site = tu
-        ? n00bb_explicit_literal_site(visit->grammar, lower->unit, visit->node) : nullptr;
+    n00bb_litmod_site_t *site = explicit_site(context, visit);
     if (site)
         return n00bb_lower_user_literal(context, visit, site,
                                         result_type, span);
@@ -913,14 +918,11 @@ n00bb_lower_brace_payload(ir_lower_context_t *context,
     }
     core_list_free(values);
     ir_instr_t *array = ok
-        ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
-    ok = array && ir_lower_set_temp_dest(context, array,
-        CORE_STRING_STATIC("__n00bb_brace_payload_"), payload_type)
-        && ir_instr_set_aggregate_form(array, IR_AGGREGATE_ELEMENTS);
-    for (size_t i = 0; ok && i < items.len; i++)
-        ok = ir_instr_operand_value(array, items.data[i]);
+        ? literal_aggregate(context, IR_AGGREGATE_ELEMENTS,
+              CORE_STRING_STATIC("__n00bb_brace_payload_"), payload_type,
+              &items, span, false) : nullptr;
     core_list_free(items);
-    if (!ok)
+    if (!array)
         return lower_internal(context, span,
                            "could not construct the brace handler payload");
     return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
