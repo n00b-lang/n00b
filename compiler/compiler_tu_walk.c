@@ -1614,8 +1614,14 @@ annotate_components_from(component_search_t *search,
         && annotate_component(search->grammar, search->types, &members,
                               search->hooks);
     if (!annotated) {
-        for (size_t i = 0; i < members.len; i++)
+        bool reported = blocked;
+        for (size_t i = 0; i < members.len; i++) {
             tu_state(members.data[i])->semantic_annotation_failed = true;
+            reported = reported || n00bb_unit_failed(members.data[i]);
+        }
+        if (!reported)
+            n00bb_tu_internal_error(unit, nullptr, "annotating declarations",
+                "annotation failed without reporting why");
         search->failed = true;
     }
     core_list_free(members);

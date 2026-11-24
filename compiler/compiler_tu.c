@@ -2430,10 +2430,17 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     state->types = types;
     state->annotations = parse_annot_result_new(nullptr);
     parse_symtab_set_owner_unit(state->annotations->symtab, unit);
-    if (!register_builtin_symbols(state->annotations, state, types)
-        || !register_native_declarations(state->annotations, types,
-                                         n00bb_source_natives(unit)))
+    if (!register_builtin_symbols(state->annotations, state, types)) {
+        n00bb_tu_internal_error(unit, nullptr, "registering builtins",
+                                "could not register the builtin symbols");
         return false;
+    }
+    if (!register_native_declarations(state->annotations, types,
+                                      n00bb_source_natives(unit))) {
+        n00bb_tu_internal_error(unit, nullptr, "registering builtins",
+                                "could not register the native declarations");
+        return false;
+    }
     parse_annot_result_set_diagnostics(state->annotations,
         core_translation_unit_diagnostics(unit), unit);
     parse_annot_result_set_node_callback(state->annotations,
