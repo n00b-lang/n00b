@@ -53,9 +53,6 @@ e92e79acbc092846	2	pending	lib/sys/internal/gc/hash.n
 f94344f3b6102c70	2	pending	lib/sys/internal/gc/hash.n
 51ee5a5b27952de5	2	pending	lib/sys/internal/gc/mark.n
 f1a9eb37eca7b2c9	2	pending	lib/sys/internal/gc/mark.n
-3280abf515cfdd19	2	pending	lib/sys/internal/marshal.n
-34251a1e0a9038cc	2	pending	lib/sys/internal/marshal.n
-f1d91c510d901f51	2	pending	lib/sys/internal/marshal.n
 46458ddf7a0681e9	2	pending	lib/sys/internal/os/read.n
 475b27724abc7772	2	pending	lib/sys/internal/os/read.n
 8556737d7f40d0ac	2	pending	lib/sys/internal/os/read.n
