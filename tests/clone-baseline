@@ -16,8 +16,6 @@ fac22ead9f59a047	2	pending	lantern/src/ir/structure.c
 06c0d8a65dc08b7b	2	pending	lantern/src/lib/module.c
 08d3f858d078533b	2	pending	lantern/src/lib/module.c
 10510af229cb2531	2	pending	lantern/src/lib/module.c
-89fafd120c8fa120	2	pending	lantern/src/parse/grammar.c
-e91b0efd275d6bfa	2	pending	lantern/src/parse/grammar.c
 5f4ea07f4b963ed9	2	pending	lantern/src/scanner/lex.c
 697e7971b4cb80ce	2	pending	lantern/src/scanner/lex.c
 0e0341e56b648f1f	3	false-positive	lantern/src/scanner/lex_build.c option loops that skip unnamed options and read `as` into different declaration structs
