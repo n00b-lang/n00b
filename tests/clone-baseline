@@ -108,14 +108,6 @@ d58834252143b227	2	pending	lantern/src/scanner/scanner.c
 259516fd657e92a1	2	pending	lantern/src/th/scheme.c
 ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 5b768a5a9d0d2a06	2	false-positive	lib/builtin/containers/dict.n:259 public entries_in_key_order and entries_in_value_order wrappers that differ only in the comparator
-1f638cb84eb69520	2	pending	lib/builtin/floating.n
-28f2d2260a904b10	2	pending	lib/builtin/floating.n
-30e3e27f0f3285bb	2	pending	lib/builtin/floating.n
-3adc926094e3d2ac	2	pending	lib/builtin/floating.n
-48ff360f56dfad65	2	pending	lib/builtin/floating.n
-ba27981eeab37ec6	2	pending	lib/builtin/floating.n
-ea53d2c0985793b1	2	pending	lib/builtin/floating.n
-f301969f63dc1566	2	pending	lib/builtin/floating.n
 0930ae5630d03ea5	2	pending	lib/builtin/string/core.n
 0c3621f7334b7ae2	2	pending	lib/builtin/string/core.n
 19fe294cb6625294	2	pending	lib/builtin/string/core.n
