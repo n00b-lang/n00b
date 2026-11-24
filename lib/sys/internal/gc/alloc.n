@@ -58,51 +58,38 @@ func attach_runtime_mutator() -> Ref[internal.gc.core.Mutator]? {
     return nil
 }
 
-func barrier_runtime(address: Ref[byte], type_index: u32) {
+inline func barrier_mutator() -> Ref[internal.gc.core.Mutator]? {
     let heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
     if heap == nil {
-        return
+        return nil
     }
     let active: Ref[internal.gc.core.Heap] = heap
-    if !__atomic_load(ref active.__value.marking) {
-        return
-    }
-    if runtime_barrier_active {
-        return
+    if !__atomic_load(ref active.__value.marking) or runtime_barrier_active {
+        return nil
     }
     runtime_barrier_active = true
     let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    require mutator != nil
+    return mutator
+}
+
+func barrier_runtime(address: Ref[byte], type_index: u32) {
+    let mutator: Ref[internal.gc.core.Mutator]? = barrier_mutator()
     if mutator != nil {
         internal.gc.mark.barrier_value(mutator, address, type_index)
         runtime_barrier_active = false
-        return
     }
-    require false
 }
 
 func barrier_pointer_runtime(value: Ref[byte]?) {
     if value == nil {
         return
     }
-    let heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
-    if heap == nil {
-        return
-    }
-    let active: Ref[internal.gc.core.Heap] = heap
-    if !__atomic_load(ref active.__value.marking) {
-        return
-    }
-    if runtime_barrier_active {
-        return
-    }
-    runtime_barrier_active = true
-    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
+    let mutator: Ref[internal.gc.core.Mutator]? = barrier_mutator()
     if mutator != nil {
         internal.gc.mark.barrier_pointer(mutator, value)
         runtime_barrier_active = false
-        return
     }
-    require false
 }
 
 func block_release(heap: Ref[internal.gc.core.Heap], blk: Ref[internal.gc.core.Block_Metadata]) {
