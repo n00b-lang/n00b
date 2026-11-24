@@ -99,12 +99,6 @@ ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 8fd3c9712070f209	2	pending	lib/builtin/string/core.n
 9dc0b0006dcabd87	2	pending	lib/builtin/string/core.n
 f2ad228dcee91356	2	pending	lib/builtin/string/core.n
-3f75ee176c134fb7	2	pending	lib/builtin/string/style.n
-49904abb57613f5c	2	pending	lib/builtin/string/style.n
-80bd487027352528	2	pending	lib/builtin/string/style.n
-980ac017e5dd37a0	2	pending	lib/builtin/string/style.n
-9e6be47872e0ef7c	2	pending	lib/builtin/string/style.n
-ea720cdde8466dae	2	pending	lib/builtin/string/style.n
 74f03eadbe5247ca	2	pending	lib/langtools/internal/grammar/parse.n
 11a34d9364658946	2	pending	lib/sys/internal/abi.n
 1449ebf73b5a35ae	2	pending	lib/sys/internal/box.n
