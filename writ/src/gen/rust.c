@@ -279,6 +279,18 @@ feature_gate(const printer_t *p, writ_sym_t feature)
 }
 
 static void
+each_param(printer_t *p, const writ_rust_fn_t *fn,
+           const writ_rust_value_t *self,
+           void (*emit)(printer_t *, writ_str_t, const writ_rust_value_t *))
+{
+    if (fn->receiver != WRIT_RUST_FREE) emit(p, writ_cstr("self"), self);
+    for (uint32_t i = 0; i < fn->count; i++) {
+        const writ_rust_member_t *param = &p->rust->members.data[fn->first + i];
+        emit(p, sym(p, param->name), &param->value);
+    }
+}
+
+static void
 emit_fn(printer_t *p, const writ_rust_fn_t *fn)
 {
     writ_emit_t *e = &p->emit;
@@ -289,24 +301,12 @@ emit_fn(printer_t *p, const writ_rust_fn_t *fn)
     writ_emit_line(e, "pub unsafe extern \"C\" fn %.*s(", S(sym(p, fn->symbol)));
     writ_emit_indent(e, 1);
     writ_rust_value_t self = {.kind = WRIT_RUST_OPAQUE, .name = fn->owner, .borrowed = fn->receiver != WRIT_RUST_BY_VALUE};
-    if (fn->receiver != WRIT_RUST_FREE) {
-        emit_c_params(p, writ_cstr("self"), &self);
-    }
-    for (uint32_t i = 0; i < fn->count; i++) {
-        const writ_rust_member_t *param = &rust->members.data[fn->first + i];
-        emit_c_params(p, sym(p, param->name), &param->value);
-    }
+    each_param(p, fn, &self, emit_c_params);
     emit_result_params(p, &fn->result);
     writ_emit_indent(e, -1);
     writ_emit_open(e, ") -> c_int");
     writ_emit_open(e, "guard(||");
-    if (fn->receiver != WRIT_RUST_FREE) {
-        emit_conversion(p, writ_cstr("self"), &self);
-    }
-    for (uint32_t i = 0; i < fn->count; i++) {
-        const writ_rust_member_t *param = &rust->members.data[fn->first + i];
-        emit_conversion(p, sym(p, param->name), &param->value);
-    }
+    each_param(p, fn, &self, emit_conversion);
     if (fn->receiver != WRIT_RUST_FREE) {
         writ_emit_text(e, "let result = this.%.*s(", S(sym(p, fn->name)));
     } else {
