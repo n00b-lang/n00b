@@ -345,6 +345,30 @@ static bool derive_nt_sequences(parse_grammar_t *g, parse_nt_id_t nt_id,
                                 core_list_t(ambig_sequence_t) * out,
                                 uint32_t max_tokens, uint8_t *visiting);
 
+static bool append_nt_sequences(parse_grammar_t *g, parse_nt_id_t nt_id,
+                                const ambig_sequence_t *prefix,
+                                core_list_t(ambig_sequence_t) * out,
+                                uint32_t max_tokens, uint8_t *visiting) {
+  core_list_t(ambig_sequence_t) nested = core_list_new(ambig_sequence_t);
+  bool ok = derive_nt_sequences(g, nt_id, &nested,
+                                max_tokens - (uint32_t)prefix->len, visiting);
+
+  for (size_t i = 0; ok && i < nested.len; i++) {
+    if (prefix->len + nested.data[i].len > max_tokens) {
+      continue;
+    }
+    ambig_sequence_t seq = sequence_clone(prefix);
+    for (size_t j = 0; j < nested.data[i].len; j++) {
+      core_list_push(seq, nested.data[i].data[j]);
+    }
+    sequence_list_push_unique(out, &seq);
+    sequence_free(&seq);
+  }
+  bool produced = out->len > 0;
+  sequence_list_free(&nested);
+  return ok && produced;
+}
+
 static bool append_match_sequences(parse_grammar_t *g,
                                    const parse_match_t *match,
                                    const ambig_sequence_t *prefix,
@@ -369,24 +393,8 @@ static bool append_match_sequences(parse_grammar_t *g,
     return true;
   }
   case PARSE_MATCH_NT: {
-    core_list_t(ambig_sequence_t) nested = core_list_new(ambig_sequence_t);
-    bool ok = derive_nt_sequences(g, match->nt_id, &nested,
-                                  max_tokens - (uint32_t)prefix->len, visiting);
-
-    for (size_t i = 0; ok && i < nested.len; i++) {
-      if (prefix->len + nested.data[i].len > max_tokens) {
-        continue;
-      }
-      ambig_sequence_t seq = sequence_clone(prefix);
-      for (size_t j = 0; j < nested.data[i].len; j++) {
-        core_list_push(seq, nested.data[i].data[j]);
-      }
-      sequence_list_push_unique(out, &seq);
-      sequence_free(&seq);
-    }
-    bool produced = out->len > 0;
-    sequence_list_free(&nested);
-    return ok && produced;
+    return append_nt_sequences(g, match->nt_id, prefix, out, max_tokens,
+                               visiting);
   }
   case PARSE_MATCH_GROUP: {
     parse_rule_group_t *group = match->group;
@@ -394,24 +402,8 @@ static bool append_match_sequences(parse_grammar_t *g,
       sequence_list_push_unique(out, prefix);
       return true;
     }
-    core_list_t(ambig_sequence_t) nested = core_list_new(ambig_sequence_t);
-    bool ok = derive_nt_sequences(g, group->contents_id, &nested,
-                                  max_tokens - (uint32_t)prefix->len, visiting);
-
-    for (size_t i = 0; ok && i < nested.len; i++) {
-      if (prefix->len + nested.data[i].len > max_tokens) {
-        continue;
-      }
-      ambig_sequence_t seq = sequence_clone(prefix);
-      for (size_t j = 0; j < nested.data[i].len; j++) {
-        core_list_push(seq, nested.data[i].data[j]);
-      }
-      sequence_list_push_unique(out, &seq);
-      sequence_free(&seq);
-    }
-    bool produced = out->len > 0;
-    sequence_list_free(&nested);
-    return ok && produced;
+    return append_nt_sequences(g, group->contents_id, prefix, out,
+                               max_tokens, visiting);
   }
   case PARSE_MATCH_ANY:
   case PARSE_MATCH_CLASS:
