@@ -199,31 +199,8 @@ d9dc704384aea56f	2	pending	lantern/src/parse/tree_print.c
 73c0b755b0f158c1	2	pending	lantern/src/scanner/lex_analysis.c
 85916146f5ce83ca	2	pending	lantern/src/scanner/lex_analysis.c
 a9558ce16c05344e	2	pending	lantern/src/scanner/lex_analysis.c
-01d2c71eb4cc64a5	2	pending	lantern/src/scanner/lex_build.c
-0e0341e56b648f1f	3	pending	lantern/src/scanner/lex_build.c
-14521d6a89aa1c5f	2	pending	lantern/src/scanner/lex_build.c
-1c80df36bda3b15a	2	pending	lantern/src/scanner/lex_build.c
-1e0b8de5572b224f	2	pending	lantern/src/scanner/lex_build.c
-34c572153512fa49	2	pending	lantern/src/scanner/lex_build.c
-36af37dc124ffbf6	2	pending	lantern/src/scanner/lex_build.c
-4830f4331214c3ae	2	pending	lantern/src/scanner/lex_build.c
-525bf1eef47d0b68	2	pending	lantern/src/scanner/lex_build.c
-54428726528e50fd	2	pending	lantern/src/scanner/lex_build.c
-548e02e650f71e34	2	pending	lantern/src/scanner/lex_build.c
-55c1fc8ae43ab6b1	2	pending	lantern/src/scanner/lex_build.c
-56c1a9ec2a1d0f08	2	pending	lantern/src/scanner/lex_build.c
-56f697e08863617f	2	pending	lantern/src/scanner/lex_build.c
-636188d048f88a65	2	pending	lantern/src/scanner/lex_build.c
-65798afcc9304446	2	pending	lantern/src/scanner/lex_build.c
-7bd2b0802327cae1	2	pending	lantern/src/scanner/lex_build.c
-a17dd12f9fccf863	2	pending	lantern/src/scanner/lex_build.c
-a2093470c950e097	2	pending	lantern/src/scanner/lex_build.c
-a23b8e0b9b85584f	2	pending	lantern/src/scanner/lex_build.c
-b6e98d417e33d4ed	2	pending	lantern/src/scanner/lex_build.c
-c1bcf2c8f281be24	2	pending	lantern/src/scanner/lex_build.c
-d22e02bcc0bc2fef	2	pending	lantern/src/scanner/lex_build.c
-e409d778c58986cb	2	pending	lantern/src/scanner/lex_build.c
-e88f1d516ffce4d6	2	pending	lantern/src/scanner/lex_build.c
+0e0341e56b648f1f	3	false-positive	lantern/src/scanner/lex_build.c option loops that skip unnamed options and read `as` into different declaration structs
+54428726528e50fd	2	false-positive	lantern/src/scanner/lex_build.c option loops that skip unnamed options and read their first argument into different declaration structs
 a9953ba24ea361dd	2	pending	lantern/src/scanner/scanner.c
 d58834252143b227	2	pending	lantern/src/scanner/scanner.c
 290650263f652632	2	pending	lantern/src/th/environment.c

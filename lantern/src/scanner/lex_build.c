@@ -197,6 +197,22 @@ record_declaration(lex_build_t *b, scan_lex_decl_kind_t kind,
                    }));
 }
 
+static const size_t string_maps[] = {
+    offsetof(lex_build_t, operator_set_index),
+    offsetof(lex_build_t, operator_set_declarations),
+    offsetof(lex_build_t, operator_state),
+    offsetof(lex_build_t, operator_index),
+    offsetof(lex_build_t, soft_keyword_index),
+    offsetof(lex_build_t, string_openers),
+    offsetof(lex_build_t, number_prefixes),
+    offsetof(lex_build_t, number_suffix_set_index),
+    offsetof(lex_build_t, number_suffix_set_declarations),
+    offsetof(lex_build_t, string_escape_set_index),
+    offsetof(lex_build_t, string_escape_set_declarations),
+    offsetof(lex_build_t, heredoc_header_index),
+    offsetof(lex_build_t, identifier_profile_index),
+};
+
 static void
 lex_build_free(lex_build_t *b)
 {
@@ -249,19 +265,8 @@ lex_build_free(lex_build_t *b)
     core_list_free(b->escape_rule_sets);
     core_list_free(b->number_suffix_sets);
     core_list_free(b->string_escape_sets);
-    string_map_free(&b->operator_set_index);
-    string_map_free(&b->operator_set_declarations);
-    string_map_free(&b->operator_state);
-    string_map_free(&b->operator_index);
-    string_map_free(&b->soft_keyword_index);
-    string_map_free(&b->string_openers);
-    string_map_free(&b->number_prefixes);
-    string_map_free(&b->number_suffix_set_index);
-    string_map_free(&b->number_suffix_set_declarations);
-    string_map_free(&b->string_escape_set_index);
-    string_map_free(&b->string_escape_set_declarations);
-    string_map_free(&b->heredoc_header_index);
-    string_map_free(&b->identifier_profile_index);
+    for (size_t i = 0; i < sizeof(string_maps) / sizeof(*string_maps); i++)
+        string_map_free((core_dict_t *)((char *)b + string_maps[i]));
     scan_lex_decls_free(&b->decls);
     core_free(b->err.data);
     core_free(b);
@@ -306,8 +311,8 @@ string_matches(core_string_t value, core_string_t expected)
     string_matches((value), CORE_STRING_STATIC(expected))
 
 static bool
-layout_policy(lex_build_t *b, const scan_lex_opt_t *o,
-              scan_lex_indent_policy_t *out)
+layout_choice(lex_build_t *b, const scan_lex_opt_t *o, const char *first,
+              const char *second, bool *chose_first)
 {
     core_string_t value = arg(o, 0);
 
@@ -321,58 +326,39 @@ layout_policy(lex_build_t *b, const scan_lex_opt_t *o,
         return false;
     }
 
-    if (string_is(value, "allow")) {
-        *out = SCAN_LEX_INDENT_ALLOW;
+    *chose_first = string_matches(value,
+                                  core_string_borrow(first, strlen(first)));
+    if (*chose_first
+        || string_matches(value, core_string_borrow(second, strlen(second))))
         return true;
-    }
-
-    if (string_is(value, "reject")) {
-        *out = SCAN_LEX_INDENT_REJECT;
-        return true;
-    }
 
     if (!b->err.data) {
         set_errf(b,
-                 "@lex-layout: %.*s expects 'allow' or 'reject'",
-                 (int)o->name.u8_bytes, o->name.data);
+                 "@lex-layout: %.*s expects '%s' or '%s'",
+                 (int)o->name.u8_bytes, o->name.data, first, second);
     }
 
     return false;
 }
 
 static bool
+layout_policy(lex_build_t *b, const scan_lex_opt_t *o,
+              scan_lex_indent_policy_t *out)
+{
+    bool allow = false;
+    if (!layout_choice(b, o, "allow", "reject", &allow)) return false;
+    *out = allow ? SCAN_LEX_INDENT_ALLOW : SCAN_LEX_INDENT_REJECT;
+    return true;
+}
+
+static bool
 layout_line_policy(lex_build_t *b, const scan_lex_opt_t *o,
                    scan_lex_indent_line_policy_t *out)
 {
-    core_string_t value = arg(o, 0);
-
-    if (core_list_len(o->args) != 1) {
-        if (!b->err.data) {
-            set_errf(b,
-                     "@lex-layout: %.*s expects one policy",
-                     (int)o->name.u8_bytes, o->name.data);
-        }
-
-        return false;
-    }
-
-    if (string_is(value, "ignore")) {
-        *out = SCAN_LEX_INDENT_IGNORE;
-        return true;
-    }
-
-    if (string_is(value, "apply")) {
-        *out = SCAN_LEX_INDENT_APPLY;
-        return true;
-    }
-
-    if (!b->err.data) {
-        set_errf(b,
-                 "@lex-layout: %.*s expects 'ignore' or 'apply'",
-                 (int)o->name.u8_bytes, o->name.data);
-    }
-
-    return false;
+    bool ignore = false;
+    if (!layout_choice(b, o, "ignore", "apply", &ignore)) return false;
+    *out = ignore ? SCAN_LEX_INDENT_IGNORE : SCAN_LEX_INDENT_APPLY;
+    return true;
 }
 
 static bool
@@ -547,6 +533,20 @@ string_escape_set(lex_build_t *b, core_string_t name)
     return index ? &b->string_escape_sets.data[index - 1] : nullptr;
 }
 
+static core_string_t
+ascii_set_string(lex_build_t *b, const bool present[128])
+{
+    size_t length = 0;
+    for (size_t i = 0; i < 128; i++) length += present[i];
+    char *data = core_alloc_size(1, length + 1);
+    size_t at = 0;
+    for (size_t i = 0; i < 128; i++)
+        if (present[i]) data[at++] = (char)i;
+    core_string_t made = {.data = data, .u8_bytes = length};
+    core_list_push(b->generated_strings, made);
+    return made;
+}
+
 static void
 merge_simple_escapes(lex_build_t *b, scan_lex_string_t *s,
                      core_string_t extra)
@@ -571,20 +571,7 @@ merge_simple_escapes(lex_build_t *b, scan_lex_string_t *s,
         present[c] = true;
     }
 
-    size_t length = 0;
-    for (size_t i = 0; i < 128; i++) {
-        length += present[i];
-    }
-    char *data = core_alloc_size(1, length + 1);
-    size_t at = 0;
-    for (size_t i = 0; i < 128; i++) {
-        if (present[i]) {
-            data[at++] = (char)i;
-        }
-    }
-    core_string_t merged = {.data = data, .u8_bytes = length};
-    core_list_push(b->generated_strings, merged);
-    s->simple_escapes = merged;
+    s->simple_escapes = ascii_set_string(b, present);
 }
 
 static void
@@ -730,21 +717,35 @@ build_string_option(lex_build_t *b, scan_lex_string_t *s,
     return true;
 }
 
-static void
-build_string_escapes(lex_build_t *b, const scan_lex_decl_t *a)
+static bool
+new_set_name(lex_build_t *b, const scan_lex_decl_t *a, const char *kind,
+             core_dict_t *index, core_string_t *out)
 {
     core_string_t name = positional(&a->lex_opts, 0);
 
     if (!name.data || !name.u8_bytes) {
-        oops(b, "string-escapes", CORE_STRING_STATIC("name"));
-        return;
+        oops_kind(b, core_string_borrow(kind, strlen(kind)),
+                  CORE_STRING_STATIC("name"));
+        return false;
     }
-    if (string_escape_set(b, name)) {
+    if (string_map_get(index, name)) {
         if (!b->err.data) {
-            set_errf(b,
-                     "@lex-string-escapes: duplicate set '%.*s'",
+            set_errf(b, "@lex-%s: duplicate set '%.*s'", kind,
                      (int)name.u8_bytes, name.data);
         }
+        return false;
+    }
+    *out = name;
+    return true;
+}
+
+static void
+build_string_escapes(lex_build_t *b, const scan_lex_decl_t *a)
+{
+    core_string_t name = {0};
+
+    if (!new_set_name(b, a, "string-escapes",
+                      &b->string_escape_set_index, &name)) {
         return;
     }
 
@@ -809,21 +810,7 @@ build_string_escapes(lex_build_t *b, const scan_lex_decl_t *a)
                     append_error_origin(b, a->source_origin, CORE_STRING_STATIC("declared in"));
                 }
                 if (removed) {
-                    size_t length = 0;
-                    for (size_t k = 0; k < 128; k++) {
-                        length += keep[k];
-                    }
-                    char *data = core_alloc_size(1, length + 1);
-                    size_t at = 0;
-                    for (size_t k = 0; k < 128; k++) {
-                        if (keep[k]) {
-                            data[at++] = (char)k;
-                        }
-                    }
-                    core_string_t simple = {.data = data,
-                                            .u8_bytes = length};
-                    core_list_push(b->generated_strings, simple);
-                    prototype.simple_escapes = simple;
+                    prototype.simple_escapes = ascii_set_string(b, keep);
                 }
             }
         }
@@ -1076,44 +1063,23 @@ build_string_family(lex_build_t *b, const scan_lex_decl_t *a)
     const scan_lex_escape_t *escape_rules = b->err.data
         ? nullptr : own_escape_rules(b, &escapes);
 
-    for (size_t p = 0; !b->err.data && p < core_list_len(prefixes); p++) {
-        for (size_t q = 0; q < core_list_len(quotes); q++) {
-            scan_lex_string_t item = prototype;
-
-            item.opener = joined_opener(b, prefixes.data[p], quotes.data[q]);
-            item.closer = quotes.data[q];
-            item.nest_open = quotes.data[q];
-            push_string(b, item, escape_rules,
-                        CORE_STRING_STATIC("string-family"));
-        }
-        for (size_t q = 0; q < core_list_len(pair_opens); q++) {
-            scan_lex_string_t item = prototype;
-
-            item.opener = joined_opener(b, prefixes.data[p],
-                                        pair_opens.data[q]);
-            item.closer = pair_closes.data[q];
-            item.nest_open = pair_opens.data[q];
-            push_string(b, item, escape_rules,
-                        CORE_STRING_STATIC("string-family"));
-        }
+    core_list_t(core_string_t) closes = core_list_new(core_string_t);
+    for (size_t q = 0; q < core_list_len(quotes); q++)
+        core_list_push(closes, quotes.data[q]);
+    for (size_t q = 0; q < core_list_len(pair_opens); q++) {
+        core_list_push(quotes, pair_opens.data[q]);
+        core_list_push(closes, pair_closes.data[q]);
     }
-
-    if (plain) {
+    size_t forms = core_list_len(prefixes) + (plain ? 1 : 0);
+    for (size_t p = 0; !b->err.data && p < forms; p++) {
         for (size_t q = 0; !b->err.data && q < core_list_len(quotes); q++) {
             scan_lex_string_t item = prototype;
 
-            item.opener = quotes.data[q];
-            item.closer = quotes.data[q];
+            item.opener = p < core_list_len(prefixes)
+                ? joined_opener(b, prefixes.data[p], quotes.data[q])
+                : quotes.data[q];
+            item.closer = closes.data[q];
             item.nest_open = quotes.data[q];
-            push_string(b, item, escape_rules,
-                        CORE_STRING_STATIC("string-family"));
-        }
-        for (size_t q = 0; !b->err.data && q < core_list_len(pair_opens); q++) {
-            scan_lex_string_t item = prototype;
-
-            item.opener = pair_opens.data[q];
-            item.closer = pair_closes.data[q];
-            item.nest_open = pair_opens.data[q];
             push_string(b, item, escape_rules,
                         CORE_STRING_STATIC("string-family"));
         }
@@ -1121,6 +1087,7 @@ build_string_family(lex_build_t *b, const scan_lex_decl_t *a)
 
     core_list_free(prefixes);
     core_list_free(quotes);
+    core_list_free(closes);
     core_list_free(pair_opens);
     core_list_free(pair_closes);
     core_list_free(escapes);
@@ -1175,20 +1142,35 @@ number_suffix_set(lex_build_t *b, core_string_t name)
 }
 
 static void
-build_number_suffixes(lex_build_t *b, const scan_lex_decl_t *a)
+add_suffix(lex_build_t *b, lex_number_suffix_set_t *set,
+           scan_lex_suffix_t suffix, bool inherited)
 {
-    core_string_t name = positional(&a->lex_opts, 0);
-
-    if (!name.data || !name.u8_bytes) {
-        oops(b, "number-suffixes", CORE_STRING_STATIC("name"));
+    for (size_t j = 0; j < set->suffixes.len; j++) {
+        scan_lex_suffix_t *have = &set->suffixes.data[j];
+        if (!core_string_eq(have->suffix, suffix.suffix)) continue;
+        if ((!core_string_eq(have->tok, suffix.tok)
+             || have->forms != suffix.forms) && !b->err.data) {
+            set_errf(b,
+                     inherited
+                         ? "@lex-number-suffixes: package '%.*s' "
+                           "inherits conflicting suffix '%.*s'"
+                         : "@lex-number-suffixes: package '%.*s' "
+                           "redefines suffix '%.*s' incompatibly",
+                     (int)set->name.u8_bytes, set->name.data,
+                     (int)suffix.suffix.u8_bytes, suffix.suffix.data);
+        }
         return;
     }
-    if (number_suffix_set(b, name)) {
-        if (!b->err.data) {
-            set_errf(b,
-                     "@lex-number-suffixes: duplicate set '%.*s'",
-                     (int)name.u8_bytes, name.data);
-        }
+    core_list_push(set->suffixes, suffix);
+}
+
+static void
+build_number_suffixes(lex_build_t *b, const scan_lex_decl_t *a)
+{
+    core_string_t name = {0};
+
+    if (!new_set_name(b, a, "number-suffixes",
+                      &b->number_suffix_set_index, &name)) {
         return;
     }
 
@@ -1205,59 +1187,14 @@ build_number_suffixes(lex_build_t *b, const scan_lex_decl_t *a)
             continue;
         }
         if (named(o, "suffix")) {
-            scan_lex_suffix_t suffix = number_suffix_option(b, o);
-            bool found = false;
-            for (size_t j = 0; j < set.suffixes.len; j++) {
-                if (!core_string_eq(set.suffixes.data[j].suffix,
-                                    suffix.suffix)) {
-                    continue;
-                }
-                found = true;
-                if ((!core_string_eq(set.suffixes.data[j].tok, suffix.tok)
-                     || set.suffixes.data[j].forms != suffix.forms)
-                    && !b->err.data) {
-                    set_errf(b,
-                             "@lex-number-suffixes: package '%.*s' "
-                             "redefines suffix '%.*s' incompatibly",
-                             (int)name.u8_bytes, name.data,
-                             (int)suffix.suffix.u8_bytes,
-                             suffix.suffix.data);
-                }
-                break;
-            }
-            if (!found) {
-                core_list_push(set.suffixes, suffix);
-            }
+            add_suffix(b, &set, number_suffix_option(b, o), false);
         }
         else if (named(o, "use")) {
             for (size_t j = 0; j < o->args.len; j++) {
                 lex_number_suffix_set_t *base
                     = number_suffix_set(b, o->args.data[j]);
                 for (size_t k = 0; base && k < base->suffixes.len; k++) {
-                    scan_lex_suffix_t suffix = base->suffixes.data[k];
-                    bool found = false;
-                    for (size_t m = 0; m < set.suffixes.len; m++) {
-                        if (!core_string_eq(set.suffixes.data[m].suffix,
-                                            suffix.suffix)) {
-                            continue;
-                        }
-                        found = true;
-                        if ((!core_string_eq(set.suffixes.data[m].tok,
-                                             suffix.tok)
-                             || set.suffixes.data[m].forms != suffix.forms)
-                            && !b->err.data) {
-                            set_errf(b,
-                                     "@lex-number-suffixes: package '%.*s' "
-                                     "inherits conflicting suffix '%.*s'",
-                                     (int)name.u8_bytes, name.data,
-                                     (int)suffix.suffix.u8_bytes,
-                                     suffix.suffix.data);
-                        }
-                        break;
-                    }
-                    if (!found) {
-                        core_list_push(set.suffixes, suffix);
-                    }
+                    add_suffix(b, &set, base->suffixes.data[k], true);
                 }
             }
         }
@@ -2378,6 +2315,18 @@ operator_remove(lex_build_t *b, core_string_t op, core_string_t origin)
 }
 
 static void
+add_operator(lex_operator_set_t *set, core_dict_t *seen, core_string_t value,
+             core_string_t origin)
+{
+    uintptr_t state = string_map_get(seen, value);
+    if (state == OPERATOR_ACTIVE) return;
+    core_list_push(set->operators, value);
+    core_list_push(set->origins, origin);
+    if (state) core_dict_put(seen, &value, OPERATOR_ACTIVE);
+    else string_map_put_new(seen, value, OPERATOR_ACTIVE);
+}
+
+static void
 build_operator_set(lex_build_t *b, const scan_lex_decl_t *a)
 {
     core_string_t name = positional(&a->lex_opts, 0);
@@ -2411,52 +2360,20 @@ build_operator_set(lex_build_t *b, const scan_lex_decl_t *a)
 
         if (!o->name.data) {
             core_string_t value = arg(o, 0);
-            uintptr_t state = string_map_get(&seen, value);
-            if (positional_ix++ && value.data && state != OPERATOR_ACTIVE) {
-                core_list_push(set.operators, value);
-                core_list_push(set.origins, a->source_origin);
-                if (state) {
-                    core_dict_put(&seen, &value, OPERATOR_ACTIVE);
-                }
-                else {
-                    string_map_put_new(&seen, value, OPERATOR_ACTIVE);
-                }
-            }
+            if (positional_ix++ && value.data)
+                add_operator(&set, &seen, value, a->source_origin);
         }
         else if (named(o, "use")) {
             for (size_t j = 0; j < core_list_len(o->args); j++) {
                 lex_operator_set_t *base = operator_set(b, o->args.data[j]);
-                for (size_t k = 0; base && k < base->operators.len; k++) {
-                    core_string_t value = base->operators.data[k];
-                    uintptr_t state = string_map_get(&seen, value);
-                    if (state != OPERATOR_ACTIVE) {
-                        core_list_push(set.operators, value);
-                        core_list_push(set.origins, base->origins.data[k]);
-                        if (state) {
-                            core_dict_put(&seen, &value, OPERATOR_ACTIVE);
-                        }
-                        else {
-                            string_map_put_new(&seen, value, OPERATOR_ACTIVE);
-                        }
-                    }
-                }
+                for (size_t k = 0; base && k < base->operators.len; k++)
+                    add_operator(&set, &seen, base->operators.data[k],
+                                 base->origins.data[k]);
             }
         }
         else if (named(o, "add")) {
-            for (size_t j = 0; j < core_list_len(o->args); j++) {
-                core_string_t value = o->args.data[j];
-                uintptr_t state = string_map_get(&seen, value);
-                if (state != OPERATOR_ACTIVE) {
-                    core_list_push(set.operators, value);
-                    core_list_push(set.origins, a->source_origin);
-                    if (state) {
-                        core_dict_put(&seen, &value, OPERATOR_ACTIVE);
-                    }
-                    else {
-                        string_map_put_new(&seen, value, OPERATOR_ACTIVE);
-                    }
-                }
-            }
+            for (size_t j = 0; j < core_list_len(o->args); j++)
+                add_operator(&set, &seen, o->args.data[j], a->source_origin);
         }
         else if (named(o, "remove")) {
             for (size_t j = 0; j < core_list_len(o->args); j++) {
@@ -2850,19 +2767,8 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
 
     lex_build_t *b = core_alloc(lex_build_t);
 
-    core_dict_init_string(&b->operator_set_index);
-    core_dict_init_string(&b->operator_set_declarations);
-    core_dict_init_string(&b->operator_state);
-    core_dict_init_string(&b->operator_index);
-    core_dict_init_string(&b->soft_keyword_index);
-    core_dict_init_string(&b->string_openers);
-    core_dict_init_string(&b->number_prefixes);
-    core_dict_init_string(&b->number_suffix_set_index);
-    core_dict_init_string(&b->number_suffix_set_declarations);
-    core_dict_init_string(&b->string_escape_set_index);
-    core_dict_init_string(&b->string_escape_set_declarations);
-    core_dict_init_string(&b->heredoc_header_index);
-    core_dict_init_string(&b->identifier_profile_index);
+    for (size_t i = 0; i < sizeof(string_maps) / sizeof(*string_maps); i++)
+        core_dict_init_string((core_dict_t *)((char *)b + string_maps[i]));
 
     b->spec.name = scan_grammar_tokenizer(g);
 
