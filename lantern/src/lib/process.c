@@ -259,42 +259,22 @@ write_pipe(LPVOID raw)
     return 0;
 }
 
-int
-core_process_capture(char *const *arguments, const void *input,
-                     size_t input_bytes, core_buffer_t *out,
-                     core_buffer_t *err, core_process_status_t *status)
+static int
+capture_pipe(int fds[2])
 {
-    if (!arguments || !arguments[0] || !out || !err || !status)
-        return EINVAL;
-    int pipes[3][2];
-    for (int i = 0; i < 3; i++) {
-        if (_pipe(pipes[i], 65536, _O_BINARY | _O_NOINHERIT)) {
-            int error = errno;
-            for (int j = 0; j < i; j++) {
-                _close(pipes[j][0]);
-                _close(pipes[j][1]);
-            }
-            return error;
-        }
-    }
-    core_process_redirect_t redirects[3] = {
-        {0, pipes[0][0]}, {1, pipes[1][1]}, {2, pipes[2][1]},
-    };
-    core_process_spec_t spec = {
-        .arguments = arguments, .search_path = true,
-        .redirects = redirects, .redirect_count = 3,
-    };
-    core_process_t child;
-    int error = core_process_start(&spec, &child);
-    _close(pipes[0][0]);
-    _close(pipes[1][1]);
-    _close(pipes[2][1]);
-    if (error) {
-        _close(pipes[0][1]);
-        _close(pipes[1][0]);
-        _close(pipes[2][0]);
-        return error;
-    }
+    return _pipe(fds, 65536, _O_BINARY | _O_NOINHERIT) ? errno : 0;
+}
+
+static void
+capture_close(int fd)
+{
+    _close(fd);
+}
+
+static void
+pump_capture(int pipes[3][2], const void *input, size_t input_bytes,
+             core_buffer_t *out, core_buffer_t *err)
+{
     pipe_job_t writer = {
         .fd = pipes[0][1], .input = input, .input_bytes = input_bytes,
     };
@@ -314,7 +294,6 @@ core_process_capture(char *const *arguments, const void *input,
         }
     _close(pipes[1][0]);
     _close(pipes[2][0]);
-    return core_process_wait(child, status) ? 0 : ECHILD;
 }
 
 #else
@@ -467,44 +446,25 @@ drain(int fd, core_buffer_t *into)
     return got < 0 && errno == EINTR;
 }
 
-int
-core_process_capture(char *const *arguments, const void *input,
-                     size_t input_bytes, core_buffer_t *out,
-                     core_buffer_t *err, core_process_status_t *status)
+static int
+capture_pipe(int fds[2])
 {
-    if (!arguments || !arguments[0] || !out || !err || !status)
-        return EINVAL;
-    int pipes[3][2];
-    for (int i = 0; i < 3; i++) {
-        if (pipe(pipes[i])) {
-            int error = errno;
-            for (int j = 0; j < i; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
-            }
-            return error;
-        }
-        fcntl(pipes[i][0], F_SETFD, FD_CLOEXEC);
-        fcntl(pipes[i][1], F_SETFD, FD_CLOEXEC);
-    }
-    core_process_redirect_t redirects[3] = {
-        {0, pipes[0][0]}, {1, pipes[1][1]}, {2, pipes[2][1]},
-    };
-    core_process_spec_t spec = {
-        .arguments = arguments, .search_path = true,
-        .redirects = redirects, .redirect_count = 3,
-    };
-    core_process_t child;
-    int error = core_process_start(&spec, &child);
-    close(pipes[0][0]);
-    close(pipes[1][1]);
-    close(pipes[2][1]);
-    if (error) {
-        close(pipes[0][1]);
-        close(pipes[1][0]);
-        close(pipes[2][0]);
-        return error;
-    }
+    if (pipe(fds)) return errno;
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    return 0;
+}
+
+static void
+capture_close(int fd)
+{
+    close(fd);
+}
+
+static void
+pump_capture(int pipes[3][2], const void *input, size_t input_bytes,
+             core_buffer_t *out, core_buffer_t *err)
+{
     fcntl(pipes[0][1], F_SETFL, O_NONBLOCK);
     core_buffer_t *buffers[2] = {out, err};
     struct pollfd fds[3] = {
@@ -538,6 +498,43 @@ core_process_capture(char *const *arguments, const void *input,
     }
     for (int i = 0; i < 3; i++)
         if (fds[i].fd >= 0) close(fds[i].fd);
-    return core_process_wait(child, status) ? 0 : ECHILD;
 }
 #endif
+
+int
+core_process_capture(char *const *arguments, const void *input,
+                     size_t input_bytes, core_buffer_t *out,
+                     core_buffer_t *err, core_process_status_t *status)
+{
+    if (!arguments || !arguments[0] || !out || !err || !status)
+        return EINVAL;
+    int pipes[3][2];
+    for (int i = 0; i < 3; i++) {
+        int error = capture_pipe(pipes[i]);
+        for (int j = 0; error && j < i; j++) {
+            capture_close(pipes[j][0]);
+            capture_close(pipes[j][1]);
+        }
+        if (error) return error;
+    }
+    core_process_redirect_t redirects[3] = {
+        {0, pipes[0][0]}, {1, pipes[1][1]}, {2, pipes[2][1]},
+    };
+    core_process_spec_t spec = {
+        .arguments = arguments, .search_path = true,
+        .redirects = redirects, .redirect_count = 3,
+    };
+    core_process_t child;
+    int error = core_process_start(&spec, &child);
+    capture_close(pipes[0][0]);
+    capture_close(pipes[1][1]);
+    capture_close(pipes[2][1]);
+    if (error) {
+        capture_close(pipes[0][1]);
+        capture_close(pipes[1][0]);
+        capture_close(pipes[2][0]);
+        return error;
+    }
+    pump_capture(pipes, input, input_bytes, out, err);
+    return core_process_wait(child, status) ? 0 : ECHILD;
+}

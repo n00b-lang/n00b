@@ -69,13 +69,6 @@ ed35caddae864d5f	2	pending	lantern/src/lib/object_emit_coff.c
 85db7b3e036ddd48	2	pending	lantern/src/lib/object_section.c
 91bc33e2401dcc1c	2	pending	lantern/src/lib/object_section.c
 e383bd1a8aa25a49	2	pending	lantern/src/lib/object_section.c
-1a74bbf240d0ab12	2	pending	lantern/src/lib/process.c
-3d3cbbcbfbba63db	2	pending	lantern/src/lib/process.c
-b14946e18798a103	2	pending	lantern/src/lib/process.c
-d583c486c7c3ac24	2	pending	lantern/src/lib/process.c
-dda61176666902ca	2	pending	lantern/src/lib/process.c
-f0d064ce657a051b	2	pending	lantern/src/lib/process.c
-f2bf1507fc02fb18	2	pending	lantern/src/lib/process.c
 041fab060a93644b	2	pending	lantern/src/parse/ambiguity.c
 3d1b0cfc81349c01	2	pending	lantern/src/parse/ambiguity.c
 5e2895f36784008f	2	pending	lantern/src/parse/ambiguity.c
