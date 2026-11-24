@@ -281,6 +281,49 @@ static bool is_bnf_hws(core_codepoint_t cp, void *ctx) {
   return cp == ' ' || cp == '\t';
 }
 
+static bool is_bnf_digit(core_codepoint_t cp, void *ctx) {
+  (void)ctx;
+  return cp >= '0' && cp <= '9';
+}
+
+static bool is_bnf_class(core_codepoint_t cp, void *ctx) {
+  (void)ctx;
+  return (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_';
+}
+
+static bool is_bnf_word(core_codepoint_t cp, void *ctx) {
+  return is_bnf_class(cp, ctx) || is_bnf_digit(cp, ctx);
+}
+
+static bool is_bnf_name(core_codepoint_t cp, void *ctx) {
+  return is_bnf_word(cp, ctx) || cp == '-';
+}
+
+static bool is_bnf_angle_name(core_codepoint_t cp, void *ctx) {
+  return is_bnf_name(cp, ctx) || cp == ',';
+}
+
+static bool emit_run(parse_scanner_t *s, int32_t tid,
+                     scan_cp_predicate_fn pred) {
+  scan_skip_while(s, pred);
+  scan_emit_owned(s, tid, core_option_set(core_string_t, scan_extract(s)));
+  return true;
+}
+
+static core_string_t scan_quoted(parse_scanner_t *s, core_codepoint_t quote) {
+  scan_advance(s);
+  scan_mark(s);
+  while (!scan_at_eof(s) && scan_peek(s, 0) != quote &&
+         scan_peek(s, 0) != '\n') {
+    scan_advance(s);
+  }
+  core_string_t val = scan_extract(s);
+  if (!scan_at_eof(s) && scan_peek(s, 0) == quote) {
+    scan_advance(s);
+  }
+  return val;
+}
+
 static bool bnf_scan(parse_scanner_t *s) {
   bool *in_angle = (bool *)s->user_state;
 
@@ -345,75 +388,21 @@ static bool bnf_scan(parse_scanner_t *s) {
     core_codepoint_t next = scan_peek(s, 0);
 
     if (next == '"' || next == '\'') {
-      core_codepoint_t quote = next;
-      scan_advance(s);
-      scan_mark(s);
-
-      while (!scan_at_eof(s)) {
-        core_codepoint_t c = scan_peek(s, 0);
-
-        if (c == quote || c == '\n') {
-          break;
-        }
-
-        scan_advance(s);
-      }
-
-      core_string_t val = scan_extract(s);
-
-      if (!scan_at_eof(s) && scan_peek(s, 0) == quote) {
-        scan_advance(s);
-      }
-
       scan_emit_owned(s, BNF_TOK_TOKEN_LIT,
-                      core_option_set(core_string_t, val));
+                      core_option_set(core_string_t, scan_quoted(s, next)));
       return true;
     }
 
-    if ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
-        next == '_') {
+    if (is_bnf_class(next, nullptr)) {
       scan_mark(s);
-
-      while (!scan_at_eof(s)) {
-        core_codepoint_t c = scan_peek(s, 0);
-
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') || c == '_')) {
-          break;
-        }
-
-        scan_advance(s);
-      }
-
-      core_string_t val = scan_extract(s);
-      scan_emit_owned(s, BNF_TOK_TOKEN_TYPE,
-                      core_option_set(core_string_t, val));
-      return true;
+      return emit_run(s, BNF_TOK_TOKEN_TYPE, is_bnf_word);
     }
 
     return true;
   }
 
   if (ch == '"' || ch == '\'') {
-    core_codepoint_t quote = ch;
-    scan_advance(s);
-    scan_mark(s);
-
-    while (!scan_at_eof(s)) {
-      core_codepoint_t c = scan_peek(s, 0);
-
-      if (c == quote || c == '\n') {
-        break;
-      }
-
-      scan_advance(s);
-    }
-
-    core_string_t val = scan_extract(s);
-
-    if (!scan_at_eof(s) && scan_peek(s, 0) == quote) {
-      scan_advance(s);
-    }
+    core_string_t val = scan_quoted(s, ch);
 
     if (val.u8_bytes == 0) {
       size_t at = bnf_empty_lit.len;
@@ -436,60 +425,19 @@ static bool bnf_scan(parse_scanner_t *s) {
       scan_mark(s);
       scan_advance(s);
       scan_advance(s);
-
-      while (!scan_at_eof(s)) {
-        core_codepoint_t c = scan_peek(s, 0);
-
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_')) {
-          break;
-        }
-
-        scan_advance(s);
-      }
-
-      core_string_t val = scan_extract(s);
-      scan_emit_owned(s, BNF_TOK_CLASS, core_option_set(core_string_t, val));
-      return true;
+      return emit_run(s, BNF_TOK_CLASS, is_bnf_class);
     }
   }
 
-  if (ch >= '0' && ch <= '9') {
+  if (is_bnf_digit(ch, nullptr)) {
     scan_mark(s);
-
-    while (!scan_at_eof(s)) {
-      core_codepoint_t c = scan_peek(s, 0);
-
-      if (c < '0' || c > '9') {
-        break;
-      }
-
-      scan_advance(s);
-    }
-
-    core_string_t val = scan_extract(s);
-
-    scan_emit_owned(s, BNF_TOK_INT, core_option_set(core_string_t, val));
-    return true;
+    return emit_run(s, BNF_TOK_INT, is_bnf_digit);
   }
 
-  if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_') {
+  if (is_bnf_class(ch, nullptr)) {
     scan_mark(s);
-
-    while (!scan_at_eof(s)) {
-      core_codepoint_t c = scan_peek(s, 0);
-
-      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-            (*in_angle && c == ','))) {
-        break;
-      }
-
-      scan_advance(s);
-    }
-
-    core_string_t val = scan_extract(s);
-    scan_emit_owned(s, BNF_TOK_NAME, core_option_set(core_string_t, val));
-    return true;
+    return emit_run(s, BNF_TOK_NAME,
+                    *in_angle ? is_bnf_angle_name : is_bnf_name);
   }
 
   scan_mark(s);
@@ -524,22 +472,9 @@ static bool bnf_scan(parse_scanner_t *s) {
   if (ch == '$') {
     core_codepoint_t d = scan_peek(s, 0);
 
-    if (d >= '0' && d <= '9') {
+    if (is_bnf_digit(d, nullptr)) {
       scan_mark(s);
-
-      while (!scan_at_eof(s)) {
-        core_codepoint_t c = scan_peek(s, 0);
-
-        if (c < '0' || c > '9') {
-          break;
-        }
-
-        scan_advance(s);
-      }
-
-      core_string_t val = scan_extract(s);
-      scan_emit_owned(s, BNF_TOK_DOLLAR, core_option_set(core_string_t, val));
-      return true;
+      return emit_run(s, BNF_TOK_DOLLAR, is_bnf_digit);
     }
 
     scan_emit_marked(s, BNF_TOK_DOLLAR);
@@ -744,8 +679,16 @@ static void *bnf_walk_item(parse_nt_node_t *pn, void *children, void *thunk) {
   }
 }
 
-static void *bnf_walk_list(parse_nt_node_t *pn, void *children, void *thunk) {
-  (void)thunk;
+static bnf_list_t *take_list(bnf_result_t *r) {
+  bnf_list_t *list = r ? (bnf_list_t *)r->data : slist_new();
+  if (r) {
+    core_free(r);
+  }
+  return list;
+}
+
+static void *walk_cons(parse_nt_node_t *pn, void *children, size_t rest,
+                       bool single) {
   void **kids = (void **)children;
 
   if (!kids) {
@@ -756,47 +699,27 @@ static void *bnf_walk_list(parse_nt_node_t *pn, void *children, void *thunk) {
 
   if (pn->rule_index == 0) {
     result = slist_new();
-    slist_push(result, kids[0]);
-  } else {
-    bnf_result_t *list_r = (bnf_result_t *)kids[1];
-    result = list_r ? (bnf_list_t *)list_r->data : slist_new();
-    slist_prepend(result, kids[0]);
-
-    if (list_r) {
-      core_free(list_r);
+    if (single) {
+      slist_push(result, kids[0]);
     }
+  } else {
+    result = take_list((bnf_result_t *)kids[rest]);
+    slist_prepend(result, kids[0]);
   }
 
   core_free(kids);
   return bnf_result(BNF_LIST, result);
 }
 
+static void *bnf_walk_list(parse_nt_node_t *pn, void *children, void *thunk) {
+  (void)thunk;
+  return walk_cons(pn, children, 1, true);
+}
+
 static void *bnf_walk_expression(parse_nt_node_t *pn, void *children,
                                  void *thunk) {
   (void)thunk;
-  void **kids = (void **)children;
-
-  if (!kids) {
-    return bnf_result(BNF_LIST, slist_new());
-  }
-
-  bnf_list_t *result;
-
-  if (pn->rule_index == 0) {
-    result = slist_new();
-    slist_push(result, kids[0]);
-  } else {
-    bnf_result_t *expr_r = (bnf_result_t *)kids[2];
-    result = expr_r ? (bnf_list_t *)expr_r->data : slist_new();
-    slist_prepend(result, kids[0]);
-
-    if (expr_r) {
-      core_free(expr_r);
-    }
-  }
-
-  core_free(kids);
-  return bnf_result(BNF_LIST, result);
+  return walk_cons(pn, children, 2, true);
 }
 
 static const int64_t bnf_arg_excluded[] = {
@@ -883,28 +806,19 @@ static void *bnf_walk_annotation(parse_nt_node_t *pn, void *children,
 static void *bnf_walk_annotations(parse_nt_node_t *pn, void *children,
                                   void *thunk) {
   (void)thunk;
-  void **kids = (void **)children;
+  return walk_cons(pn, children, 1, false);
+}
 
-  if (!kids) {
-    return bnf_result(BNF_LIST, slist_new());
-  }
-
-  bnf_list_t *result;
-
-  if (pn->rule_index == 0) {
-    result = slist_new();
-  } else {
-    bnf_result_t *rest_r = (bnf_result_t *)kids[1];
-    result = rest_r ? (bnf_list_t *)rest_r->data : slist_new();
-    slist_prepend(result, kids[0]);
-
-    if (rest_r) {
-      core_free(rest_r);
-    }
-  }
-
-  core_free(kids);
-  return bnf_result(BNF_LIST, result);
+static bnf_result_t *annotation_rule(void *annotation) {
+  bnf_list_t *annot_list = slist_new();
+  slist_push(annot_list, annotation);
+  core_string_t *empty = core_alloc(core_string_t);
+  *empty = core_string_empty();
+  bnf_list_t *triple = slist_new();
+  slist_push(triple, bnf_result(BNF_NAME, empty));
+  slist_push(triple, nullptr);
+  slist_push(triple, bnf_result(BNF_LIST, annot_list));
+  return bnf_result(BNF_PAIR, triple);
 }
 
 static void *bnf_walk_rule(parse_nt_node_t *pn, void *children, void *thunk) {
@@ -948,58 +862,21 @@ static void *bnf_walk_syntax(parse_nt_node_t *pn, void *children, void *thunk) {
     if (kids[0])
       slist_push(result, kids[0]);
   } else if (pn->rule_index == 1) {
-    bnf_result_t *syntax_r = (bnf_result_t *)kids[1];
-    result = syntax_r ? (bnf_list_t *)syntax_r->data : slist_new();
+    result = take_list((bnf_result_t *)kids[1]);
     if (kids[0])
       slist_prepend(result, kids[0]);
-    if (syntax_r)
-      core_free(syntax_r);
   } else if (pn->rule_index == 2) {
-    bnf_result_t *syntax_r = (bnf_result_t *)kids[1];
-    result = syntax_r ? (bnf_list_t *)syntax_r->data : slist_new();
-    if (syntax_r)
-      core_free(syntax_r);
+    result = take_list((bnf_result_t *)kids[1]);
   } else if (pn->rule_index == 3) {
     result = slist_new();
   } else if (pn->rule_index == 4) {
-    bnf_result_t *syntax_r = (bnf_result_t *)kids[2];
-    result = syntax_r ? (bnf_list_t *)syntax_r->data : slist_new();
-    if (syntax_r)
-      core_free(syntax_r);
-
-    if (kids[0]) {
-      bnf_list_t *annot_list = slist_new();
-      slist_push(annot_list, kids[0]);
-      bnf_result_t *annots_r = bnf_result(BNF_LIST, annot_list);
-
-      bnf_list_t *triple = slist_new();
-      {
-        core_string_t *empty = core_alloc(core_string_t);
-        *empty = core_string_empty();
-        slist_push(triple, bnf_result(BNF_NAME, empty));
-      }
-      slist_push(triple, nullptr);
-      slist_push(triple, annots_r);
-      slist_prepend(result, bnf_result(BNF_PAIR, triple));
-    }
+    result = take_list((bnf_result_t *)kids[2]);
+    if (kids[0])
+      slist_prepend(result, annotation_rule(kids[0]));
   } else {
     result = slist_new();
-
-    if (kids[0]) {
-      bnf_list_t *annot_list = slist_new();
-      slist_push(annot_list, kids[0]);
-      bnf_result_t *annots_r = bnf_result(BNF_LIST, annot_list);
-
-      bnf_list_t *triple = slist_new();
-      {
-        core_string_t *empty = core_alloc(core_string_t);
-        *empty = core_string_empty();
-        slist_push(triple, bnf_result(BNF_NAME, empty));
-      }
-      slist_push(triple, nullptr);
-      slist_push(triple, annots_r);
-      slist_push(result, bnf_result(BNF_PAIR, triple));
-    }
+    if (kids[0])
+      slist_push(result, annotation_rule(kids[0]));
   }
 
   core_free(kids);
