@@ -62,6 +62,7 @@ bool n00bb_overload_target(const n00bb_dispatch_index_t *index,
                            const ir_instr_t *at,
                            n00bb_dispatch_target_t *target);
 int n00bb_pattern_order(th_type *first, th_type *second);
+const core_string_t *n00bb_numeric_family(core_string_t name, size_t *count);
 bool n00bb_assign_target(const n00bb_dispatch_index_t *index,
                          th_type *receiver, core_string_t method,
                          n00bb_dispatch_target_t *target);

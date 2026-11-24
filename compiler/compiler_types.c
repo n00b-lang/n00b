@@ -2467,6 +2467,20 @@ static int compare_fit(ir_module_t *module, overload_fit_t first,
     return 0;
 }
 
+const core_string_t *n00bb_numeric_family(core_string_t name, size_t *count)
+{
+    if (core_string_eq(name, CORE_STRING_STATIC("int"))) {
+        *count = sizeof(integer_names) / sizeof(*integer_names);
+        return integer_names;
+    }
+    if (core_string_eq(name, CORE_STRING_STATIC("float"))) {
+        *count = sizeof(float_names) / sizeof(*float_names);
+        return float_names;
+    }
+    *count = 0;
+    return nullptr;
+}
+
 int n00bb_pattern_order(th_type *first, th_type *second)
 {
     bool forward  = th_env_type_pattern_subsumes(second, first);
