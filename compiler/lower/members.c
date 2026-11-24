@@ -80,6 +80,8 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                    N00BB_ARGS(ARG_TEXT(named->name)));
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
+    if (named && named->kind == PARSE_SYM_TYPEDEF && named->type)
+        return n00bb_emit_type_literal(context, named->type, span);
     __int128 folded = 0;
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         && n00bb_untyped_integer_const(visit->grammar,
