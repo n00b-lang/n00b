@@ -119,12 +119,15 @@ linked)
         "${CC:-cc}" -c "$source" -o "$object"
         set -- "$@" --link-object "$object"
     done
-    "$compiler" build "$@" \
-        --native-root ffi_linked.dispatch_doubler=n00b_callback_table_dispatch_doubler \
-        --output "$tmp/ffi_linked" ffi_linked.n >"$tmp/ffi_linked.log" 2>&1 || {
-        cat "$tmp/ffi_linked.log" >&2
-        exit 1
-    }
+    for pass in first second; do
+        "$compiler" build "$@" \
+            --native-root ffi_linked.dispatch_doubler=n00b_callback_table_dispatch_doubler \
+            --output "$tmp/ffi_linked" ffi_linked.n >"$tmp/ffi_linked.log" 2>&1 || {
+            echo "ffi_linked failed on the $pass build" >&2
+            cat "$tmp/ffi_linked.log" >&2
+            exit 1
+        }
+    done
     "$tmp/ffi_linked" 2>"$tmp/ffi_linked.err" || {
         cat "$tmp/ffi_linked.err" >&2
         exit 1

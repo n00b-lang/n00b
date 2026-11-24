@@ -14256,8 +14256,9 @@ emit_finalizer_dispatch(n00bb_llvm_backend_t *backend, const char *name,
         LLVMPositionBuilderAtEnd(builder, body);
         LLVMValueRef payload = LLVMGetParam(bridge, 1);
         th_ctx *types = ir_module_types(function->owner);
-        th_type *self = function->n_params && function->params[0]
-            ? th_resolve(function->params[0]->type) : nullptr;
+        const th_param *parameter = function->type
+            ? th_func_param(th_resolve(function->type), 0) : nullptr;
+        th_type *self = parameter ? th_resolve(parameter->type) : nullptr;
         th_type *referent = self && th_kind_of(self) == TH_INDIRECTION
             ? th_resolve(th_ind_referent(self)) : nullptr;
         th_type *definition = referent && th_kind_of(referent) == TH_NAMED

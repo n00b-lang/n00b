@@ -3281,6 +3281,10 @@ append_link_symbol_base(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     core_buffer_append(key, symbol->name.data, symbol->name.u8_bytes);
 }
 
+static bool encode_overload_identity(n00bb_tu_state_t *state,
+                                     parse_sym_entry_t *symbol,
+                                     core_buffer_t *key);
+
 bool
 append_function_contract_identity(core_translation_unit_t *unit,
                                   parse_sym_entry_t *symbol,
@@ -3309,6 +3313,25 @@ append_function_contract_identity(core_translation_unit_t *unit,
         }
     }
     if (!overloaded) return true;
+    core_string_t identity_key = CORE_STRING_STATIC("n00bb.overload-identity");
+    core_string_t *identity = parse_sym_binding(symbol, identity_key);
+    if (!identity) {
+        core_buffer_t encoded = {0};
+        bool ok = encode_overload_identity(state, symbol, &encoded);
+        identity = ok ? core_alloc(core_string_t) : nullptr;
+        if (identity) *identity = core_string_dup(core_buffer_string(&encoded));
+        core_buffer_release(&encoded);
+        if (!identity || !parse_sym_set_binding(symbol, identity_key, identity))
+            return false;
+    }
+    core_buffer_append(key, identity->data, identity->u8_bytes);
+    return true;
+}
+
+static bool
+encode_overload_identity(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                         core_buffer_t *key)
+{
     th_type *contract = n00bb_symbol_signature(symbol);
     n00bb_declared_where_t *declared = parse_sym_binding(
         canonical_symbol(symbol), N00BB_DECLARED_WHERE_KEY);
