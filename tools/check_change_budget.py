@@ -10,7 +10,8 @@ UNBUDGETED = 30
 GOLDENS = 10
 GOLDEN_SUFFIXES = (".expected", ".out", ".fixed", ".plan", ".golden")
 SOURCE_SUFFIXES = (".writ", ".rs", ".go", ".js", ".ts", ".rb", ".swift", ".kt", ".java", ".cs", ".php", ".lua")
-BUDGET = re.compile(r"^Budget:[ \t]*(\d+)[ \t]*$", re.M)
+BUDGET = re.compile(r"^Budget:[ \t]*(-?\d+)[ \t]*$", re.M)
+BUDGET_LINE = re.compile(r"^Budget:.*$", re.M)
 GOLDENS_TRAILER = re.compile(r"^Goldens:[ \t]*\S", re.M)
 
 
@@ -53,13 +54,13 @@ def diff_stats(diff):
 
 
 def jj_changes(root, revset):
-    template = 'commit_id ++ "\\x1f" ++ change_id.short(8) ++ "\\x1f" ++ description ++ "\\x1e"'
-    out = run(root, ["jj", "--no-pager", "--color=never", "log", "--no-graph", "-r", revset, "-T", template])
-    for record in out.split("\x1e"):
-        if record.strip():
-            commit, name, description = record.lstrip("\n").split("\x1f", 2)
-            diff = run(root, ["jj", "--no-pager", "--color=never", "diff", "--git", "--context=0", "-r", commit])
-            yield name, description, diff
+    template = '"\\x1d" ++ change_id.short(8) ++ "\\x1f" ++ description ++ "\\x1e"'
+    out = run(root, ["jj", "--no-pager", "--color=never", "log", "--no-graph", "-r", revset, "-T", template,
+                     "--git", "--context=0"])
+    for record in out.split("\x1d")[1:]:
+        header, diff = record.split("\x1e", 1)
+        name, description = header.split("\x1f", 1)
+        yield name, description, diff
 
 
 def git_changes(root, revset):
@@ -75,16 +76,20 @@ def check(name, description, diff):
     budget = int(m.group(1)) if m else None
     title = description.strip().splitlines()[0] if description.strip() else "(no description)"
     problems = []
-    if budget is None and net > UNBUDGETED:
+    if budget is None and BUDGET_LINE.search(description):
+        problems.append(
+            f"has a malformed '{BUDGET_LINE.search(description).group(0)}' trailer; write 'Budget: N' "
+            "with N a whole number of net source lines, negative when the change should remove lines.")
+    elif budget is None and net > UNBUDGETED:
         problems.append(
             f"adds {net} net source lines with no 'Budget: N' trailer. Before writing a change over "
             f"{UNBUDGETED} lines, decide how many net source lines it should need and put 'Budget: N' "
             "on its own line in the description. If the change grew past what the problem needs, cut it "
             "back: extend the function that makes the decision instead of its callers, and drop "
             "stepping-stone code.")
-    elif budget is not None and net > SLACK * budget:
+    elif budget is not None and net > budget + (SLACK - 1) * abs(budget):
         problems.append(
-            f"adds {net} net source lines, over {SLACK} x its budget of {budget}. Shrink the change to "
+            f"adds {net} net source lines, over its budget of {budget} with {SLACK} x slack. Shrink the change to "
             "the budget: reuse the existing central path rather than a parallel one, fix the root cause "
             "once, and remove scope the task did not ask for. Raise the budget only if the original "
             "estimate was wrong, and say why in the description.")
