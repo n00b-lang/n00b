@@ -65,11 +65,6 @@ e89dcc5844131851	2	pending	lantern/src/parse/ambiguity.c
 f9340ad8ca77af49	2	pending	lantern/src/parse/ambiguity.c
 89fafd120c8fa120	2	pending	lantern/src/parse/grammar.c
 e91b0efd275d6bfa	2	pending	lantern/src/parse/grammar.c
-40983e7978d74060	2	pending	lantern/src/parse/tree_print.c
-57220d55a54901f2	2	pending	lantern/src/parse/tree_print.c
-8c08077cf3166366	2	pending	lantern/src/parse/tree_print.c
-d8908090a74ba9d4	2	pending	lantern/src/parse/tree_print.c
-d9dc704384aea56f	2	pending	lantern/src/parse/tree_print.c
 5f4ea07f4b963ed9	2	pending	lantern/src/scanner/lex.c
 697e7971b4cb80ce	2	pending	lantern/src/scanner/lex.c
 73c0b755b0f158c1	2	pending	lantern/src/scanner/lex_analysis.c
