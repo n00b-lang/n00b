@@ -46,10 +46,6 @@ ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 bb3824eb6c2cf166	2	pending	lib/sys/internal/box.n
 dad21f50f28547cd	2	pending	lib/sys/internal/box.n
 70a91b8027fab2c4	2	pending	lib/sys/internal/gc/alloc.n
-069c4ab6c2549ebc	2	pending	lib/sys/internal/gc/box_store.n
-3fb65373c4142fc4	2	pending	lib/sys/internal/gc/box_store.n
-6dca96b676da2fde	2	pending	lib/sys/internal/gc/box_store.n
-7beea8a2dab64d67	2	pending	lib/sys/internal/gc/box_store.n
 5ec641e77fb3be59	2	pending	lib/sys/internal/gc/collect.n
 37b44fe026b480b3	2	pending	lib/sys/internal/gc/frames.n
 06d8f2101c35886b	2	pending	lib/sys/internal/gc/hash.n
