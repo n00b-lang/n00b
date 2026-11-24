@@ -218,24 +218,65 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
     return ok;
 }
 
+typedef struct {
+    th_type *signature;
+    th_type *contract;
+} builtin_fn_t;
+
+static builtin_fn_t
+builtin_fn(th_ctx *types, th_type *nil_type, th_type *signature)
+{
+    return (builtin_fn_t){signature, signature
+        ? th_env_signature_contract(types, signature, nil_type) : nullptr};
+}
+
+static parse_sym_entry_t *
+add_builtin_fn(parse_symtab_t *symtab, th_type *nil_type, core_string_t name,
+               builtin_fn_t fn, core_string_t binding, const void *value)
+{
+    parse_sym_entry_t *symbol = fn.contract ? parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"), name, PARSE_SYM_FUNCTION, nullptr)
+        : nullptr;
+    if (!symbol || (binding.data && !parse_sym_set_binding(symbol, binding,
+            value ? (void *)value : symbol))) return nullptr;
+    symbol->type = fn.signature;
+    symbol->error_type = nil_type;
+    symbol->callable_contract = fn.contract;
+    return symbol;
+}
+
+static parse_sym_entry_t *
+add_builtin(parse_symtab_t *symtab, th_ctx *types, th_type *nil_type,
+            core_string_t name, th_type *signature, core_string_t binding,
+            const void *value)
+{
+    return add_builtin_fn(symtab, nil_type, name,
+        builtin_fn(types, nil_type, signature), binding, value);
+}
+
 static parse_sym_entry_t *
 register_native_signature(parse_symtab_t *symtab, th_ctx *types,
                           th_type *nil_type, core_string_t name,
                           const core_string_t *native_name,
                           th_type *signature)
 {
-    th_type *contract = signature && native_name
-        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
-    parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), name, PARSE_SYM_FUNCTION, nullptr)
-        : nullptr;
-    if (!symbol || !parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.abi.native"),
-            (void *)native_name)) return nullptr;
-    symbol->type = signature;
-    symbol->error_type = nil_type;
-    symbol->callable_contract = contract;
-    return symbol;
+    return native_name ? add_builtin(symtab, types, nil_type, name, signature,
+        CORE_STRING_STATIC("n00bb.abi.native"), native_name) : nullptr;
+}
+
+static th_type *
+builtin_signature(th_ctx *types, th_type *nil_type, th_type *result,
+                  th_type *const *arguments, size_t count)
+{
+    th_param parameters[8];
+    if (!result || !nil_type || count > 8) return nullptr;
+    for (size_t i = 0; i < count; i++) {
+        if (!arguments[i]) return nullptr;
+        parameters[i] = (th_param){.mode = TH_IN, .type = arguments[i]};
+    }
+    return th_func_with_error(types, result, nil_type,
+                              count ? parameters : nullptr, count,
+                              nullptr, nullptr, 0);
 }
 
 static parse_sym_entry_t *
@@ -244,22 +285,9 @@ builtin_native_symbol(parse_symtab_t *symtab, th_ctx *types,
                       th_type *result, th_type *const *arguments,
                       size_t count)
 {
-    th_param *parameters = count
-        ? core_alloc_array(th_param, count) : nullptr;
-    if (count && !parameters) return nullptr;
-    for (size_t i = 0; i < count; i++) {
-        if (!arguments[i]) {
-            core_free(parameters);
-            return nullptr;
-        }
-        parameters[i] = (th_param){.mode = TH_IN, .type = arguments[i]};
-    }
-    th_type *signature = result && nil_type
-        ? th_func_with_error(types, result, nil_type, parameters,
-                             count, nullptr, nullptr, 0) : nullptr;
-    core_free(parameters);
     return register_native_signature(symtab, types, nil_type, name,
-        builtin_native_name(name), signature);
+        builtin_native_name(name),
+        builtin_signature(types, nil_type, result, arguments, count));
 }
 
 static bool
@@ -612,17 +640,9 @@ register_builtin_unsafe_arithmetic(parse_symtab_t *symtab, th_ctx *types,
             ? th_func_with_error(types, value, nil_type, parameters,
                                  entry->unary ? 1 : 2, nullptr, nullptr, 0)
             : nullptr;
-        th_type *contract = signature
-            ? th_env_signature_contract(types, signature, nil_type) : nullptr;
-        parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
-            CORE_STRING_STATIC("builtin"), entry->name,
-            PARSE_SYM_FUNCTION, nullptr) : nullptr;
-        if (!symbol || !parse_sym_set_binding(symbol,
+        if (!add_builtin(symtab, types, nil_type, entry->name, signature,
                 CORE_STRING_STATIC("n00bb.integer.unsafe"), entry))
             return false;
-        symbol->type = signature;
-        symbol->error_type = nil_type;
-        symbol->callable_contract = contract;
     }
     return true;
 }
@@ -634,27 +654,18 @@ register_builtin_bit_counts(parse_symtab_t *symtab, th_ctx *types,
     th_type *uint_type = th_name(types, CORE_STRING_STATIC("uint"));
     th_type *u32_type = th_name(types, CORE_STRING_STATIC("u32"));
     th_param parameter = {.mode = TH_IN, .type = uint_type};
-    th_type *signature = uint_type && u32_type && nil_type
+    builtin_fn_t count = builtin_fn(types, nil_type,
+        uint_type && u32_type && nil_type
         ? th_func_with_error(types, u32_type, nil_type, &parameter, 1,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *contract = signature
-        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
+                             nullptr, nullptr, 0) : nullptr);
     static const core_string_t names[] = {
         CORE_STRING_STATIC("__count_leading_zeros"),
         CORE_STRING_STATIC("__count_trailing_zeros"),
     };
-    if (!contract) return false;
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        parse_sym_entry_t *symbol = parse_symtab_add(symtab,
-            CORE_STRING_STATIC("builtin"), names[i],
-            PARSE_SYM_FUNCTION, nullptr);
-        if (!symbol || !parse_sym_set_binding(symbol,
-                CORE_STRING_STATIC("n00bb.integer.bit_count"), symbol))
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (!add_builtin_fn(symtab, nil_type, names[i], count,
+                CORE_STRING_STATIC("n00bb.integer.bit_count"), nullptr))
             return false;
-        symbol->type = signature;
-        symbol->error_type = nil_type;
-        symbol->callable_contract = contract;
-    }
     return true;
 }
 
@@ -668,118 +679,39 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *addressed_item = th_var(types);
     th_type *reference = addressed_item
         ? th_ind(types, 0, addressed_item) : nullptr;
-    th_param parameters[] = {
-        {.mode = TH_IN, .type = reference},
-        {.mode = TH_IN, .type = offset_type},
-    };
-    th_type *signature = reference && offset_type && nil_type
-        ? th_func_with_error(types, reference, nil_type, parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *contract = signature
-        ? th_env_signature_contract(types, signature, nil_type) : nullptr;
-    parse_sym_entry_t *symbol = contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__gc_byte_offset"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!symbol || !parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.gc.byte_offset"), symbol))
-        return false;
-    symbol->type = signature;
-    symbol->error_type = nil_type;
-    symbol->callable_contract = contract;
-
-    th_type *difference_type = th_name(types, CORE_STRING_STATIC("int"));
-    th_param diff_parameters[] = {
-        {.mode = TH_IN, .type = reference},
-        {.mode = TH_IN, .type = reference},
-    };
-    th_type *diff_signature = difference_type && reference
-        ? th_func_with_error(types, difference_type, nil_type,
-                             diff_parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *diff_contract = diff_signature
-        ? th_env_signature_contract(types, diff_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *diff_symbol = diff_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__gc_byte_diff"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!diff_symbol || !parse_sym_set_binding(diff_symbol,
-            CORE_STRING_STATIC("n00bb.gc.byte_diff"), diff_symbol))
-        return false;
-    diff_symbol->type = diff_signature;
-    diff_symbol->error_type = nil_type;
-    diff_symbol->callable_contract = diff_contract;
-
-    th_param memset_parameters[] = {
-        {.mode = TH_IN, .type = reference},
-        {.mode = TH_IN, .type = byte},
-        {.mode = TH_IN, .type = uint},
-    };
-    th_type *memset_signature = reference && byte && uint
-        ? th_func_with_error(types, nil_type, nil_type, memset_parameters, 3,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *memset_contract = memset_signature
-        ? th_env_signature_contract(types, memset_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *memset_symbol = memset_contract ? parse_symtab_add(
-        symtab, CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__gc_memset"), PARSE_SYM_FUNCTION,
-        nullptr) : nullptr;
-    if (!memset_symbol || !parse_sym_set_binding(memset_symbol,
-            CORE_STRING_STATIC("n00bb.gc.memory"), memset_symbol))
-        return false;
-    memset_symbol->type = memset_signature;
-    memset_symbol->error_type = nil_type;
-    memset_symbol->callable_contract = memset_contract;
-
     th_type *source_item = th_var(types);
     th_type *source_reference = source_item
         ? th_ind(types, 0, source_item) : nullptr;
-    th_param memcpy_parameters[] = {
-        {.mode = TH_IN, .type = reference},
-        {.mode = TH_IN, .type = source_reference},
-        {.mode = TH_IN, .type = uint},
-    };
-    th_type *memcpy_signature = reference && source_reference && uint
-        ? th_func_with_error(types, nil_type, nil_type, memcpy_parameters, 3,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *memcpy_contract = memcpy_signature
-        ? th_env_signature_contract(types, memcpy_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *memcpy_symbol = memcpy_contract ? parse_symtab_add(
-        symtab, CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__gc_memcpy"), PARSE_SYM_FUNCTION,
-        nullptr) : nullptr;
-    if (!memcpy_symbol || !parse_sym_set_binding(memcpy_symbol,
-            CORE_STRING_STATIC("n00bb.gc.memory"), memcpy_symbol))
-        return false;
-    memcpy_symbol->type = memcpy_signature;
-    memcpy_symbol->error_type = nil_type;
-    memcpy_symbol->callable_contract = memcpy_contract;
-
     th_type *volatile_item = th_var(types);
     th_type *volatile_ref = volatile_item
         ? th_ind(types, 0, volatile_item) : nullptr;
-    th_param volatile_parameter = {
-        .mode = TH_IN, .type = volatile_ref,
+    const struct {
+        core_string_t name;
+        core_string_t binding;
+        th_type *result;
+        th_type *arguments[3];
+        size_t count;
+    } memory[] = {
+        {CORE_STRING_STATIC("__gc_byte_offset"),
+         CORE_STRING_STATIC("n00bb.gc.byte_offset"), reference,
+         {reference, offset_type}, 2},
+        {CORE_STRING_STATIC("__gc_byte_diff"),
+         CORE_STRING_STATIC("n00bb.gc.byte_diff"),
+         th_name(types, CORE_STRING_STATIC("int")), {reference, reference}, 2},
+        {CORE_STRING_STATIC("__gc_memset"), CORE_STRING_STATIC("n00bb.gc.memory"),
+         nil_type, {reference, byte, uint}, 3},
+        {CORE_STRING_STATIC("__gc_memcpy"), CORE_STRING_STATIC("n00bb.gc.memory"),
+         nil_type, {reference, source_reference, uint}, 3},
+        {CORE_STRING_STATIC("__volatile_load"),
+         CORE_STRING_STATIC("n00bb.volatile.load"), volatile_item,
+         {volatile_ref}, 1},
     };
-    th_type *volatile_signature = volatile_ref
-        ? th_func_with_error(types, volatile_item, nil_type,
-                             &volatile_parameter, 1, nullptr, nullptr, 0)
-        : nullptr;
-    th_type *volatile_contract = volatile_signature
-        ? th_env_signature_contract(types, volatile_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *volatile_symbol = volatile_contract
-        ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
-            CORE_STRING_STATIC("__volatile_load"), PARSE_SYM_FUNCTION,
-            nullptr) : nullptr;
-    if (!volatile_symbol || !parse_sym_set_binding(volatile_symbol,
-            CORE_STRING_STATIC("n00bb.volatile.load"), volatile_symbol))
-        return false;
-    volatile_symbol->type = volatile_signature;
-    volatile_symbol->error_type = nil_type;
-    volatile_symbol->callable_contract = volatile_contract;
+    for (size_t i = 0; i < sizeof(memory) / sizeof(memory[0]); i++)
+        if (!add_builtin(symtab, types, nil_type, memory[i].name,
+                builtin_signature(types, nil_type, memory[i].result,
+                                  memory[i].arguments, memory[i].count),
+                memory[i].binding, nullptr))
+            return false;
 
     th_type *item = th_var(types);
     th_arg item_arg = {.kind = TH_ARG_TYPE, .type = item};
@@ -798,59 +730,31 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
         {.mode = TH_IN, .type = item},
         {.mode = TH_IN, .type = item},
     };
-    th_type *load_signature = generic_ref
+    builtin_fn_t load = builtin_fn(types, nil_type, generic_ref
         ? th_func_with_error(types, item, nil_type, &load_parameter, 1,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *store_signature = generic_ref
+                             nullptr, nullptr, 0) : nullptr);
+    builtin_fn_t store = builtin_fn(types, nil_type, generic_ref
         ? th_func_with_error(types, nil_type, nil_type, store_parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
+                             nullptr, nullptr, 0) : nullptr);
     th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
     th_type *cas_signature = generic_ref && boolean
         ? th_func_with_error(types, boolean, nil_type, cas_parameters, 3,
                              nullptr, nullptr, 0) : nullptr;
-    th_type *exchange_signature = generic_ref
+    builtin_fn_t exchange = builtin_fn(types, nil_type, generic_ref
         ? th_func_with_error(types, item, nil_type, store_parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *load_contract = load_signature
-        ? th_env_signature_contract(types, load_signature, nil_type) : nullptr;
-    th_type *store_contract = store_signature
-        ? th_env_signature_contract(types, store_signature, nil_type) : nullptr;
-    th_type *cas_contract = cas_signature
-        ? th_env_signature_contract(types, cas_signature, nil_type) : nullptr;
-    th_type *exchange_contract = exchange_signature
-        ? th_env_signature_contract(types, exchange_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *load_symbol = load_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__atomic_load"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    parse_sym_entry_t *store_symbol = store_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__atomic_store"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    parse_sym_entry_t *cas_symbol = cas_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__atomic_compare_exchange"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    parse_sym_entry_t *exchange_symbol = exchange_contract
-        ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
-            CORE_STRING_STATIC("__atomic_exchange"), PARSE_SYM_FUNCTION,
-            nullptr) : nullptr;
-    if (!load_symbol || !store_symbol || !cas_symbol || !exchange_symbol
-        || !parse_sym_set_binding(load_symbol,
-            CORE_STRING_STATIC("n00bb.atomic.load"), load_symbol)
-        || !parse_sym_set_binding(store_symbol,
-            CORE_STRING_STATIC("n00bb.atomic.store"), store_symbol)
-        || !parse_sym_set_binding(cas_symbol,
-            CORE_STRING_STATIC("n00bb.atomic.compare_exchange"),
-            cas_symbol)
-        || !parse_sym_set_binding(exchange_symbol,
-            CORE_STRING_STATIC("n00bb.atomic.exchange"), exchange_symbol))
+                             nullptr, nullptr, 0) : nullptr);
+    if (!add_builtin_fn(symtab, nil_type, CORE_STRING_STATIC("__atomic_load"),
+            load, CORE_STRING_STATIC("n00bb.atomic.load"), nullptr)
+        || !add_builtin_fn(symtab, nil_type,
+            CORE_STRING_STATIC("__atomic_store"), store,
+            CORE_STRING_STATIC("n00bb.atomic.store"), nullptr)
+        || !add_builtin(symtab, types, nil_type,
+            CORE_STRING_STATIC("__atomic_compare_exchange"), cas_signature,
+            CORE_STRING_STATIC("n00bb.atomic.compare_exchange"), nullptr)
+        || !add_builtin_fn(symtab, nil_type,
+            CORE_STRING_STATIC("__atomic_exchange"), exchange,
+            CORE_STRING_STATIC("n00bb.atomic.exchange"), nullptr))
         return false;
-    load_symbol->type = load_signature;
-    load_symbol->error_type = nil_type;
-    load_symbol->callable_contract = load_contract;
-    store_symbol->type = store_signature;
-    store_symbol->error_type = nil_type;
-    store_symbol->callable_contract = store_contract;
     static const core_string_t ordered_access_names[] = {
         CORE_STRING_STATIC("__atomic_load_relaxed"),
         CORE_STRING_STATIC("__atomic_load_acquire"),
@@ -864,24 +768,10 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("n00bb.atomic.store_release"),
     };
     for (size_t i = 0; i < sizeof(ordered_access_names)
-            / sizeof(ordered_access_names[0]); i++) {
-        bool loading = i < 2;
-        parse_sym_entry_t *ordered = parse_symtab_add(symtab,
-            CORE_STRING_STATIC("builtin"), ordered_access_names[i],
-            PARSE_SYM_FUNCTION, nullptr);
-        if (!ordered || !parse_sym_set_binding(ordered,
-                ordered_access_bindings[i], ordered))
+            / sizeof(ordered_access_names[0]); i++)
+        if (!add_builtin_fn(symtab, nil_type, ordered_access_names[i],
+                i < 2 ? load : store, ordered_access_bindings[i], nullptr))
             return false;
-        ordered->type = loading ? load_signature : store_signature;
-        ordered->error_type = nil_type;
-        ordered->callable_contract = loading ? load_contract : store_contract;
-    }
-    cas_symbol->type = cas_signature;
-    cas_symbol->error_type = nil_type;
-    cas_symbol->callable_contract = cas_contract;
-    exchange_symbol->type = exchange_signature;
-    exchange_symbol->error_type = nil_type;
-    exchange_symbol->callable_contract = exchange_contract;
     static const core_string_t atomic_rmw_names[] = {
         CORE_STRING_STATIC("__atomic_fetch_or"),
         CORE_STRING_STATIC("__atomic_fetch_or_release"),
@@ -906,31 +796,17 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     };
     for (size_t i = 0;
          i < sizeof(atomic_rmw_names)
-             / sizeof(atomic_rmw_names[0]); i++) {
-        parse_sym_entry_t *rmw = parse_symtab_add(symtab,
-            CORE_STRING_STATIC("builtin"), atomic_rmw_names[i],
-            PARSE_SYM_FUNCTION, nullptr);
-        if (!rmw || !parse_sym_set_binding(rmw, atomic_rmw_bindings[i],
-                rmw)) return false;
-        rmw->type = exchange_signature;
-        rmw->error_type = nil_type;
-        rmw->callable_contract = exchange_contract;
-    }
-    th_type *fence_signature = nil_type
+             / sizeof(atomic_rmw_names[0]); i++)
+        if (!add_builtin_fn(symtab, nil_type, atomic_rmw_names[i], exchange,
+                atomic_rmw_bindings[i], nullptr))
+            return false;
+    builtin_fn_t fence = builtin_fn(types, nil_type, nil_type
         ? th_func_with_error(types, nil_type, nil_type, nullptr, 0,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *fence_contract = fence_signature
-        ? th_env_signature_contract(types, fence_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *fence = fence_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__gc_signal_fence"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!fence || !parse_sym_set_binding(fence,
-            CORE_STRING_STATIC("n00bb.gc.signal_fence"), fence)) return false;
-    fence->type = fence_signature;
-    fence->error_type = nil_type;
-    fence->callable_contract = fence_contract;
+                             nullptr, nullptr, 0) : nullptr);
+    if (!add_builtin_fn(symtab, nil_type,
+            CORE_STRING_STATIC("__gc_signal_fence"), fence,
+            CORE_STRING_STATIC("n00bb.gc.signal_fence"), nullptr))
+        return false;
     static const struct {
         core_string_t name;
         bool          address;
@@ -940,41 +816,20 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
         {CORE_STRING_STATIC("__stack_pointer"), true},
     };
     th_type *stack_type = th_name(types, CORE_STRING_STATIC("uint"));
-    th_type *stack_signature = stack_type
+    builtin_fn_t stack = builtin_fn(types, nil_type, stack_type
         ? th_func_with_error(types, stack_type, nil_type, nullptr, 0,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *stack_contract = stack_signature
-        ? th_env_signature_contract(types, stack_signature, nil_type)
-        : nullptr;
-    for (size_t i = 0; i < sizeof(machine) / sizeof(machine[0]); i++) {
-        th_type *signature = machine[i].address ? stack_signature
-                                                : fence_signature;
-        th_type *contract = machine[i].address ? stack_contract
-                                               : fence_contract;
-        parse_sym_entry_t *instruction = contract ? parse_symtab_add(symtab,
-            CORE_STRING_STATIC("builtin"), machine[i].name,
-            PARSE_SYM_FUNCTION, nullptr) : nullptr;
-        if (!instruction || !parse_sym_set_binding(instruction,
-                CORE_STRING_STATIC("n00bb.machine"), instruction))
+                             nullptr, nullptr, 0) : nullptr);
+    for (size_t i = 0; i < sizeof(machine) / sizeof(machine[0]); i++)
+        if (!add_builtin_fn(symtab, nil_type, machine[i].name,
+                machine[i].address ? stack : fence,
+                CORE_STRING_STATIC("n00bb.machine"), nullptr))
             return false;
-        instruction->type = signature;
-        instruction->error_type = nil_type;
-        instruction->callable_contract = contract;
-    }
     th_type *comptime_signature = boolean
         ? th_func_with_error(types, boolean, nil_type, nullptr, 0,
                              nullptr, nullptr, 0) : nullptr;
-    th_type *comptime_contract = comptime_signature
-        ? th_env_signature_contract(types, comptime_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *comptime = comptime_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("comptime"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!comptime || !parse_sym_set_binding(comptime,
-            CORE_STRING_STATIC("n00bb.comptime"), comptime)) return false;
-    comptime->type = comptime_signature;
-    comptime->error_type = nil_type;
-    comptime->callable_contract = comptime_contract;
+    if (!add_builtin(symtab, types, nil_type, CORE_STRING_STATIC("comptime"),
+            comptime_signature, CORE_STRING_STATIC("n00bb.comptime"),
+            nullptr)) return false;
     th_type *prefetch_item = th_var(types);
     th_type *prefetch_ref = prefetch_item
         ? th_ind(types, 0, prefetch_item) : nullptr;
@@ -982,17 +837,9 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *prefetch_signature = prefetch_ref
         ? th_func_with_error(types, nil_type, nil_type,
             &prefetch_parameter, 1, nullptr, nullptr, 0) : nullptr;
-    th_type *prefetch_contract = prefetch_signature
-        ? th_env_signature_contract(types, prefetch_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *prefetch = prefetch_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__gc_prefetch"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!prefetch || !parse_sym_set_binding(prefetch,
-            CORE_STRING_STATIC("n00bb.gc.prefetch"), prefetch)) return false;
-    prefetch->type = prefetch_signature;
-    prefetch->error_type = nil_type;
-    prefetch->callable_contract = prefetch_contract;
+    if (!add_builtin(symtab, types, nil_type,
+            CORE_STRING_STATIC("__gc_prefetch"), prefetch_signature,
+            CORE_STRING_STATIC("n00bb.gc.prefetch"), nullptr)) return false;
     th_type *payload_type = th_ind(types, 0, byte);
     th_param invoke_parameters[] = {
         {.mode = TH_IN, .type = th_name(types, CORE_STRING_STATIC("u32"))},
@@ -1001,45 +848,24 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *invoke_signature = payload_type
         ? th_func_with_error(types, nil_type, nil_type,
             invoke_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *invoke_contract = invoke_signature
-        ? th_env_signature_contract(types, invoke_signature, nil_type)
-        : nullptr;
-    parse_sym_entry_t *invoke = invoke_contract ? parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__gc_invoke_finalizer"),
-        PARSE_SYM_FUNCTION, nullptr) : nullptr;
-    if (!invoke || !parse_sym_set_binding(invoke,
-            CORE_STRING_STATIC("n00bb.abi.native"),
-            (void *)builtin_native_name(
-                CORE_STRING_STATIC("__gc_invoke_finalizer"))))
+    core_string_t invoke = CORE_STRING_STATIC("__gc_invoke_finalizer");
+    if (!register_native_signature(symtab, types, nil_type, invoke,
+            builtin_native_name(invoke), invoke_signature))
         return false;
-    invoke->type = invoke_signature;
-    invoke->error_type = nil_type;
-    invoke->callable_contract = invoke_contract;
     th_type *address_result = payload_type
         ? th_option(types, payload_type) : nullptr;
-    th_type *address_signature = address_result
+    builtin_fn_t address = builtin_fn(types, nil_type, address_result
         ? th_func_with_error(types, address_result, nil_type,
-            invoke_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *address_contract = address_signature
-        ? th_env_signature_contract(types, address_signature, nil_type)
-        : nullptr;
+            invoke_parameters, 2, nullptr, nullptr, 0) : nullptr);
     static const core_string_t address_names[] = {
         CORE_STRING_STATIC("__ref_address_boxed"),
         CORE_STRING_STATIC("__ref_address_mut_boxed"),
     };
     for (size_t i = 0; i < 2; i++) {
-        parse_sym_entry_t *address = address_contract
-            ? parse_symtab_add(symtab, CORE_STRING_STATIC("builtin"),
-                               address_names[i], PARSE_SYM_FUNCTION, nullptr)
-            : nullptr;
-        if (!address || !parse_sym_set_binding(address,
-                CORE_STRING_STATIC("n00bb.abi.native"),
-                (void *)builtin_native_name(address_names[i])))
+        const core_string_t *native = builtin_native_name(address_names[i]);
+        if (!native || !add_builtin_fn(symtab, nil_type, address_names[i],
+                address, CORE_STRING_STATIC("n00bb.abi.native"), native))
             return false;
-        address->type = address_signature;
-        address->error_type = nil_type;
-        address->callable_contract = address_contract;
     }
     return true;
 }
@@ -1075,37 +901,20 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *option_get_or_else_signature = option_default_type
         ? th_func_with_error(types, option_default_item, nil_type,
             option_get_or_else_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *option_is_nil_contract = option_is_nil_signature
-        ? th_env_signature_contract(types, option_is_nil_signature, nil_type)
-        : nullptr;
-    th_type *option_get_or_else_contract = option_get_or_else_signature
-        ? th_env_signature_contract(types, option_get_or_else_signature,
-                                    nil_type) : nullptr;
     th_type *array_item = th_var(types);
     th_type *array_type = th_array(types, array_item);
-    th_type *array_write_index = n00bb_array_index_type(types);
-    th_param array_write_parameters[] = {
+    th_type *array_index = n00bb_array_index_type(types);
+    th_param array_parameters[] = {
         {.mode = TH_IN, .type = array_type},
-        {.mode = TH_IN, .type = array_write_index},
+        {.mode = TH_IN, .type = array_index},
         {.mode = TH_IN, .type = array_item},
     };
-    th_type *array_write_signature = array_type && array_write_index
+    th_type *array_write_signature = array_type && array_index
         ? th_func_with_error(types, nil_type, nil_type,
-            array_write_parameters, 3, nullptr, nullptr, 0) : nullptr;
-    th_type *array_write_contract = array_write_signature
-        ? th_env_signature_contract(types, array_write_signature, nil_type)
-        : nullptr;
-    th_type *array_read_index = n00bb_array_index_type(types);
-    th_param array_read_parameters[] = {
-        {.mode = TH_IN, .type = array_type},
-        {.mode = TH_IN, .type = array_read_index},
-    };
-    th_type *array_read_signature = array_type && array_read_index
+            array_parameters, 3, nullptr, nullptr, 0) : nullptr;
+    th_type *array_read_signature = array_type && array_index
         ? th_func_with_error(types, array_item, nil_type,
-            array_read_parameters, 2, nullptr, nullptr, 0) : nullptr;
-    th_type *array_read_contract = array_read_signature
-        ? th_env_signature_contract(types, array_read_signature, nil_type)
-        : nullptr;
+            array_parameters, 2, nullptr, nullptr, 0) : nullptr;
     th_type *init_receiver = th_var(types);
     th_type *init_argument = th_var(types);
     th_param init_parameter = {.mode = TH_INOUT, .type = init_receiver};
@@ -1113,37 +922,25 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *init_signature = init_receiver && init_argument
         ? th_func_with_error(types, nil_type, nil_type, &init_parameter, 1,
             &init_rest, nullptr, 0) : nullptr;
-    th_type *init_contract = init_signature
-        ? th_env_signature_contract(types, init_signature, nil_type)
-        : nullptr;
-    if (!option_is_nil_signature
-        || !option_get_or_else_signature
-        || !option_is_nil_contract
-        || !option_get_or_else_contract
-        || !array_read_contract
-        || !array_write_contract)
-        return false;
 
     parse_scope_t *saved = parse_symtab_current_scope(
         symtab, CORE_STRING_STATIC("builtin"));
     parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                              values->root);
-    parse_sym_entry_t *option_is_nil_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__option_is_nil"), PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *option_get_or_else_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"),
-        CORE_STRING_STATIC("__option_get_or_else"), PARSE_SYM_FUNCTION,
-        nullptr);
-    parse_sym_entry_t *array_write_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__array_write"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *array_read_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__array_read"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *init_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("init"),
-        PARSE_SYM_FUNCTION, nullptr);
+    bool registered = add_builtin(symtab, types, nil_type,
+            CORE_STRING_STATIC("__option_is_nil"), option_is_nil_signature,
+            (core_string_t){0}, nullptr)
+        && add_builtin(symtab, types, nil_type,
+            CORE_STRING_STATIC("__option_get_or_else"),
+            option_get_or_else_signature, (core_string_t){0}, nullptr)
+        && add_builtin(symtab, types, nil_type,
+            CORE_STRING_STATIC("__array_write"), array_write_signature,
+            CORE_STRING_STATIC("n00bb.array.write"), nullptr)
+        && add_builtin(symtab, types, nil_type,
+            CORE_STRING_STATIC("__array_read"), array_read_signature,
+            CORE_STRING_STATIC("n00bb.array.read"), nullptr)
+        && add_builtin(symtab, types, nil_type, CORE_STRING_STATIC("init"),
+            init_signature, CORE_STRING_STATIC("n00bb.init"), nullptr);
     bool os_builtins_registered = register_builtin_os_symbols(symtab, types,
                                                                nil_type);
     bool abi_builtins_registered = register_builtin_abi_symbols(symtab, types,
@@ -1195,44 +992,13 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
-    if (!option_is_nil_symbol
-        || !option_get_or_else_symbol
-        || !array_read_symbol || !array_write_symbol
-        || !init_symbol || !init_contract
-        || !os_builtins_registered || !abi_builtins_registered
-        || !gc_builtins_registered || !unsafe_arithmetic_registered
-        || !bit_counts_registered || !array_length_registered
-        || !array_prefix_registered || !array_clear_registered
-        || !borrow_registered) return false;
-    option_is_nil_symbol->type = option_is_nil_signature;
-    option_is_nil_symbol->error_type = nil_type;
-    option_is_nil_symbol->callable_contract = option_is_nil_contract;
-    option_get_or_else_symbol->type = option_get_or_else_signature;
-    option_get_or_else_symbol->error_type = nil_type;
-    option_get_or_else_symbol->callable_contract = option_get_or_else_contract;
-    array_read_symbol->type = array_read_signature;
-    array_read_symbol->error_type = nil_type;
-    array_read_symbol->callable_contract = array_read_contract;
-    if (!parse_sym_set_binding(array_read_symbol,
-            CORE_STRING_STATIC("n00bb.array.read"),
-            array_read_symbol)) return false;
-    array_write_symbol->type = array_write_signature;
-    array_write_symbol->error_type = nil_type;
-    array_write_symbol->callable_contract = array_write_contract;
-    if (!parse_sym_set_binding(array_write_symbol,
-            CORE_STRING_STATIC("n00bb.array.write"),
-            array_write_symbol)) return false;
-    init_symbol->type = init_signature;
-    init_symbol->error_type = nil_type;
-    init_symbol->callable_contract = init_contract;
-    parse_sym_set_binding(init_symbol, CORE_STRING_STATIC("n00bb.init"),
-                          init_symbol);
-    return register_builtin_comparison_symbols(symtab, state, types)
-        && option_is_nil_symbol->callable_contract
-        && option_get_or_else_symbol->callable_contract
-        && array_read_symbol->callable_contract
-        && array_write_symbol->callable_contract
-        && init_symbol->callable_contract;
+    return registered
+        && os_builtins_registered && abi_builtins_registered
+        && gc_builtins_registered && unsafe_arithmetic_registered
+        && bit_counts_registered && array_length_registered
+        && array_prefix_registered && array_clear_registered
+        && borrow_registered
+        && register_builtin_comparison_symbols(symtab, state, types);
 }
 
 bool
