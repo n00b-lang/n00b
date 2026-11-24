@@ -24,9 +24,6 @@ fac22ead9f59a047	2	pending	lantern/src/ir/structure.c
 e91b0efd275d6bfa	2	pending	lantern/src/parse/grammar.c
 5f4ea07f4b963ed9	2	pending	lantern/src/scanner/lex.c
 697e7971b4cb80ce	2	pending	lantern/src/scanner/lex.c
-73c0b755b0f158c1	2	pending	lantern/src/scanner/lex_analysis.c
-85916146f5ce83ca	2	pending	lantern/src/scanner/lex_analysis.c
-a9558ce16c05344e	2	pending	lantern/src/scanner/lex_analysis.c
 0e0341e56b648f1f	3	false-positive	lantern/src/scanner/lex_build.c option loops that skip unnamed options and read `as` into different declaration structs
 54428726528e50fd	2	false-positive	lantern/src/scanner/lex_build.c option loops that skip unnamed options and read their first argument into different declaration structs
 a9953ba24ea361dd	2	pending	lantern/src/scanner/scanner.c
