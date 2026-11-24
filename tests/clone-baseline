@@ -37,14 +37,6 @@ f635694c4c963ba9	2	pending	compiler/lower/materialize.c
 7b1223194b0cc426	2	pending	compiler/lower/members.c
 e78f04a58018234c	2	pending	compiler/lower/places.c
 6c43edce63a6e31f	2	pending	compiler/lower/rewrite.c
-00fb14ffe7edc17b	2	pending	compiler/preprocessor.c
-55d6497b1c0dcb4a	2	pending	compiler/preprocessor.c
-5b68d5ffeb6e09a1	2	pending	compiler/preprocessor.c
-8c4228ae60e560f9	2	pending	compiler/preprocessor.c
-a6a697fd05fb5eaa	2	pending	compiler/preprocessor.c
-ad90cebbbc2e17ab	2	pending	compiler/preprocessor.c
-d7a644118630365a	2	pending	compiler/preprocessor.c
-ea5814793f4f4243	2	pending	compiler/preprocessor.c
 26a90d89116736ab	2	pending	lantern/src/diag/diagnostics.c
 a2572bf0398749b6	2	pending	lantern/src/diag/diagnostics.c
 d2ced9715908fca0	2	pending	lantern/src/diag/diagnostics.c
