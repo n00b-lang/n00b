@@ -6607,6 +6607,8 @@ report_literal_place(parse_grammar_t *grammar,
                     N00BB_NO_ARGS))
                 n00bb_report_help(annotations->diagnostics,
                     N00B_TEXT_PLACE_LITERAL_HELP, N00BB_NO_ARGS);
+            (void)n00bb_note_failed_statement(grammar,
+                annotations->symtab->owner_unit, place);
             return true;
         }
         if (NT_IS(grammar, node, "postfix-expr") && children > 1) {
