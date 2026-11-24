@@ -53,11 +53,6 @@ fac22ead9f59a047	2	pending	lantern/src/ir/structure.c
 06c0d8a65dc08b7b	2	pending	lantern/src/lib/module.c
 08d3f858d078533b	2	pending	lantern/src/lib/module.c
 10510af229cb2531	2	pending	lantern/src/lib/module.c
-7e1578c602d0c7b1	2	pending	lantern/src/lib/object_emit_coff.c
-9609a4af9fe4c9a6	2	pending	lantern/src/lib/object_emit_coff.c
-9725be159cfab82d	2	pending	lantern/src/lib/object_emit_coff.c
-a87b33528fcdfcc8	2	pending	lantern/src/lib/object_emit_coff.c
-ed35caddae864d5f	2	pending	lantern/src/lib/object_emit_coff.c
 89fafd120c8fa120	2	pending	lantern/src/parse/grammar.c
 e91b0efd275d6bfa	2	pending	lantern/src/parse/grammar.c
 5f4ea07f4b963ed9	2	pending	lantern/src/scanner/lex.c
