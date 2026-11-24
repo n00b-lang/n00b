@@ -1124,20 +1124,24 @@ core_string_t ir_instr_const_bytes_hex(const ir_instr_t *instruction)
     return annotation->s;
 }
 
+static bool
+set_type_annot(ir_instr_t *instruction, core_string_t key, th_type *type)
+{
+    ir_ctx_t *ctx = instruction->block && instruction->block->owner
+        && instruction->block->owner->owner
+        ? instruction->block->owner->owner->ctx : nullptr;
+    return ctx && ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
+        .key = key, .kind = IR_ANNOT_TYPE, .t = type});
+}
+
 bool ir_instr_set_call_signature(ir_instr_t *call, th_type *signature)
 {
     if (!call || (call->op != IR_OP_CALL && call->op != IR_OP_DISPATCH
                   && call->op != IR_OP_CALLBACK_INVOKE) || !signature
         || th_kind_of(th_resolve(signature)) != TH_FUNCTION)
         return false;
-    ir_ctx_t *ctx = call->block && call->block->owner
-        && call->block->owner->owner
-        ? call->block->owner->owner->ctx : nullptr;
-    return ctx && ir_annot_set(ctx, &call->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.call_signature"),
-        .kind = IR_ANNOT_TYPE,
-        .t = signature,
-    });
+    return set_type_annot(call, CORE_STRING_STATIC("ir.call_signature"),
+                          signature);
 }
 
 bool
@@ -1153,20 +1157,15 @@ ir_instr_set_callback_contract(ir_instr_t *construction,
         || (setup_signature
             && th_kind_of(th_resolve(setup_signature)) != TH_FUNCTION))
         return false;
-    ir_ctx_t *ctx = construction->block && construction->block->owner
-        && construction->block->owner->owner
-        ? construction->block->owner->owner->ctx : nullptr;
-    return ctx
-        && ir_annot_set(ctx, &construction->annots, (ir_annot_t){
-            .key = CORE_STRING_STATIC("ir.callback.call"), .kind = IR_ANNOT_TYPE,
-            .t = call_signature})
-        && ir_annot_set(ctx, &construction->annots, (ir_annot_t){
-            .key = CORE_STRING_STATIC("ir.callback.handler"), .kind = IR_ANNOT_TYPE,
-            .t = handler_signature})
+    return set_type_annot(construction, CORE_STRING_STATIC("ir.callback.call"),
+                          call_signature)
+        && set_type_annot(construction,
+                          CORE_STRING_STATIC("ir.callback.handler"),
+                          handler_signature)
         && (!setup_signature
-            || ir_annot_set(ctx, &construction->annots, (ir_annot_t){
-                .key = CORE_STRING_STATIC("ir.callback.setup"), .kind = IR_ANNOT_TYPE,
-                .t = setup_signature}));
+            || set_type_annot(construction,
+                              CORE_STRING_STATIC("ir.callback.setup"),
+                              setup_signature));
 }
 
 bool
@@ -1204,14 +1203,9 @@ ir_instr_set_callback_invoke_handler(ir_instr_t *invocation,
         || !handler_signature
         || th_kind_of(th_resolve(handler_signature)) != TH_FUNCTION)
         return false;
-    ir_ctx_t *ctx = invocation->block && invocation->block->owner
-        && invocation->block->owner->owner
-        ? invocation->block->owner->owner->ctx : nullptr;
-    return ctx && ir_annot_set(ctx, &invocation->annots, (ir_annot_t){
-        .key = CORE_STRING_STATIC("ir.callback.handler"),
-        .kind = IR_ANNOT_TYPE,
-        .t = handler_signature,
-    });
+    return set_type_annot(invocation,
+                          CORE_STRING_STATIC("ir.callback.handler"),
+                          handler_signature);
 }
 
 th_type *

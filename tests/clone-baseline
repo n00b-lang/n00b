@@ -11,9 +11,6 @@ ee21ef007e6456fa	2	pending	compiler/llvm_backend.c
 7b1223194b0cc426	2	pending	compiler/lower/members.c
 e78f04a58018234c	2	pending	compiler/lower/places.c
 6c43edce63a6e31f	2	pending	compiler/lower/rewrite.c
-48d5a438b872046a	2	pending	lantern/src/ir/func.c
-53d34fc55fff5fdd	2	pending	lantern/src/ir/func.c
-e32f8f340586dd80	2	pending	lantern/src/ir/func.c
 776c32a8361dd7be	2	pending	lantern/src/ir/liveness.c
 fac22ead9f59a047	2	pending	lantern/src/ir/structure.c
 0b5134a85bbd81f0	2	pending	lantern/src/ir/summary/pt.c
