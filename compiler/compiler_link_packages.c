@@ -442,6 +442,17 @@ register_function_parameter_metadata(parse_grammar_t *grammar,
 }
 
 static bool
+member_has_metadata(parse_grammar_t *grammar, parse_sym_entry_t *member)
+{
+    static const char *kinds[] = {"variant-decl-one", "enum-item",
+                                  "flagset-item"};
+    for (size_t k = 0; !member->is_field && member->decl_node && k < 3; k++)
+        if (nt_is(grammar, member->decl_node, core_string_from_cstr(kinds[k])))
+            return true;
+    return member->is_field;
+}
+
+static bool
 register_type_member_metadata(parse_grammar_t *grammar,
                               core_translation_unit_t *unit,
                               th_env *environment,
@@ -454,14 +465,7 @@ register_type_member_metadata(parse_grammar_t *grammar,
     size_t count = 0;
     for (parse_sym_entry_t *member = scope->first_in_scope; member;
          member = member->next_in_scope) {
-        bool relevant = member->is_field ||
-            (member->decl_node && nt_is(grammar, member->decl_node,
-                                       CORE_STRING_STATIC("variant-decl-one"))) ||
-            (member->decl_node && nt_is(grammar, member->decl_node,
-                                       CORE_STRING_STATIC("enum-item"))) ||
-            (member->decl_node && nt_is(grammar, member->decl_node,
-                                       CORE_STRING_STATIC("flagset-item")));
-        if (relevant) count++;
+        if (member_has_metadata(grammar, member)) count++;
     }
     if (count > UINT32_MAX) return false;
     core_buffer_t data = {0};
@@ -469,14 +473,7 @@ register_type_member_metadata(parse_grammar_t *grammar,
               append_u32_le(&data, (uint32_t)count);
     for (parse_sym_entry_t *member = scope->first_in_scope;
          ok && member; member = member->next_in_scope) {
-        bool relevant = member->is_field ||
-            (member->decl_node && nt_is(grammar, member->decl_node,
-                                       CORE_STRING_STATIC("variant-decl-one"))) ||
-            (member->decl_node && nt_is(grammar, member->decl_node,
-                                       CORE_STRING_STATIC("enum-item"))) ||
-            (member->decl_node && nt_is(grammar, member->decl_node,
-                                       CORE_STRING_STATIC("flagset-item")));
-        if (!relevant) continue;
+        if (!member_has_metadata(grammar, member)) continue;
         uint32_t name_size = (uint32_t)member->name.u8_bytes;
         uint32_t flags = (member->has_bit_offset ? 1u : 0u) |
                          (member->has_bit_width ? 2u : 0u);
@@ -1964,9 +1961,9 @@ static int resolve_one_package_export(core_translation_unit_t *unit,
                                       n00bb_package_declaration_t *package,
                                       n00bb_package_export_t *export);
 
-parse_sym_entry_t *
-granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
-                      core_string_t grantee)
+static parse_sym_entry_t *
+find_grant(core_translation_unit_t *provider, core_string_t grantee,
+           core_string_t name, parse_sym_entry_t *symbol)
 {
     n00bb_tu_state_t *state = tu_state(provider);
     for (size_t p = 0; state && p < state->package_declarations.len; p++) {
@@ -1975,8 +1972,13 @@ granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
         for (size_t e = 0; e < package->exports.len; e++) {
             n00bb_package_export_t *export = &package->exports.data[e];
             if (!export->grantee.data
-                || !core_string_eq(export->grantee, grantee)
-                || !core_string_eq(export->export_name, name)) continue;
+                || !core_string_eq(export->grantee, grantee)) continue;
+            if (symbol) {
+                if (export->symbol && canonical_symbol(export->symbol) == symbol)
+                    return export->symbol;
+                continue;
+            }
+            if (!core_string_eq(export->export_name, name)) continue;
             if (!export->symbol && export->source_name.data)
                 (void)resolve_one_package_export(provider, package, export);
             if (export->symbol) return export->symbol;
@@ -1985,23 +1987,11 @@ granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
     return nullptr;
 }
 
-static bool
-granted_to(core_translation_unit_t *provider, parse_sym_entry_t *symbol,
-           core_string_t grantee)
+parse_sym_entry_t *
+granted_export_symbol(core_translation_unit_t *provider, core_string_t name,
+                      core_string_t grantee)
 {
-    n00bb_tu_state_t *state = tu_state(provider);
-    for (size_t p = 0; state && p < state->package_declarations.len; p++) {
-        n00bb_package_declaration_t *package =
-            &state->package_declarations.data[p];
-        for (size_t e = 0; e < package->exports.len; e++) {
-            n00bb_package_export_t *export = &package->exports.data[e];
-            if (export->symbol && export->grantee.data
-                && core_string_eq(export->grantee, grantee)
-                && canonical_symbol(export->symbol) == symbol)
-                return true;
-        }
-    }
-    return false;
+    return find_grant(provider, grantee, name, nullptr);
 }
 
 static bool
@@ -2090,19 +2080,11 @@ resolve_one_package_export(core_translation_unit_t *unit,
             module_scopes_in_namespace(source_state,
                                        CORE_STRING_STATIC("type"));
         bool ok = true;
-        for (size_t s = 0; ok && s < scopes.len; s++)
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 ok && symbol; symbol = symbol->next_in_scope) {
-                if ((!symbol->decl_node
-                     && !interface_module_declares(source_unit, symbol))
-                    || !symbol_exported_by_default(symbol))
-                    continue;
-                n00bb_package_export_t item = *export;
-                item.export_name = symbol->name;
-                ok = add_package_export_symbol(unit, package, &item, symbol);
-            }
-        for (size_t s = 0; ok && s < type_scopes.len; s++)
-            for (parse_sym_entry_t *symbol = type_scopes.data[s]->first_in_scope;
+        size_t total = scopes.len + type_scopes.len;
+        for (size_t s = 0; ok && s < total; s++)
+            for (parse_sym_entry_t *symbol = (s < scopes.len
+                     ? scopes.data[s] : type_scopes.data[s - scopes.len])
+                     ->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
                 if ((!symbol->decl_node
                      && !interface_module_declares(source_unit, symbol))
@@ -2364,9 +2346,9 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
                 }
                 if (owner && !n00bb_same_package(unit, owner)
                     && !(export->symbol && export->source_unit
-                         && granted_to(export->source_unit,
-                                       canonical_symbol(export->symbol),
-                                       package->name))) {
+                         && find_grant(export->source_unit, package->name,
+                                       export->export_name,
+                                       canonical_symbol(export->symbol)))) {
                     core_string_t foreign = n00bb_package_namespace(owner);
                     package_error(unit, export->node, N00B_DIAG_EXPORT_FOREIGN,
                         N00B_TEXT_BELONGS_TO_PACKAGE_SO_THIS,

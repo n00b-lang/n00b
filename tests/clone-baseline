@@ -8,12 +8,7 @@ fad3a5cc9d638da7	2	pending	compiler/analysis/effect_checks.c
 13af8e440cfc808d	2	pending	compiler/analysis/frozen.c
 2175fd09a52737ca	2	pending	compiler/analysis/frozen.c
 a6f65f63be9e0acf	2	pending	compiler/analysis/frozen.c
-253d5f0e1a06a7a4	2	pending	compiler/compiler_link_packages.c
-486722cba8799916	2	pending	compiler/compiler_link_packages.c
 536fd8d97e0e073e	2	pending	compiler/compiler_link_packages.c
-7b6fa49b05cf518c	2	pending	compiler/compiler_link_packages.c
-7b906041ca1e635c	2	pending	compiler/compiler_link_packages.c
-c814969206892aba	2	pending	compiler/compiler_link_packages.c
 0368c308e7ac76f7	3	pending	compiler/compiler_tu_interface.c
 71a15856e36d5d6a	2	pending	compiler/compiler_tu_interface.c
 c4f9773e199bb88c	3	pending	compiler/compiler_tu_interface.c
