@@ -116,11 +116,6 @@ f1d91c510d901f51	2	pending	lib/sys/internal/marshal.n
 8556737d7f40d0ac	2	pending	lib/sys/internal/os/read.n
 40b5ec2bac89c124	2	pending	lib/text/internal/cascade.n
 eb59cdf01e10d68a	2	pending	lib/text/internal/cascade.n
-5af7ca84fc0fe04a	2	pending	lib/text/internal/table.n
-983c6e7400571c8c	2	pending	lib/text/internal/table.n
-c96e8e9ccf0fcc41	2	pending	lib/text/internal/table.n
-cbeaabb1ddd12027	2	pending	lib/text/internal/table.n
-f17f4d45ee1707d2	2	pending	lib/text/internal/table.n
 315174d1f4686d9d	2	pending	lib/text/internal/table_layout.n
 46f20504700180b4	2	pending	lib/text/internal/table_layout.n
 d9825fba6750c4ec	2	pending	lib/text/internal/table_layout.n
