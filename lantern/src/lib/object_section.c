@@ -16,6 +16,37 @@ static bool table_span(size_t total, uint64_t offset, uint64_t count,
            span(total, offset, count * width);
 }
 
+typedef struct {
+    const uint8_t *image;
+    size_t at, next, end;
+    uint32_t left, command, length;
+} macho_commands_t;
+
+static bool macho_commands(const uint8_t *image, size_t size,
+                           macho_commands_t *walk)
+{
+    if (!span(size, 0, 32) || core_le_load_u32(image) != 0xfeedfacf ||
+        core_le_load_u32(image + 12) != 1) return false;
+    uint32_t command_bytes = core_le_load_u32(image + 20);
+    *walk = (macho_commands_t){image, 32, 32, 32 + (size_t)command_bytes,
+                               core_le_load_u32(image + 16), 0, 0};
+    return span(size, 32, command_bytes);
+}
+
+static int macho_next(macho_commands_t *walk)
+{
+    if (!walk->left) return 0;
+    walk->left--;
+    walk->at = walk->next;
+    if (!span(walk->end, walk->at, 8)) return -1;
+    walk->command = core_le_load_u32(walk->image + walk->at);
+    walk->length = core_le_load_u32(walk->image + walk->at + 4);
+    if (walk->length < 8 || !span(walk->end, walk->at, walk->length))
+        return -1;
+    walk->next = walk->at + walk->length;
+    return 1;
+}
+
 static bool fixed_name(const uint8_t *base, size_t width, core_string_t name)
 {
     size_t length = name.u8_bytes;
@@ -146,27 +177,18 @@ static bool find_macho(const uint8_t *image, size_t size,
                        uint32_t wanted_index,
                        core_object_section_t *out)
 {
-    if (!span(size, 0, 32) || core_le_load_u32(image) != 0xfeedfacf ||
-        core_le_load_u32(image + 12) != 1 || (name.data && !segment.data))
+    macho_commands_t walk;
+    if ((name.data && !segment.data) || !macho_commands(image, size, &walk))
         return false;
-    uint32_t command_count = core_le_load_u32(image + 16);
-    uint32_t command_bytes = core_le_load_u32(image + 20);
-    if (!span(size, 32, command_bytes)) return false;
-    size_t cursor = 32, command_end = 32 + command_bytes;
     uint64_t section_index = 0;
-    for (uint32_t i = 0; i < command_count; i++) {
-        if (!span(command_end, cursor, 8)) return false;
-        uint32_t command = core_le_load_u32(image + cursor);
-        uint32_t command_size = core_le_load_u32(image + cursor + 4);
-        if (command_size < 8 || !span(command_end, cursor, command_size))
-            return false;
-        if (command == 0x19) {
-            if (command_size < 72) return false;
-            uint32_t nsections = core_le_load_u32(image + cursor + 64);
-            if (!table_span(command_size, 72, nsections, 80)) return false;
+    while (macho_next(&walk) > 0) {
+        if (walk.command == 0x19) {
+            if (walk.length < 72) return false;
+            uint32_t nsections = core_le_load_u32(image + walk.at + 64);
+            if (!table_span(walk.length, 72, nsections, 80)) return false;
             for (uint32_t j = 0; j < nsections; j++) {
                 section_index++;
-                const uint8_t *section = image + cursor + 72 + j * 80;
+                const uint8_t *section = image + walk.at + 72 + j * 80;
                 if (wanted_index && section_index != wanted_index) continue;
                 if (name.data && (!fixed_name(section, 16, name) ||
                     !fixed_name(section + 16, 16, segment))) continue;
@@ -202,7 +224,6 @@ static bool find_macho(const uint8_t *image, size_t size,
                 return true;
             }
         }
-        cursor += command_size;
     }
     return false;
 }
@@ -458,28 +479,19 @@ bool core_object_section_count(const void *image, size_t image_size,
         break;
     }
     case CORE_TARGET_OBJECT_MACH_O: {
-        if (!span(image_size, 0, 32) ||
-            core_le_load_u32(bytes) != 0xfeedfacf ||
-            core_le_load_u32(bytes + 12) != 1) return false;
-        uint32_t command_count = core_le_load_u32(bytes + 16);
-        uint32_t command_bytes = core_le_load_u32(bytes + 20);
-        if (!span(image_size, 32, command_bytes)) return false;
-        size_t cursor = 32, end = 32 + command_bytes;
+        macho_commands_t walk;
+        if (!macho_commands(bytes, image_size, &walk)) return false;
         count = 0;
-        for (uint32_t i = 0; i < command_count; i++) {
-            if (!span(end, cursor, 8)) return false;
-            uint32_t command = core_le_load_u32(bytes + cursor);
-            uint32_t size = core_le_load_u32(bytes + cursor + 4);
-            if (size < 8 || !span(end, cursor, size)) return false;
-            if (command == 0x19) {
-                if (size < 72) return false;
-                uint32_t sections = core_le_load_u32(bytes + cursor + 64);
-                if (!table_span(size, 72, sections, 80)
-                    || sections > UINT32_MAX - count) return false;
-                count += sections;
-            }
-            cursor += size;
+        int step;
+        while ((step = macho_next(&walk)) > 0) {
+            if (walk.command != 0x19) continue;
+            if (walk.length < 72) return false;
+            uint32_t sections = core_le_load_u32(bytes + walk.at + 64);
+            if (!table_span(walk.length, 72, sections, 80)
+                || sections > UINT32_MAX - count) return false;
+            count += sections;
         }
+        if (step < 0) return false;
         break;
     }
     case CORE_TARGET_OBJECT_COFF:
@@ -571,23 +583,16 @@ static bool macho_symbol_name(const uint8_t *image, size_t size,
                               uint32_t symbol_index,
                               core_object_symbol_name_t *out)
 {
-    if (!span(size, 0, 32) || core_le_load_u32(image) != 0xfeedfacf ||
-        core_le_load_u32(image + 12) != 1) return false;
-    uint32_t count = core_le_load_u32(image + 16);
-    uint32_t command_bytes = core_le_load_u32(image + 20);
-    if (!span(size, 32, command_bytes)) return false;
-    size_t cursor = 32, end = 32 + command_bytes;
-    for (uint32_t i = 0; i < count; i++) {
-        if (!span(end, cursor, 8)) return false;
-        uint32_t command = core_le_load_u32(image + cursor);
-        uint32_t length = core_le_load_u32(image + cursor + 4);
-        if (length < 8 || !span(end, cursor, length)) return false;
-        if (command == 2) {
-            if (length < 24) return false;
-            uint32_t symbol_offset = core_le_load_u32(image + cursor + 8);
-            uint32_t symbol_count = core_le_load_u32(image + cursor + 12);
-            uint32_t string_offset = core_le_load_u32(image + cursor + 16);
-            uint32_t string_bytes = core_le_load_u32(image + cursor + 20);
+    macho_commands_t walk;
+    if (!macho_commands(image, size, &walk)) return false;
+    while (macho_next(&walk) > 0) {
+        if (walk.command == 2) {
+            if (walk.length < 24) return false;
+            const uint8_t *command = image + walk.at;
+            uint32_t symbol_offset = core_le_load_u32(command + 8);
+            uint32_t symbol_count = core_le_load_u32(command + 12);
+            uint32_t string_offset = core_le_load_u32(command + 16);
+            uint32_t string_bytes = core_le_load_u32(command + 20);
             if (symbol_index >= symbol_count ||
                 !table_span(size, symbol_offset, symbol_count, 16) ||
                 !span(size, string_offset, string_bytes)) return false;
@@ -596,7 +601,6 @@ static bool macho_symbol_name(const uint8_t *image, size_t size,
             return string_name(image + string_offset, string_bytes,
                                name_offset, out);
         }
-        cursor += length;
     }
     return false;
 }
@@ -687,23 +691,16 @@ static bool symbol_table(const uint8_t *image, size_t size,
         return true;
     }
     case CORE_TARGET_OBJECT_MACH_O: {
-        uint32_t command_count = core_le_load_u32(image + 16);
-        uint32_t command_bytes = core_le_load_u32(image + 20);
-        if (!span(size, 32, command_bytes)) return false;
-        size_t cursor = 32, end = 32 + command_bytes;
-        for (uint32_t i = 0; i < command_count; i++) {
-            if (!span(end, cursor, 8)) return false;
-            uint32_t command = core_le_load_u32(image + cursor);
-            uint32_t length = core_le_load_u32(image + cursor + 4);
-            if (length < 8 || !span(end, cursor, length)) return false;
-            if (command == 2 && length >= 24) {
-                uint32_t offset = core_le_load_u32(image + cursor + 8);
-                uint32_t count = core_le_load_u32(image + cursor + 12);
+        macho_commands_t walk;
+        if (!macho_commands(image, size, &walk)) return false;
+        while (macho_next(&walk) > 0) {
+            if (walk.command == 2 && walk.length >= 24) {
+                uint32_t offset = core_le_load_u32(image + walk.at + 8);
+                uint32_t count = core_le_load_u32(image + walk.at + 12);
                 if (!table_span(size, offset, count, 16)) return false;
                 *out = (symbol_table_t){image + offset, count, 16, 0};
                 return true;
             }
-            cursor += length;
         }
         return false;
     }
