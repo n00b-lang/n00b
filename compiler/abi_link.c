@@ -1071,12 +1071,17 @@ nonconcrete_key_init(abi_link_key_t *key)
     return true;
 }
 
+typedef bool (*compatible_row_fn)(const n00bb_abi_object_view_t *a_view,
+                                  const void *a,
+                                  const n00bb_abi_object_view_t *b_view,
+                                  const void *b);
+
 static bool
-compatible_record_runs(const n00bb_abi_object_view_t *a_view,
-                       n00b_abi_range_v1 a_range,
-                       const n00bb_abi_object_view_t *b_view,
-                       n00b_abi_range_v1 b_range, uint32_t target_kind,
-                       size_t row_bytes)
+compatible_rows(const n00bb_abi_object_view_t *a_view,
+                n00b_abi_range_v1 a_range,
+                const n00bb_abi_object_view_t *b_view,
+                n00b_abi_range_v1 b_range, uint32_t target_kind,
+                size_t row_bytes, compatible_row_fn same)
 {
     if (a_range.count != b_range.count
         || !valid_index_range(a_view, a_range)
@@ -1084,7 +1089,8 @@ compatible_record_runs(const n00bb_abi_object_view_t *a_view,
     for (uint32_t i = 0; i < a_range.count; i++) {
         const void *a = indexed_range_row(a_view, a_range, i, target_kind);
         const void *b = indexed_range_row(b_view, b_range, i, target_kind);
-        if (!a || !b || memcmp(a, b, row_bytes)) return false;
+        if (!a || !b || (same ? !same(a_view, a, b_view, b)
+                              : memcmp(a, b, row_bytes) != 0)) return false;
     }
     return true;
 }
@@ -1114,12 +1120,12 @@ compatible_type_layout(const abi_link_key_t *first,
         if (!a_tag || !b_tag || memcmp(a_tag, b_tag, sizeof(*a_tag)))
             return false;
     }
-    return compatible_record_runs(first->view, a->occupied_runs,
+    return compatible_rows(first->view, a->occupied_runs,
             candidate->view, b->occupied_runs,
-            N00B_ABI_TABLE_PHYSICAL_RUN, sizeof(n00b_abi_physical_run_v1))
-        && compatible_record_runs(first->view, a->reserved_runs,
+            N00B_ABI_TABLE_PHYSICAL_RUN, sizeof(n00b_abi_physical_run_v1), nullptr)
+        && compatible_rows(first->view, a->reserved_runs,
             candidate->view, b->reserved_runs,
-            N00B_ABI_TABLE_PHYSICAL_RUN, sizeof(n00b_abi_physical_run_v1));
+            N00B_ABI_TABLE_PHYSICAL_RUN, sizeof(n00b_abi_physical_run_v1), nullptr);
 }
 
 static bool
@@ -1173,50 +1179,33 @@ compatible_trace_link(const n00bb_abi_object_view_t *a_view,
 }
 
 static bool
-compatible_trace_children(const n00bb_abi_object_view_t *a_view,
-                          n00b_abi_range_v1 a_range,
-                          const n00bb_abi_object_view_t *b_view,
-                          n00b_abi_range_v1 b_range)
+compatible_trace_child(const n00bb_abi_object_view_t *a_view,
+                       const void *a_row,
+                       const n00bb_abi_object_view_t *b_view,
+                       const void *b_row)
 {
-    if (a_range.count != b_range.count
-        || !valid_index_range(a_view, a_range)
-        || !valid_index_range(b_view, b_range)) return false;
-    for (uint32_t i = 0; i < a_range.count; i++) {
-        const n00b_abi_trace_child_v1 *a = indexed_range_row(a_view,
-            a_range, i, N00B_ABI_TABLE_TRACE_CHILD);
-        const n00b_abi_trace_child_v1 *b = indexed_range_row(b_view,
-            b_range, i, N00B_ABI_TABLE_TRACE_CHILD);
-        if (!a || !b || a->byte_offset != b->byte_offset
-            || a->repeat_count != b->repeat_count
-            || a->stride_bits != b->stride_bits
-            || a->reserved_zero || b->reserved_zero
-            || !compatible_child_type(a_view, a->child_type_index,
-                                      b_view, b->child_type_index)) return false;
-    }
-    return true;
+    const n00b_abi_trace_child_v1 *a = a_row, *b = b_row;
+    return a->byte_offset == b->byte_offset
+        && a->repeat_count == b->repeat_count
+        && a->stride_bits == b->stride_bits
+        && !a->reserved_zero && !b->reserved_zero
+        && compatible_child_type(a_view, a->child_type_index,
+                                 b_view, b->child_type_index);
 }
 
 static bool
-compatible_trace_arms(const n00bb_abi_object_view_t *a_view,
-                      n00b_abi_range_v1 a_range,
-                      const n00bb_abi_object_view_t *b_view,
-                      n00b_abi_range_v1 b_range)
+compatible_trace_arm(const n00bb_abi_object_view_t *a_view,
+                     const void *a_row,
+                     const n00bb_abi_object_view_t *b_view,
+                     const void *b_row)
 {
-    if (a_range.count != b_range.count
-        || !valid_index_range(a_view, a_range)
-        || !valid_index_range(b_view, b_range)) return false;
-    for (uint32_t i = 0; i < a_range.count; i++) {
-        const n00b_abi_trace_arm_v1 *a = indexed_range_row(a_view,
-            a_range, i, N00B_ABI_TABLE_TRACE_ARM);
-        const n00b_abi_trace_arm_v1 *b = indexed_range_row(b_view,
-            b_range, i, N00B_ABI_TABLE_TRACE_ARM);
-        if (!a || !b || a->tag_value != b->tag_value
-            || !compatible_trace_link(a_view, a->child_trace_index,
-                                      b_view, b->child_trace_index)
-            || !compatible_trace_children(a_view, a->children,
-                                          b_view, b->children)) return false;
-    }
-    return true;
+    const n00b_abi_trace_arm_v1 *a = a_row, *b = b_row;
+    return a->tag_value == b->tag_value
+        && compatible_trace_link(a_view, a->child_trace_index,
+                                 b_view, b->child_trace_index)
+        && compatible_rows(a_view, a->children, b_view, b->children,
+                           N00B_ABI_TABLE_TRACE_CHILD, 0,
+                           compatible_trace_child);
 }
 
 static bool type_is_import_reference(const n00b_abi_type_v1 *type);
@@ -1269,10 +1258,11 @@ compatible_type_trace(const abi_link_key_t *first,
         if (!a_tag || !b_tag || memcmp(a_tag, b_tag, sizeof(*a_tag)))
             return false;
     }
-    return compatible_trace_children(first->view, a->fixed_children,
-            candidate->view, b->fixed_children)
-        && compatible_trace_arms(first->view, a->arms,
-                                 candidate->view, b->arms);
+    return compatible_rows(first->view, a->fixed_children,
+            candidate->view, b->fixed_children, N00B_ABI_TABLE_TRACE_CHILD, 0,
+            compatible_trace_child)
+        && compatible_rows(first->view, a->arms, candidate->view, b->arms,
+                           N00B_ABI_TABLE_TRACE_ARM, 0, compatible_trace_arm);
 }
 
 static bool
@@ -1412,13 +1402,13 @@ compatible_type_members(const abi_link_key_t *first,
             || !compatible_child_type(first->view,
                 a_field->child_type_index, candidate->view,
                 b_field->child_type_index)
-            || !compatible_record_runs(first->view, a_field->packed_runs,
+            || !compatible_rows(first->view, a_field->packed_runs,
                 candidate->view, b_field->packed_runs,
-                N00B_ABI_TABLE_PACKED_RUN, sizeof(n00b_abi_packed_run_v1))
-            || !compatible_record_runs(first->view, a_field->physical_runs,
+                N00B_ABI_TABLE_PACKED_RUN, sizeof(n00b_abi_packed_run_v1), nullptr)
+            || !compatible_rows(first->view, a_field->physical_runs,
                 candidate->view, b_field->physical_runs,
                 N00B_ABI_TABLE_PHYSICAL_RUN,
-                sizeof(n00b_abi_physical_run_v1))) return false;
+                sizeof(n00b_abi_physical_run_v1), nullptr)) return false;
         if (member_kind == N00B_ABI_TABLE_ARM
             && ((const n00b_abi_arm_v1 *)a_row)->tag_value
                 != ((const n00b_abi_arm_v1 *)b_row)->tag_value)
@@ -1429,10 +1419,11 @@ compatible_type_members(const abi_link_key_t *first,
 
 static bool
 compatible_parameter(const n00bb_abi_object_view_t *a_view,
-                     const n00b_abi_parameter_v1 *a,
+                     const void *a_row,
                      const n00bb_abi_object_view_t *b_view,
-                     const n00b_abi_parameter_v1 *b)
+                     const void *b_row)
 {
+    const n00b_abi_parameter_v1 *a = a_row, *b = b_row;
     return a && b && a->passing_mode == b->passing_mode
         && a->declaration_ordinal == b->declaration_ordinal
         && a->flags == b->flags
@@ -1443,22 +1434,22 @@ compatible_parameter(const n00bb_abi_object_view_t *a_view,
 }
 
 static bool
-compatible_parameter_range(const n00bb_abi_object_view_t *a_view,
-                           n00b_abi_range_v1 a_range,
-                           const n00bb_abi_object_view_t *b_view,
-                           n00b_abi_range_v1 b_range)
+compatible_parameters(const abi_link_key_t *first, n00b_abi_range_v1 a_positional,
+                      n00b_abi_range_v1 a_keyword, uint32_t a_rest,
+                      const abi_link_key_t *candidate,
+                      n00b_abi_range_v1 b_positional,
+                      n00b_abi_range_v1 b_keyword, uint32_t b_rest)
 {
-    if (a_range.count != b_range.count
-        || !valid_index_range(a_view, a_range)
-        || !valid_index_range(b_view, b_range)) return false;
-    for (uint32_t i = 0; i < a_range.count; i++) {
-        const n00b_abi_parameter_v1 *a = indexed_range_row(a_view,
-            a_range, i, N00B_ABI_TABLE_PARAMETER);
-        const n00b_abi_parameter_v1 *b = indexed_range_row(b_view,
-            b_range, i, N00B_ABI_TABLE_PARAMETER);
-        if (!compatible_parameter(a_view, a, b_view, b)) return false;
-    }
-    return true;
+    if (!a_rest != !b_rest
+        || !compatible_rows(first->view, a_positional, candidate->view,
+               b_positional, N00B_ABI_TABLE_PARAMETER, 0, compatible_parameter)
+        || !compatible_rows(first->view, a_keyword, candidate->view,
+               b_keyword, N00B_ABI_TABLE_PARAMETER, 0, compatible_parameter))
+        return false;
+    return !a_rest || compatible_parameter(first->view,
+        n00bb_abi_object_row(first->view, N00B_ABI_TABLE_PARAMETER, a_rest),
+        candidate->view, n00bb_abi_object_row(candidate->view,
+            N00B_ABI_TABLE_PARAMETER, b_rest));
 }
 
 static bool
@@ -1481,22 +1472,11 @@ compatible_call_signature(const abi_link_key_t *first,
         || !compatible_child_type(first->view, a->success_type_index,
             candidate->view, b->success_type_index)
         || !compatible_child_type(first->view, a->failure_type_index,
-            candidate->view, b->failure_type_index)
-        || !!a->rest_parameter_index != !!b->rest_parameter_index
-        || !compatible_parameter_range(first->view,
-            a->positional_parameters, candidate->view,
-            b->positional_parameters)
-        || !compatible_parameter_range(first->view,
-            a->keyword_parameters, candidate->view,
-            b->keyword_parameters)) return false;
-    if (!a->rest_parameter_index) return true;
-    const n00b_abi_parameter_v1 *a_rest = n00bb_abi_object_row(first->view,
-        N00B_ABI_TABLE_PARAMETER, a->rest_parameter_index);
-    const n00b_abi_parameter_v1 *b_rest = n00bb_abi_object_row(
-        candidate->view, N00B_ABI_TABLE_PARAMETER,
+            candidate->view, b->failure_type_index)) return false;
+    return compatible_parameters(first, a->positional_parameters,
+        a->keyword_parameters, a->rest_parameter_index, candidate,
+        b->positional_parameters, b->keyword_parameters,
         b->rest_parameter_index);
-    return compatible_parameter(first->view, a_rest,
-                                candidate->view, b_rest);
 }
 
 static bool
@@ -1562,22 +1542,12 @@ compatible_call_shape(const abi_link_key_t *first, uint32_t a_index,
         || !compatible_constraint_type(first, a->success_type_index,
                                        candidate, b->success_type_index)
         || !compatible_constraint_type(first, a->failure_type_index,
-                                       candidate, b->failure_type_index)
-        || !!a->rest_parameter_index != !!b->rest_parameter_index
-        || !compatible_parameter_range(first->view,
-            a->positional_parameters, candidate->view,
-            b->positional_parameters)
-        || !compatible_parameter_range(first->view,
-            a->keyword_parameters, candidate->view,
-            b->keyword_parameters)) return false;
-    if (!a->rest_parameter_index) return true;
-    const n00b_abi_parameter_v1 *a_rest = n00bb_abi_object_row(first->view,
-        N00B_ABI_TABLE_PARAMETER, a->rest_parameter_index);
-    const n00b_abi_parameter_v1 *b_rest = n00bb_abi_object_row(
-        candidate->view, N00B_ABI_TABLE_PARAMETER,
+                                       candidate, b->failure_type_index))
+        return false;
+    return compatible_parameters(first, a->positional_parameters,
+        a->keyword_parameters, a->rest_parameter_index, candidate,
+        b->positional_parameters, b->keyword_parameters,
         b->rest_parameter_index);
-    return compatible_parameter(first->view, a_rest,
-                                candidate->view, b_rest);
 }
 
 static bool
@@ -2272,32 +2242,33 @@ module_initializer_valid(const n00bb_abi_object_view_t *view,
     return true;
 }
 
+static const uint8_t *
+stream_slot(const void *context, n00b_abi_range_v1 range, uint32_t ordinal,
+            uint32_t table)
+{
+    if (ordinal >= range.count || range.first > UINT32_MAX - ordinal)
+        return nullptr;
+    return n00bb_abi_object_row(context, table, range.first + ordinal);
+}
+
 static bool
 object_shape_extent(const void *context, n00b_abi_range_v1 extents,
                     uint32_t ordinal, uint64_t *out)
 {
-    const n00bb_abi_object_view_t *view = context;
-    if (ordinal >= extents.count || extents.first > UINT32_MAX - ordinal)
-        return false;
-    const uint8_t *slot = n00bb_abi_object_row(view,
-        N00B_ABI_TABLE_U64_STREAM, extents.first + ordinal);
-    if (!slot) return false;
-    *out = core_le_load_u64(slot);
-    return true;
+    const uint8_t *slot = stream_slot(context, extents, ordinal,
+                                      N00B_ABI_TABLE_U64_STREAM);
+    if (slot) *out = core_le_load_u64(slot);
+    return slot != nullptr;
 }
 
 static bool
 object_parameter_index_at(const void *context, n00b_abi_range_v1 range,
                           uint32_t ordinal, uint32_t *out)
 {
-    const n00bb_abi_object_view_t *view = context;
-    if (ordinal >= range.count || range.first > UINT32_MAX - ordinal)
-        return false;
-    const uint8_t *slot = n00bb_abi_object_row(view,
-        N00B_ABI_TABLE_U32_STREAM, range.first + ordinal);
-    if (!slot) return false;
-    *out = core_le_load_u32(slot);
-    return true;
+    const uint8_t *slot = stream_slot(context, range, ordinal,
+                                      N00B_ABI_TABLE_U32_STREAM);
+    if (slot) *out = core_le_load_u32(slot);
+    return slot != nullptr;
 }
 
 static const n00b_abi_parameter_v1 *
