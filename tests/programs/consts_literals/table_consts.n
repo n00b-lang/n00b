@@ -1,3 +1,7 @@
 const table_size = 2048
 const empty_slot = 0xFFFFFFFF
 const max_items = 18
+
+record Cell {
+    filled: int
+}

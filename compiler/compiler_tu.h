@@ -526,6 +526,7 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) mark_owners;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
     core_list_t(parse_tree_ptr_t) call_nodes;
+    core_list_t(parse_tree_ptr_t) failed_statements;
     core_list_t(parse_tree_ptr_t) value_owners;
     size_t effect_query_depth;
     size_t pattern_depth;
@@ -778,6 +779,10 @@ n00bb_tu_internal_error(core_translation_unit_t *unit, parse_tree_t *node,
         node ? link_source_location(node) : (core_diag_location_t){0},
         stage, "%s", what);
 }
+
+parse_tree_t *n00bb_note_failed_statement(parse_grammar_t *grammar,
+                                          core_translation_unit_t *unit,
+                                          parse_tree_t *node);
 
 static inline void
 n00bb_tu_internal_error_unless_reported(core_translation_unit_t *unit,

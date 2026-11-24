@@ -1,0 +1,16 @@
+trait Sized_Thing {
+    func sized(self: 'T) -> int
+}
+trait Named_Thing {
+    func named(self: 'T) -> string
+}
+
+func pick(v: Any) -> int {
+    typecase v {
+        case Sized_Thing { return 1 }
+        case Named_Thing { return 2 }
+        else { return 3 }
+    }
+}
+
+require pick(4) == 3

@@ -2438,9 +2438,10 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 core_buffer_release(&path);
             }
             if (site->dotted_path
-                && !resolve_module_member_site(grammar, unit, site->node)
-                && !site->unresolved)
-                all_resolved = false;
+                && !resolve_module_member_site(grammar, unit, site->node)) {
+                (void)n00bb_note_failed_statement(grammar, unit, site->node);
+                if (!site->unresolved) all_resolved = false;
+            }
             if (site->dotted_path
                 && is_type_reference_node(grammar, site->node)) {
                 parse_node_resolution_t type_resolution =
@@ -3281,6 +3282,10 @@ append_link_symbol_base(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
     core_buffer_append(key, symbol->name.data, symbol->name.u8_bytes);
 }
 
+static bool encode_overload_identity(n00bb_tu_state_t *state,
+                                     parse_sym_entry_t *symbol,
+                                     core_buffer_t *key);
+
 bool
 append_function_contract_identity(core_translation_unit_t *unit,
                                   parse_sym_entry_t *symbol,
@@ -3309,6 +3314,25 @@ append_function_contract_identity(core_translation_unit_t *unit,
         }
     }
     if (!overloaded) return true;
+    core_string_t identity_key = CORE_STRING_STATIC("n00bb.overload-identity");
+    core_string_t *identity = parse_sym_binding(symbol, identity_key);
+    if (!identity) {
+        core_buffer_t encoded = {0};
+        bool ok = encode_overload_identity(state, symbol, &encoded);
+        identity = ok ? core_alloc(core_string_t) : nullptr;
+        if (identity) *identity = core_string_dup(core_buffer_string(&encoded));
+        core_buffer_release(&encoded);
+        if (!identity || !parse_sym_set_binding(symbol, identity_key, identity))
+            return false;
+    }
+    core_buffer_append(key, identity->data, identity->u8_bytes);
+    return true;
+}
+
+static bool
+encode_overload_identity(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                         core_buffer_t *key)
+{
     th_type *contract = n00bb_symbol_signature(symbol);
     n00bb_declared_where_t *declared = parse_sym_binding(
         canonical_symbol(symbol), N00BB_DECLARED_WHERE_KEY);
@@ -3871,6 +3895,17 @@ register_link_use_sites(core_link_unit_t *link,
     return true;
 }
 
+static bool
+narrows_declaration(parse_tree_t *use, parse_sym_entry_t *declaration)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(use);
+    parse_sym_entry_t *view = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : nullptr;
+    return view && view != declaration
+        && parse_sym_binding(view, CORE_STRING_STATIC("n00bb.typecase-subject"))
+        && canonical_symbol(view) == declaration;
+}
+
 bool
 bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
 {
@@ -3885,7 +3920,9 @@ bind_link_references_to_nodes(parse_grammar_t *grammar, core_link_unit_t *link)
         n00bb_link_payload_t *payload = target
             ? core_link_declaration_payload(target) : nullptr;
         if (!use_site || !payload || !payload->symbol
-            || !parse_tree_set_resolution_symbol(use_site, payload->symbol)
+            || (!narrows_declaration(use_site, payload->symbol)
+                && !parse_tree_set_resolution_symbol(use_site,
+                                                     payload->symbol))
             || !bind_array_shape_type_source(grammar, use_site,
                                              payload->symbol)) {
             core_translation_unit_t *unit =

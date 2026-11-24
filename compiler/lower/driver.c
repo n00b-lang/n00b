@@ -221,6 +221,21 @@ n00bb_analyze_program(parse_grammar_t *grammar, core_link_unit_t *link,
                                    n00bb_profile_seconds());
 }
 
+static bool
+lower_failed_statement(ir_lower_context_t *context, parse_visit_t *visit,
+                       bool entering, void *data)
+{
+    (void)data;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    for (size_t i = 0; entering && state && i < state->failed_statements.len;
+         i++)
+        if (state->failed_statements.data[i] == visit->node)
+            return ir_lower_prune_node(context, visit->node)
+                && (!context->function || lower_mark_failed(context));
+    return true;
+}
+
 bool
 lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      n00bb_link_analysis_t *analysis,
@@ -380,7 +395,12 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("variable-decl"), n00bb_lower_pattern, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr);
+            CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("body-stmt"), lower_failed_statement, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("top-level-stmt"), lower_failed_statement,
+            nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,

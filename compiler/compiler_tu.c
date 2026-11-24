@@ -2430,10 +2430,17 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     state->types = types;
     state->annotations = parse_annot_result_new(nullptr);
     parse_symtab_set_owner_unit(state->annotations->symtab, unit);
-    if (!register_builtin_symbols(state->annotations, state, types)
-        || !register_native_declarations(state->annotations, types,
-                                         n00bb_source_natives(unit)))
+    if (!register_builtin_symbols(state->annotations, state, types)) {
+        n00bb_tu_internal_error(unit, nullptr, "registering builtins",
+                                "could not register the builtin symbols");
         return false;
+    }
+    if (!register_native_declarations(state->annotations, types,
+                                      n00bb_source_natives(unit))) {
+        n00bb_tu_internal_error(unit, nullptr, "registering builtins",
+                                "could not register the native declarations");
+        return false;
+    }
     parse_annot_result_set_diagnostics(state->annotations,
         core_translation_unit_diagnostics(unit), unit);
     parse_annot_result_set_node_callback(state->annotations,
@@ -6600,6 +6607,8 @@ report_literal_place(parse_grammar_t *grammar,
                     N00BB_NO_ARGS))
                 n00bb_report_help(annotations->diagnostics,
                     N00B_TEXT_PLACE_LITERAL_HELP, N00BB_NO_ARGS);
+            (void)n00bb_note_failed_statement(grammar,
+                annotations->symtab->owner_unit, place);
             return true;
         }
         if (NT_IS(grammar, node, "postfix-expr") && children > 1) {
@@ -6983,6 +6992,7 @@ free_tu_state(void *data)
     core_list_free(state->mark_owners);
     core_list_free(state->assignment_patterns);
     core_list_free(state->call_nodes);
+    core_list_free(state->failed_statements);
     core_list_free(state->value_owners);
     core_list_free(state->function_defs);
     core_list_free(state->rewrite_sites);
@@ -7052,6 +7062,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->mark_owners = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);
     state->call_nodes = core_list_new(parse_tree_ptr_t);
+    state->failed_statements = core_list_new(parse_tree_ptr_t);
     state->value_owners = core_list_new(parse_tree_ptr_t);
     state->function_defs = core_list_new(parse_tree_ptr_t);
     state->rewrite_sites = core_list_new(n00bb_ir_instr_ptr_t);

@@ -22,9 +22,9 @@ func descend(depth: int, kept: Ref[Box]) -> int {
     var mine: Box = (value = depth)
     let held: Ref[Box] = ref mine
     if depth == 0 {
-        return churn(100000) + kept.value
+        return churn(100000) + kept.__value.value
     }
-    return descend(depth - 1, held) + held.value
+    return descend(depth - 1, held) + held.__value.value
 }
 
 func run(rounds: int, depth: int) -> int {

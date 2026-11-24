@@ -18,3 +18,5 @@ tests/diagnostics/lower/places.n:36:5: warning N00B-N0024: `atomic_point` is nev
   help: remove it
 tests/diagnostics/lower/places.n:39:5: error N00B-S0038: an atomic value cannot be updated one field at a time
   help: build the new value and assign the whole atomic at once
+tests/diagnostics/lower/places.n:43:5: error N00B-S0019: this assigns into a literal value, which nothing can read afterward
+  help: store the value in a variable first, then assign into the variable

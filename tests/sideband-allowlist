@@ -573,6 +573,7 @@ key	n00bb.mark.rules	existing
 key	n00bb.may-fail	existing
 key	n00bb.opaque-type	existing
 key	n00bb.open-cast	existing
+key	n00bb.overload-identity	overload name fixed at registration so inference cannot rename it
 key	n00bb.package-module-view	existing
 key	n00bb.package-syntax.v1	existing
 key	n00bb.package-unit	existing

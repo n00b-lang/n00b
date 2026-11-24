@@ -1920,9 +1920,174 @@ typecase_arm_covers(th_ctx *types, th_type *test, th_type *member)
         && th_env_implements(types, th_resolve(member), trait);
 }
 
+typedef struct {
+    th_type *test;
+    th_type *as;
+    size_t   arm;
+    uint8_t  rank;
+    bool     converts;
+} typecase_test_t;
+
+static core_string_t
+plain_type_name(th_type *type)
+{
+    core_string_t name = {0};
+    size_t arguments = 0;
+    return type && th_kind_of(type) == TH_NAMED
+        && th_named_info(type, &name, nullptr, &arguments) && !arguments
+        ? name : (core_string_t){0};
+}
+
+static size_t
+token_count(parse_tree_t *node)
+{
+    if (!node) return 0;
+    if (core_tree_is_leaf(node)) return 1;
+    size_t count = 0;
+    for (size_t i = 0; count < 2 && i < core_tree_num_children(node); i++)
+        count += token_count(core_tree_child(node, i));
+    return count;
+}
+
+static void
+find_type_spec(parse_grammar_t *grammar, parse_tree_t *node, size_t index,
+               size_t *seen, parse_tree_t **found)
+{
+    for (size_t i = 0; node && !core_tree_is_leaf(node)
+         && i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (nt_is(grammar, child, CORE_STRING_STATIC("type-spec"))) {
+            if ((*seen)++ == index) *found = child;
+        }
+        else find_type_spec(grammar, child, index, seen, found);
+    }
+}
+
+static core_string_t
+written_arm_type(ir_lower_context_t *context, parse_tree_t *arm, size_t index,
+                 size_t count)
+{
+    n00bb_lower_context_t *lower = context->user;
+    parse_tree_t *list = child_nt(lower->grammar, arm,
+                                  CORE_STRING_STATIC("type-spec-list"));
+    size_t seen = 0;
+    parse_tree_t *found = nullptr;
+    find_type_spec(lower->grammar, list, index, &seen, &found);
+    return found && seen == count && token_count(found) == 1
+        ? first_token_text(found) : (core_string_t){0};
+}
+
+static bool
+named_by_an_arm(n00bb_typecase_frame_t *frame, core_string_t name)
+{
+    for (size_t a = 0; a < frame->arms.len; a++) {
+        n00bb_typecase_arm_types_t *arm_types =
+            n00bb_node_facts(frame->arms.data[a].node)->typecase_arm_types;
+        for (size_t t = 0; arm_types && t < arm_types->count; t++)
+            if (core_string_eq(plain_type_name(arm_types->types[t]), name))
+                return true;
+    }
+    return false;
+}
+
+static void
+insert_test(typecase_test_t *tests, size_t *count, typecase_test_t entry)
+{
+    th_type *resolved = th_resolve(entry.test);
+    size_t at = *count;
+    for (size_t i = 0; i < *count; i++)
+        if (entry.rank < tests[i].rank
+            || (entry.rank == tests[i].rank
+                && n00bb_pattern_order(resolved,
+                                       th_resolve(tests[i].test)) < 0)) {
+            at = i;
+            break;
+        }
+    memmove(&tests[at + 1], &tests[at], (*count - at) * sizeof(*tests));
+    tests[at] = entry;
+    (*count)++;
+}
+
+static size_t
+typecase_tests(ir_lower_context_t *context, n00bb_typecase_frame_t *frame,
+               typecase_test_t **out)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_ctx *types = ir_module_types(context->module);
+    size_t total = 0;
+    for (size_t a = 0; a < frame->arms.len; a++) {
+        n00bb_node_facts_t *facts = n00bb_node_facts(frame->arms.data[a].node);
+        n00bb_typecase_arm_types_t *arm_types = facts
+            ? facts->typecase_arm_types : nullptr;
+        for (size_t t = 0; arm_types && t < arm_types->count; t++) {
+            size_t family = 0;
+            (void)n00bb_numeric_family(written_arm_type(context,
+                frame->arms.data[a].node, t, arm_types->count), &family);
+            total += family ? family : 1;
+        }
+    }
+    typecase_test_t *tests = total
+        ? core_alloc_array(typecase_test_t, total) : nullptr;
+    size_t count = 0;
+    for (size_t a = 0; tests && a < frame->arms.len; a++) {
+        n00bb_typecase_arm_types_t *arm_types =
+            n00bb_node_facts(frame->arms.data[a].node)->typecase_arm_types;
+        for (size_t t = 0; arm_types && t < arm_types->count; t++) {
+            size_t family = 0;
+            const core_string_t *members = n00bb_numeric_family(
+                written_arm_type(context, frame->arms.data[a].node, t,
+                                 arm_types->count), &family);
+            for (size_t m = 0; m < family; m++) {
+                bool same = th_hash(types, th_resolve(th_name(types,
+                                                              members[m])))
+                    == th_hash(types, th_resolve(arm_types->types[t]));
+                if (!same && named_by_an_arm(frame, members[m])) continue;
+                insert_test(tests, &count, (typecase_test_t){
+                    .test = th_name(types, members[m]),
+                    .as = arm_types->types[t], .arm = a,
+                    .converts = !same,
+                });
+            }
+            if (family) continue;
+            th_type *test = n00bb_case_test_type(types,
+                lower->function_symbol, arm_types->types[t]);
+            th_type *resolved = th_resolve(test);
+            insert_test(tests, &count, (typecase_test_t){
+                .test = test, .arm = a,
+                .rank = th_kind_of(resolved) == TH_TRAIT ? 2
+                      : th_is_closed(types, resolved) ? 0 : 1,
+            });
+        }
+    }
+    *out = tests;
+    return count;
+}
+
+static void
+check_typecase_overlap(ir_lower_context_t *context, typecase_test_t *tests,
+                       size_t count, ir_span_t span)
+{
+    for (size_t i = 0; i < count; i++)
+        for (size_t j = i + 1; j < count; j++) {
+            th_type *first = th_resolve(tests[i].test);
+            th_type *second = th_resolve(tests[j].test);
+            core_string_t first_name = {0}, second_name = {0};
+            if (tests[i].rank != 2 || tests[j].rank != 2
+                || tests[i].arm == tests[j].arm
+                || n00bb_pattern_order(first, second) != 0
+                || !th_trait_name(first, &first_name)
+                || !th_trait_name(second, &second_name)) continue;
+            lower_report(context, N00B_DIAG_TYPECASE_ARMS_OVERLAP, span,
+                N00B_TEXT_TYPECASE_ARMS_OVERLAP,
+                N00BB_ARGS(ARG_TEXT(first_name), ARG_TEXT(second_name)));
+            return;
+        }
+}
+
 static void
 check_typecase_coverage(ir_lower_context_t *context,
                         n00bb_typecase_frame_t *frame, ir_value_t *subject,
+                        typecase_test_t *tests, size_t test_count,
                         ir_span_t span)
 {
     th_ctx *types = ir_module_types(context->module);
@@ -1945,11 +2110,9 @@ check_typecase_coverage(ir_lower_context_t *context,
         th_type *member = item ? (m ? th_nil(types) : item)
             : is_union ? th_sum_arm(type, m) : type;
         bool covered = false;
-        for (size_t a = 0; !covered && a < frame->arms.len; a++)
-            covered = typecase_arm_covers(types, frame->arms.data[a].test,
-                                          member)
-                || typecase_arm_covers(types, frame->arms.data[a].test,
-                                       type);
+        for (size_t t = 0; !covered && t < test_count; t++)
+            covered = typecase_arm_covers(types, tests[t].test, member)
+                || typecase_arm_covers(types, tests[t].test, type);
         if (covered) continue;
         core_string_t member_text = lower_type_text(context, member);
         lower_report(context, N00B_DIAG_TYPECASE_NOT_EXHAUSTIVE, span,
@@ -1960,6 +2123,48 @@ check_typecase_coverage(ir_lower_context_t *context,
                    N00BB_ARGS(ARG_TEXT(member_text)));
         return;
     }
+}
+
+static ir_block_t *
+typecase_convert_block(ir_lower_context_t *context, n00bb_typecase_arm_t *arm,
+                       ir_value_t *subject, const typecase_test_t *test,
+                       ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_block_t *block = n00bb_branch_block(context, lower, "typecase_convert");
+    if (!block) return nullptr;
+    ir_block_t *saved = context->block;
+    bool reachable = context->reachable;
+    context->block = block;
+    context->reachable = true;
+    ir_instr_t *narrow = ir_lower_emit_instruction(context, IR_OP_TYPE_NARROW,
+                                                   span);
+    bool ok = narrow && ir_lower_set_temp_dest(context, narrow,
+            CORE_STRING_STATIC("__n00bb_narrow_"), test->test)
+        && ir_instr_operand_value(narrow, subject)
+        && ir_instr_operand_type(narrow, test->test);
+    ir_value_t *value = ok ? narrow->dest : nullptr;
+    if (ok && test->converts) {
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
+                                                     span);
+        n00bb_rewrite_later(context, cast);
+        ok = cast && ir_lower_set_temp_dest(context, cast,
+                CORE_STRING_STATIC("__n00bb_cast_"), test->as)
+            && ir_instr_operand_value(cast, value)
+            && ir_annot_set(lower->ir_context, &cast->annots,
+                   (ir_annot_t){.key = N00BB_OPEN_CAST_KEY,
+                                .kind = IR_ANNOT_BOOL, .b = false});
+        value = ok ? cast->dest : nullptr;
+    }
+    ok = ok && n00bb_emit_local_assign(context, arm->converted, value, true,
+                                       span);
+    ir_instr_t *jump = ok ? ir_instr_add(context->block, IR_OP_JUMP)
+                          : nullptr;
+    ok = jump && ir_instr_operand_block(jump, arm->block);
+    if (jump) jump->span = span;
+    context->block = saved;
+    context->reachable = reachable;
+    return ok ? block : nullptr;
 }
 
 static bool
@@ -1974,19 +2179,37 @@ n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
     ir_block_t *test_block = context->block;
     ir_span_t span = lower_span_for_tree(context, frame->node);
     th_ctx *types = ir_module_types(context->module);
-    check_typecase_coverage(context, frame, subject, span);
-    for (size_t i = 0; i < frame->arms.len; i++) {
-        n00bb_typecase_arm_t *arm = &frame->arms.data[i];
-        ir_block_t *next = i + 1 < frame->arms.len
+    typecase_test_t *tests = nullptr;
+    size_t test_count = typecase_tests(context, frame, &tests);
+    check_typecase_overlap(context, tests, test_count, span);
+    check_typecase_coverage(context, frame, subject, tests, test_count, span);
+    bool emitted = test_count != 0;
+    for (size_t i = 0; emitted && i < test_count; i++) {
+        n00bb_typecase_arm_t *arm = &frame->arms.data[tests[i].arm];
+        if (!tests[i].converts || arm->converted) continue;
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_typecase_value_%llu",
+            (unsigned long long)context->next_value_id++);
+        arm->converted = ir_local_add(context->function, name, arm->type);
+        emitted = arm->converted != nullptr;
+    }
+    for (size_t i = 0; emitted && i < test_count; i++) {
+        n00bb_typecase_arm_t *arm = &frame->arms.data[tests[i].arm];
+        th_type *tested = tests[i].test;
+        ir_block_t *next = i + 1 < test_count
             ? n00bb_branch_block(context, context->user, "typecase_test")
             : frame->else_body ? frame->else_block : frame->unmatched_block;
-        if (!next) return false;
-        th_type *item = typecase_option_item(types, subject, arm->test);
+        if (!next) {
+            emitted = false;
+            break;
+        }
+        th_type *item = typecase_option_item(types, subject, tested);
         ir_value_t *condition = nullptr;
         if (item) {
             ir_block_t *saved = context->block;
             context->block = test_block;
-            if (th_is_nil(th_resolve(arm->test))) {
+            if (th_is_nil(th_resolve(tested))) {
                 ir_instr_t *is_nil = ir_lower_emit_instruction(context,
                     IR_OP_OPTION_IS_NIL, span);
                 condition = is_nil && ir_lower_set_temp_dest(context, is_nil,
@@ -2003,19 +2226,27 @@ n00bb_typecase_emit_dispatch(ir_lower_context_t *context,
             if (test && ir_lower_set_temp_dest(context, test,
                     CORE_STRING_STATIC("__n00bb_type_test_"), bool_type)
                 && ir_instr_operand_value(test, subject)
-                && ir_instr_operand_type(test, arm->test)) {
+                && ir_instr_operand_type(test, tested)) {
                 test->span = span;
                 condition = test->dest;
             }
         }
-        ir_instr_t *branch = condition
+        ir_block_t *target = arm->converted
+            ? typecase_convert_block(context, arm, subject, &tests[i], span)
+            : arm->block;
+        ir_instr_t *branch = condition && target
             ? ir_instr_add(test_block, IR_OP_BRANCH) : nullptr;
         if (!branch || !ir_instr_operand_value(branch, condition)
-            || !ir_instr_operand_block(branch, arm->block)
-            || !ir_instr_operand_block(branch, next)) return false;
+            || !ir_instr_operand_block(branch, target)
+            || !ir_instr_operand_block(branch, next)) {
+            emitted = false;
+            break;
+        }
         branch->span = span;
         test_block = next;
     }
+    core_free(tests);
+    if (!emitted) return false;
     if (!frame->else_body) {
         ir_instr_t *unreachable = ir_instr_add(test_block, IR_OP_UNREACHABLE);
         if (!unreachable) return false;
@@ -2061,6 +2292,23 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_typecase_arm_t *arm = &frame->arms.data[arm_index];
             context->block = arm->block;
             context->reachable = true;
+            if (arm->converted) {
+                ir_value_t *value = n00bb_emit_local_read(context,
+                    arm->converted, lower_span_for_tree(context, visit->node));
+                frame->binding_checkpoint =
+                    ir_lower_bindings_checkpoint(context);
+                if (!value || !arm->subject_shadow
+                    || !ir_lower_bind_scoped_value(context,
+                           arm->subject_shadow, value,
+                           ir_lower_bound_local(context,
+                                                frame->subject_symbol))) {
+                    lower_internal(context,
+                        lower_span_for_tree(context, frame->node),
+                        "could not bind the converted typecase subject");
+                    return false;
+                }
+                return true;
+            }
             th_type *item = typecase_option_item(
                 ir_module_types(context->module), frame->subject_value,
                 arm->test);

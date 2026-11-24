@@ -38,3 +38,7 @@ var atomic_point: Atomic[Point]
 func atomic_part() {
     atomic_point.n = 3
 }
+
+func literal_place() {
+    (n = 1).n = 3
+}

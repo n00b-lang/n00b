@@ -23,8 +23,8 @@ func sum(head: Ref[Node]?) -> int {
     var cursor: Ref[Node]? = head
     while cursor != nil {
         let node: Ref[Node] = cursor
-        total += node.value
-        cursor = node.next
+        total += node.__value.value
+        cursor = node.__value.next
     }
     return total
 }

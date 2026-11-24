@@ -2461,15 +2461,32 @@ static int compare_fit(ir_module_t *module, overload_fit_t first,
                                    : 2;
     }
     if (first == FIT_BOUNDED || first == FIT_GENERIC) {
-        bool forward  = th_env_type_pattern_subsumes(second_param,
-                                                     first_param);
-        bool backward = th_env_type_pattern_subsumes(first_param,
-                                                     second_param);
-
-        return forward == backward ? 0 : forward ? -1 : 1;
+        return n00bb_pattern_order(first_param, second_param);
     }
 
     return 0;
+}
+
+const core_string_t *n00bb_numeric_family(core_string_t name, size_t *count)
+{
+    if (core_string_eq(name, CORE_STRING_STATIC("int"))) {
+        *count = sizeof(integer_names) / sizeof(*integer_names);
+        return integer_names;
+    }
+    if (core_string_eq(name, CORE_STRING_STATIC("float"))) {
+        *count = sizeof(float_names) / sizeof(*float_names);
+        return float_names;
+    }
+    *count = 0;
+    return nullptr;
+}
+
+int n00bb_pattern_order(th_type *first, th_type *second)
+{
+    bool forward  = th_env_type_pattern_subsumes(second, first);
+    bool backward = th_env_type_pattern_subsumes(first, second);
+
+    return forward == backward ? 0 : forward ? -1 : 1;
 }
 
 static bool overload_beats(ir_module_t *module, const overload_option_t *first,

@@ -243,6 +243,7 @@ N00B_TEXT(STORE_THE_VALUE_IN_A, "store the value in a variable first, then `type
 N00B_TEXT(THIS_TYPECASE_ON_HAS_NO, "this `typecase` on `{0}` has no `case`")
 N00B_TEXT(TYPECASE_MISSES, "this `typecase` on `{0}` has no `case` for `{1}`")
 N00B_TEXT(TYPECASE_NEEDS_ELSE, "this `typecase` on `{0}` needs an `else`: its subject can hold any type")
+N00B_TEXT(TYPECASE_ARMS_OVERLAP, "the `case {0}` and `case {1}` arms both match a value whose type implements both, and neither is more specific")
 N00B_TEXT(ADD_A_CASE_OR_ELSE, "add `case {0}`, or an `else`")
 N00B_TEXT(ADD_AN_ELSE, "add an `else` for the types the cases don't name")
 N00B_TEXT(IS, "`{0}` is `{1}`")

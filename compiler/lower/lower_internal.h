@@ -390,6 +390,7 @@ typedef struct {
     th_type *test;
     parse_sym_entry_t *subject_shadow;
     ir_block_t *block;
+    ir_local_t *converted;
 } n00bb_typecase_arm_t;
 
 core_list_decl(n00bb_typecase_arm_t);
