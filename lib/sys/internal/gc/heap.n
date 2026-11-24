@@ -73,12 +73,7 @@ func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
 }
 
 func heap_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Heap]?         = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Heap)
 }
 
 func config_default(out config: internal.gc.core.Config) {
@@ -261,36 +256,19 @@ func teardown(heap: Ref[internal.gc.core.Heap]) {
     internal.gc.registry.regions_free(heap)
     let final_queue: Ref[byte]? = heap.__value.finq
     if final_queue != nil {
-        let probe: Ref[internal.gc.core.Final_Entry]?  = nil
-        let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-        if row != nil {
-            internal.memory.unmap(final_queue, heap.__value.finq_cap * internal.abi.size_bytes(row))
-        } else {
-            require false
-        }
+        internal.memory.unmap(final_queue, heap.__value.finq_cap
+            * internal.abi.size_bytes(internal.abi.record_of(internal.gc.core.Final_Entry)))
     }
     let queued: Ref[byte]? = heap.__value.barrier_queue
     if queued != nil {
-        let probe: Ref[byte]?                    = nil
-        let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
-        if row != nil {
-            internal.memory.unmap(queued, heap.__value.barrier_queue_capacity
-                * internal.abi.size_bytes(row))
-        } else {
-            require false
-        }
+        internal.memory.unmap(queued, heap.__value.barrier_queue_capacity
+            * internal.abi.size_bytes(internal.gc.mark.barrier_slot_record()))
     }
     internal.gc.hash.tab_free(ref heap.__value.threads)
     let global_storage: Ref[byte]? = heap.__value.globals
     if global_storage != nil {
-        let probe:       Ref[Ref[byte]?]?              = nil
-        let pointer_row: Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
-        if pointer_row != nil {
-            let stride: uint = internal.abi.size_bytes(pointer_row)
-            internal.memory.unmap(global_storage, heap.__value.cap_globals * stride)
-        } else {
-            require false
-        }
+        internal.memory.unmap(global_storage, heap.__value.cap_globals
+            * internal.abi.size_bytes(internal.gc.roots.global_pointer_record()))
     }
     internal.gc.hash.index_tab_free(ref heap.__value.global_index)
     internal.memory.unmap(heap, internal.abi.size_bytes(heap_record()))

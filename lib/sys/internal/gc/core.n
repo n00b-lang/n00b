@@ -526,25 +526,12 @@ func initialize_array_backing(payload      : Ref[byte],
 
 
 func resolve_object_header_bytes() -> uint {
-    let probe: Ref[Object_Header]?           = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-
-    if row != nil {
-        return internal.abi.size_bytes(row)
-    }
-
-    require false
+    return internal.abi.size_bytes(internal.abi.record_of(Object_Header))
 }
 
 func resolve_array_header_bytes() -> uint {
-    let probe: Ref[internal.abi.Array_Descriptor_Header]? = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-
-    if row != nil {
-        return internal.abi.size_bytes(row)
-    }
-
-    require false
+    return internal.abi.size_bytes(
+        internal.abi.record_of(internal.abi.Array_Descriptor_Header))
 }
 
 func resolve_layout() {
@@ -847,16 +834,9 @@ func take_free_batch(heap: Ref[Heap], mutator: Ref[Mutator])
 }
 
 func resolve_header_lines() -> uint {
-    let probe: Ref[Block_Metadata]? = nil
-    let row:   Ref[internal.abi.Type_Record]?
-
-    row = internal.abi.optional_reference_target(typeof(probe))
-
-    if row != nil {
-        let metadata_bytes: uint = internal.abi.size_bytes(row)
-        return (metadata_bytes + line_bytes - 1) / line_bytes
-    }
-    require false
+    let metadata_bytes: uint = internal.abi.size_bytes(
+        internal.abi.record_of(Block_Metadata))
+    return (metadata_bytes + line_bytes - 1) / line_bytes
 }
 
 inline func header_lines() -> uint {

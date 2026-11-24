@@ -27,12 +27,7 @@ var hash_slot_size:      uint = 0
 var hash_slot_alignment: uint = 0
 
 func hash_slot_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[Hash_Slot]?               = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(Hash_Slot)
 }
 
 func resolve_hash_slot() {
@@ -223,12 +218,7 @@ func tab_free(tab: Ref[Hash_Tab]) {
 }
 
 func index_slot_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[Index_Slot]?              = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(Index_Slot)
 }
 
 func index_slot_at(slots: Ref[Index_Slot], index: uint, stride: uint) -> Ref[Index_Slot] {

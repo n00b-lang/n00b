@@ -77,14 +77,9 @@ func stack_word_at(address: Ref[byte]) -> uint {
 }
 
 func stack_word_width() -> uint {
-    let probe: uint                          = 0
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
-    if row != nil {
-        let width: uint = internal.abi.size_bytes(row)
-        require width != 0
-        return width
-    }
-    require false
+    let width: uint = internal.abi.size_bytes(internal.abi.record_of(uint))
+    require width != 0
+    return width
 }
 
 func scan_words(marker: Ref[internal.gc.core.Marker], low: Ref[byte],

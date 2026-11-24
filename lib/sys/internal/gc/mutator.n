@@ -11,12 +11,7 @@ import internal.threads
 import internal.memory
 
 func mutator_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Mutator]?      = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Mutator)
 }
 
 func create(heap: Ref[internal.gc.core.Heap]) -> Ref[internal.gc.core.Mutator]? {

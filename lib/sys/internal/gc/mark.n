@@ -12,21 +12,11 @@ const scan_chunk:     u64  = 512
 const prefetch_ahead: uint = 8
 
 func packet_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Packet]?       = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Packet)
 }
 
 func chunk_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Packet_Chunk]? = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Packet_Chunk)
 }
 
 func pool_lock(heap: Ref[internal.gc.core.Heap]) {
@@ -121,12 +111,8 @@ func mark_ambiguous(marker: Ref[internal.gc.core.Marker], address: uint) {
 }
 
 func barrier_slot_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[byte]?                    = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    let probe: Ref[byte]? = nil
+    return internal.abi.record_of(typeof(probe))
 }
 
 func barrier_flush_locked(mutator: Ref[internal.gc.core.Mutator]) {

@@ -26,7 +26,6 @@ ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 bb3824eb6c2cf166	2	pending	lib/sys/internal/box.n
 dad21f50f28547cd	2	pending	lib/sys/internal/box.n
 5ec641e77fb3be59	2	pending	lib/sys/internal/gc/collect.n
-37b44fe026b480b3	2	pending	lib/sys/internal/gc/frames.n
 06d8f2101c35886b	2	pending	lib/sys/internal/gc/hash.n
 2ec8f049dc84f1de	2	pending	lib/sys/internal/gc/hash.n
 2ff2b821e18fac35	2	pending	lib/sys/internal/gc/hash.n
@@ -36,7 +35,6 @@ dad21f50f28547cd	2	pending	lib/sys/internal/box.n
 8b5bb03f53458c82	2	pending	lib/sys/internal/gc/hash.n
 90b20e0874544247	3	pending	lib/sys/internal/gc/hash.n
 c80f8e2e68628dce	2	pending	lib/sys/internal/gc/hash.n
-d52b418441a4c09f	2	pending	lib/sys/internal/gc/hash.n
 e92e79acbc092846	2	pending	lib/sys/internal/gc/hash.n
 f94344f3b6102c70	2	pending	lib/sys/internal/gc/hash.n
 46458ddf7a0681e9	2	pending	lib/sys/internal/os/read.n

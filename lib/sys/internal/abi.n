@@ -304,6 +304,14 @@ func reference_target(descriptor: typespec) -> Ref[Type_Record]? {
     return nil
 }
 
+func record_of(descriptor: typespec) -> Ref[Type_Record] {
+    let row: Ref[Type_Record]? = type_for(descriptor)
+    if row != nil {
+        return row
+    }
+    require false
+}
+
 func optional_reference_target(descriptor: typespec) -> Ref[Type_Record]? {
     let option: Ref[Type_Record]? = type_for(descriptor)
     if option != nil {
