@@ -215,13 +215,28 @@ static bool scalar_arg_equal(const th_arg *x, const th_arg *y) {
          (x->kind != TH_ARG_STR || core_string_eq(x->str, y->str));
 }
 
-static bool pattern_equal(const th_type *a, const th_type *b,
+static bool pattern_match(const th_type *a, const th_type *b,
+                          core_list_t(type_binding_t) * bindings,
                           core_list_t(type_pair_t) * seen) {
   a = th_resolve_c(a);
   b = th_resolve_c(b);
-  if (a == b)
+  if (!bindings && a == b)
     return true;
-  if (!a || !b || a->kind != b->kind)
+  if (!a || !b)
+    return false;
+  if (bindings && a->kind == TH_VAR) {
+    for (size_t i = 0; i < bindings->len; i++)
+      if (bindings->data[i].variable == a) {
+        core_list_t(type_pair_t) equality = core_list_new(type_pair_t);
+        bool same = pattern_match(bindings->data[i].value, b, nullptr,
+                                  &equality);
+        core_list_free(equality);
+        return same;
+      }
+    core_list_push(*bindings, ((type_binding_t){a, b}));
+    return true;
+  }
+  if (a->kind != b->kind)
     return false;
   if (a->kind == TH_VAR) {
     for (size_t i = 0; i < seen->len; i++) {
@@ -245,7 +260,8 @@ static bool pattern_equal(const th_type *a, const th_type *b,
     for (size_t i = 0; i < a->named.nargs; i++) {
       const th_arg *x = &a->named.args[i], *y = &b->named.args[i];
       if (!scalar_arg_equal(x, y)
-          || (x->kind == TH_ARG_TYPE && !pattern_equal(x->type, y->type, seen)))
+          || (x->kind == TH_ARG_TYPE
+              && !pattern_match(x->type, y->type, bindings, seen)))
         return false;
     }
     return true;
@@ -254,56 +270,55 @@ static bool pattern_equal(const th_type *a, const th_type *b,
            a->bitint.flavor == b->bitint.flavor;
   case TH_INDIRECTION:
     return a->ind.attrs == b->ind.attrs &&
-           pattern_equal(a->ind.referent, b->ind.referent, seen);
+           pattern_match(a->ind.referent, b->ind.referent, bindings, seen);
   case TH_SEQUENCE:
     return a->seq.has_extent == b->seq.has_extent &&
            (!a->seq.has_extent || a->seq.extent == b->seq.extent) &&
-           pattern_equal(a->seq.elem, b->seq.elem, seen);
+           pattern_match(a->seq.elem, b->seq.elem, bindings, seen);
   case TH_RECORD:
-    if (a->record.n != b->record.n)
+  case TH_TRAIT: {
+    bool record = a->kind == TH_RECORD;
+    size_t n = record ? a->record.n : a->trait.n;
+    if (n != (record ? b->record.n : b->trait.n)
+        || (!record && !core_string_eq(a->trait.name, b->trait.name)))
       return false;
-    for (size_t i = 0; i < a->record.n; i++) {
-      const th_member *x = &a->record.members[i], *y = &b->record.members[i];
+    for (size_t i = 0; i < n; i++) {
+      const th_member *x = record ? &a->record.members[i]
+                                  : &a->trait.methods[i];
+      const th_member *y = record ? &b->record.members[i]
+                                  : &b->trait.methods[i];
       if (!core_string_eq(x->name, y->name) ||
-          !pattern_equal(x->type, y->type, seen))
+          !pattern_match(x->type, y->type, bindings, seen))
         return false;
     }
     return true;
-  case TH_TRAIT:
-    if (!core_string_eq(a->trait.name, b->trait.name) ||
-        a->trait.n != b->trait.n)
-      return false;
-    for (size_t i = 0; i < a->trait.n; i++) {
-      const th_member *x = &a->trait.methods[i], *y = &b->trait.methods[i];
-      if (!core_string_eq(x->name, y->name) ||
-          !pattern_equal(x->type, y->type, seen))
-        return false;
-    }
-    return true;
+  }
   case TH_FUNCTION:
     if (a->fn.np != b->fn.np || a->fn.nkw != b->fn.nkw ||
         !!a->fn.rest != !!b->fn.rest ||
         !!a->fn.error != !!b->fn.error ||
-        !pattern_equal(a->fn.ret, b->fn.ret, seen) ||
-        (a->fn.error && !pattern_equal(a->fn.error, b->fn.error, seen)))
+        !pattern_match(a->fn.ret, b->fn.ret, bindings, seen) ||
+        (a->fn.error
+         && !pattern_match(a->fn.error, b->fn.error, bindings, seen)))
       return false;
     for (size_t i = 0; i < a->fn.np; i++)
       if (a->fn.params[i].mode != b->fn.params[i].mode ||
-          !pattern_equal(a->fn.params[i].type, b->fn.params[i].type, seen))
+          !pattern_match(a->fn.params[i].type, b->fn.params[i].type,
+                         bindings, seen))
         return false;
     if (a->fn.rest &&
         (a->fn.rest->mode != b->fn.rest->mode ||
-         !pattern_equal(a->fn.rest->type, b->fn.rest->type, seen)))
+         !pattern_match(a->fn.rest->type, b->fn.rest->type, bindings, seen)))
       return false;
     for (size_t i = 0; i < a->fn.nkw; i++)
       if (!core_string_eq(a->fn.kw[i].name, b->fn.kw[i].name) ||
           a->fn.kw[i].mode != b->fn.kw[i].mode ||
-          !pattern_equal(a->fn.kw[i].type, b->fn.kw[i].type, seen))
+          !pattern_match(a->fn.kw[i].type, b->fn.kw[i].type, bindings, seen))
         return false;
     return true;
   case TH_BINDER:
     return a->binder.arity == b->binder.arity &&
-           pattern_equal(a->binder.body, b->binder.body, seen);
+           pattern_match(a->binder.body, b->binder.body, bindings, seen);
   case TH_BOUND:
     return a->bound.distance == b->bound.distance &&
            a->bound.position == b->bound.position;
@@ -311,7 +326,7 @@ static bool pattern_equal(const th_type *a, const th_type *b,
     if (a->sum.comb != b->sum.comb || a->sum.n != b->sum.n)
       return false;
     for (size_t i = 0; i < a->sum.n; i++)
-      if (!pattern_equal(a->sum.arms[i], b->sum.arms[i], seen))
+      if (!pattern_match(a->sum.arms[i], b->sum.arms[i], bindings, seen))
         return false;
     return true;
   }
@@ -320,136 +335,15 @@ static bool pattern_equal(const th_type *a, const th_type *b,
 
 static bool same_type_pattern(const th_type *a, const th_type *b) {
   core_list_t(type_pair_t) seen = core_list_new(type_pair_t);
-  bool equal = pattern_equal(a, b, &seen);
+  bool equal = pattern_match(a, b, nullptr, &seen);
   core_list_free(seen);
   return equal;
-}
-
-static bool pattern_subsumes(const th_type *general, const th_type *specific,
-                             core_list_t(type_binding_t) * bindings,
-                             core_list_t(type_pair_t) * seen) {
-  general = th_resolve_c(general);
-  specific = th_resolve_c(specific);
-  if (!general || !specific)
-    return false;
-  if (general->kind == TH_VAR) {
-    for (size_t i = 0; i < bindings->len; i++)
-      if (bindings->data[i].variable == general) {
-        core_list_t(type_pair_t) equality = core_list_new(type_pair_t);
-        bool same = pattern_equal(bindings->data[i].value, specific, &equality);
-        core_list_free(equality);
-        return same;
-      }
-    core_list_push(*bindings, ((type_binding_t){general, specific}));
-    return true;
-  }
-  if (general->kind != specific->kind)
-    return false;
-  if (pair_seen(seen, general, specific))
-    return true;
-  switch (general->kind) {
-  case TH_VAR:
-    return true;
-  case TH_NAMED:
-    if (general->named.is_variant != specific->named.is_variant ||
-        !core_string_eq(general->named.name, specific->named.name) ||
-        general->named.nargs != specific->named.nargs)
-      return false;
-    for (size_t i = 0; i < general->named.nargs; i++) {
-      const th_arg *x = &general->named.args[i], *y = &specific->named.args[i];
-      if (!scalar_arg_equal(x, y)
-          || (x->kind == TH_ARG_TYPE
-              && !pattern_subsumes(x->type, y->type, bindings, seen)))
-        return false;
-    }
-    return true;
-  case TH_BITINT:
-    return general->bitint.width == specific->bitint.width &&
-           general->bitint.flavor == specific->bitint.flavor;
-  case TH_INDIRECTION:
-    return general->ind.attrs == specific->ind.attrs &&
-           pattern_subsumes(general->ind.referent, specific->ind.referent,
-                            bindings, seen);
-  case TH_SEQUENCE:
-    return general->seq.has_extent == specific->seq.has_extent &&
-           (!general->seq.has_extent ||
-            general->seq.extent == specific->seq.extent) &&
-           pattern_subsumes(general->seq.elem, specific->seq.elem, bindings,
-                            seen);
-  case TH_RECORD:
-    if (general->record.n != specific->record.n)
-      return false;
-    for (size_t i = 0; i < general->record.n; i++)
-      if (!core_string_eq(general->record.members[i].name,
-                          specific->record.members[i].name) ||
-          !pattern_subsumes(general->record.members[i].type,
-                            specific->record.members[i].type, bindings, seen))
-        return false;
-    return true;
-  case TH_TRAIT:
-    if (!core_string_eq(general->trait.name, specific->trait.name) ||
-        general->trait.n != specific->trait.n)
-      return false;
-    for (size_t i = 0; i < general->trait.n; i++) {
-      const th_member *x = &general->trait.methods[i];
-      const th_member *y = &specific->trait.methods[i];
-      if (!core_string_eq(x->name, y->name) ||
-          !pattern_subsumes(x->type, y->type, bindings, seen))
-        return false;
-    }
-    return true;
-  case TH_FUNCTION:
-    if (general->fn.np != specific->fn.np ||
-        general->fn.nkw != specific->fn.nkw ||
-        !!general->fn.rest != !!specific->fn.rest ||
-        !!general->fn.error != !!specific->fn.error ||
-        !pattern_subsumes(general->fn.ret, specific->fn.ret, bindings, seen))
-      return false;
-    if (general->fn.error &&
-        !pattern_subsumes(general->fn.error, specific->fn.error, bindings,
-                          seen))
-      return false;
-    for (size_t i = 0; i < general->fn.np; i++)
-      if (general->fn.params[i].mode != specific->fn.params[i].mode ||
-          !pattern_subsumes(general->fn.params[i].type,
-                            specific->fn.params[i].type, bindings, seen))
-        return false;
-    if (general->fn.rest &&
-        (general->fn.rest->mode != specific->fn.rest->mode ||
-         !pattern_subsumes(general->fn.rest->type, specific->fn.rest->type,
-                           bindings, seen)))
-      return false;
-    for (size_t i = 0; i < general->fn.nkw; i++)
-      if (!core_string_eq(general->fn.kw[i].name, specific->fn.kw[i].name) ||
-          general->fn.kw[i].mode != specific->fn.kw[i].mode ||
-          !pattern_subsumes(general->fn.kw[i].type, specific->fn.kw[i].type,
-                            bindings, seen))
-        return false;
-    return true;
-  case TH_BINDER:
-    return general->binder.arity == specific->binder.arity &&
-           pattern_subsumes(general->binder.body, specific->binder.body,
-                            bindings, seen);
-  case TH_BOUND:
-    return general->bound.distance == specific->bound.distance &&
-           general->bound.position == specific->bound.position;
-  case TH_SUM:
-    if (general->sum.comb != specific->sum.comb ||
-        general->sum.n != specific->sum.n)
-      return false;
-    for (size_t i = 0; i < general->sum.n; i++)
-      if (!pattern_subsumes(general->sum.arms[i], specific->sum.arms[i],
-                            bindings, seen))
-        return false;
-    return true;
-  }
-  return false;
 }
 
 static bool receiver_subsumes(th_type *general, th_type *specific) {
   core_list_t(type_binding_t) bindings = core_list_new(type_binding_t);
   core_list_t(type_pair_t) seen = core_list_new(type_pair_t);
-  bool result = pattern_subsumes(general, specific, &bindings, &seen);
+  bool result = pattern_match(general, specific, &bindings, &seen);
   core_list_free(bindings);
   core_list_free(seen);
   return result;
@@ -1215,24 +1109,24 @@ static th_type *fitted_with_requirements(th_ctx *ctx,
                       required_signature);
 }
 
+static bool requirement_holds(th_ctx *ctx, th_trait_requirement requirement) {
+  th_type *subject = requirement.subject
+      ? th_resolve(requirement.subject) : nullptr;
+  if (!subject || th_kind_of(subject) == TH_VAR) return true;
+  if (requirement.kind == TH_CON_IMPLEMENTS)
+    return th_env_implements(ctx, subject, requirement.iface);
+  if (requirement.kind != TH_CON_ONE_OF || !requirement.target) return true;
+  th_type *members = th_resolve(requirement.target);
+  for (size_t a = 0; a < th_sum_len(members); a++)
+    if (th_same_type(subject, th_sum_arm(members, a))) return true;
+  return false;
+}
+
 static bool requirements_hold(th_ctx *ctx, const th_env_function_t *function,
                               th_type *requirements) {
-  for (size_t i = 0; requirements && i < function->requirement_count; i++) {
-    th_trait_requirement requirement =
-        requirement_at(function, requirements, i);
-    th_type *subject = th_resolve(requirement.subject);
-    if (!subject || th_kind_of(subject) == TH_VAR) continue;
-    if (requirement.kind == TH_CON_IMPLEMENTS
-        && !th_env_implements(ctx, subject, requirement.iface))
+  for (size_t i = 0; requirements && i < function->requirement_count; i++)
+    if (!requirement_holds(ctx, requirement_at(function, requirements, i)))
       return false;
-    if (requirement.kind == TH_CON_ONE_OF && requirement.target) {
-      bool member = false;
-      th_type *members = th_resolve(requirement.target);
-      for (size_t a = 0; !member && a < th_sum_len(members); a++)
-        member = th_same_type(subject, th_sum_arm(members, a));
-      if (!member) return false;
-    }
-  }
   return true;
 }
 
@@ -1633,15 +1527,35 @@ static int function_origin_rank(const th_env_type_origin_t *origin,
   return 0;
 }
 
+static bool *maximal_patterns(th_type *const *patterns, size_t count) {
+  bool *maximal = count ? core_alloc_array(bool, count) : nullptr;
+  for (size_t i = 0; i < count; i++) {
+    maximal[i] = true;
+    for (size_t j = 0; maximal[i] && j < count; j++) {
+      bool i_sub_j = receiver_subsumes(patterns[j], patterns[i])
+          || th_type_widens_to(patterns[i], patterns[j]);
+      bool j_sub_i = receiver_subsumes(patterns[i], patterns[j])
+          || th_type_widens_to(patterns[j], patterns[i]);
+      maximal[i] = i == j || !j_sub_i || i_sub_j;
+    }
+  }
+  return maximal;
+}
+
+static th_type *required_method_contract(th_ctx *ctx,
+                                         const th_env_trait_t *trait,
+                                         core_string_t method_name) {
+  th_type *required = contract_lookup(fresh_pattern(ctx, trait->contracts),
+                                      method_name);
+  return required ? fresh_pattern(ctx, required) : nullptr;
+}
+
 static bool function_matches(th_ctx *ctx, th_type *receiver,
                              const th_env_trait_t *trait,
                              const th_env_function_t *function,
                              core_string_t method_name) {
-  th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *required_contract =
-      contract_lookup(trait_contracts, method_name);
-  required_contract = required_contract
-      ? fresh_pattern(ctx, required_contract) : nullptr;
+      required_method_contract(ctx, trait, method_name);
   th_type *provided = nullptr, *provided_error = nullptr;
   th_type *required = nullptr, *required_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
@@ -1689,11 +1603,8 @@ static bool function_matches_with_promotion(
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                const th_env_function_t *function,
                                core_string_t method_name) {
-  th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *required_contract =
-      contract_lookup(trait_contracts, method_name);
-  required_contract = required_contract
-      ? fresh_pattern(ctx, required_contract) : nullptr;
+      required_method_contract(ctx, trait, method_name);
   th_type *required = nullptr, *required_error = nullptr;
   th_type *provided = nullptr, *provided_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
@@ -1877,20 +1788,9 @@ static bool trait_requirements_hold(th_ctx *ctx, th_type *methods) {
   if (!trait || th_kind_of(trait) != TH_TRAIT) return true;
   for (size_t i = 0; i < th_trait_requirement_count(trait); i++) {
     th_trait_requirement requirement = {0};
-    if (!th_trait_requirement_at(trait, i, &requirement)) continue;
-    th_type *subject = requirement.subject
-        ? th_resolve(requirement.subject) : nullptr;
-    if (!subject || th_kind_of(subject) == TH_VAR) continue;
-    if (requirement.kind == TH_CON_IMPLEMENTS
-        && !th_env_implements(ctx, subject, requirement.iface))
+    if (th_trait_requirement_at(trait, i, &requirement)
+        && !requirement_holds(ctx, requirement))
       return false;
-    if (requirement.kind == TH_CON_ONE_OF && requirement.target) {
-      bool member = false;
-      th_type *members = th_resolve(requirement.target);
-      for (size_t a = 0; !member && a < th_sum_len(members); a++)
-        member = th_same_type(subject, th_sum_arm(members, a));
-      if (!member) return false;
-    }
   }
   return true;
 }
@@ -2112,28 +2012,12 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
       core_list_push(matches, ((match_t){function, pattern}));
   }
   core_list_free(candidates);
-  bool *maximal = matches.len ? core_alloc_array(bool, matches.len) : nullptr;
-  for (size_t i = 0; i < matches.len; i++) {
-    maximal[i] = true;
-    for (size_t j = 0; j < matches.len; j++) {
-      if (i == j)
-        continue;
-      bool i_sub_j =
-          receiver_subsumes(matches.data[j].receiver_pattern,
-                            matches.data[i].receiver_pattern) ||
-          th_type_widens_to(matches.data[i].receiver_pattern,
-                              matches.data[j].receiver_pattern);
-      bool j_sub_i =
-          receiver_subsumes(matches.data[i].receiver_pattern,
-                            matches.data[j].receiver_pattern) ||
-          th_type_widens_to(matches.data[j].receiver_pattern,
-                              matches.data[i].receiver_pattern);
-      if (j_sub_i && !i_sub_j) {
-        maximal[i] = false;
-        break;
-      }
-    }
-  }
+  th_type **patterns = matches.len
+      ? core_alloc_array(th_type *, matches.len) : nullptr;
+  for (size_t i = 0; i < matches.len; i++)
+    patterns[i] = matches.data[i].receiver_pattern;
+  bool *maximal = maximal_patterns(patterns, matches.len);
+  core_free(patterns);
   const th_env_function_t *best = nullptr;
   int best_origin_rank = -1;
   size_t best_origin_count = 0;
@@ -2225,27 +2109,12 @@ static th_env_method_status_t method_resolve_by_name_choice(
     return TH_ENV_METHOD_NOT_FOUND;
   }
 
-  bool *maximal = core_alloc_array(bool, matches.len);
-  for (size_t i = 0; i < matches.len; i++) {
-    maximal[i] = true;
-    for (size_t j = 0; j < matches.len; j++) {
-      if (i == j) continue;
-      bool i_sub_j =
-          receiver_subsumes(matches.data[j].receiver_pattern,
-                            matches.data[i].receiver_pattern) ||
-          th_type_widens_to(matches.data[i].receiver_pattern,
-                              matches.data[j].receiver_pattern);
-      bool j_sub_i =
-          receiver_subsumes(matches.data[i].receiver_pattern,
-                            matches.data[j].receiver_pattern) ||
-          th_type_widens_to(matches.data[j].receiver_pattern,
-                              matches.data[i].receiver_pattern);
-      if (j_sub_i && !i_sub_j) {
-        maximal[i] = false;
-        break;
-      }
-    }
-  }
+  th_type **patterns = matches.len
+      ? core_alloc_array(th_type *, matches.len) : nullptr;
+  for (size_t i = 0; i < matches.len; i++)
+    patterns[i] = matches.data[i].receiver_pattern;
+  bool *maximal = maximal_patterns(patterns, matches.len);
+  core_free(patterns);
 
   th_env_type_origin_t *origin = receiver_origin(ctx->environment, receiver);
   const name_match_t *best = nullptr;

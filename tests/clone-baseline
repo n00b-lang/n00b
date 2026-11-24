@@ -105,17 +105,6 @@ a9558ce16c05344e	2	pending	lantern/src/scanner/lex_analysis.c
 54428726528e50fd	2	false-positive	lantern/src/scanner/lex_build.c option loops that skip unnamed options and read their first argument into different declaration structs
 a9953ba24ea361dd	2	pending	lantern/src/scanner/scanner.c
 d58834252143b227	2	pending	lantern/src/scanner/scanner.c
-290650263f652632	2	pending	lantern/src/th/environment.c
-2982efaa62ce9d50	2	pending	lantern/src/th/environment.c
-2b5a13bdc6112f9f	2	pending	lantern/src/th/environment.c
-3c4671eee8fb972b	2	pending	lantern/src/th/environment.c
-6a07439604ae9423	2	pending	lantern/src/th/environment.c
-79e58324acdcae79	2	pending	lantern/src/th/environment.c
-b24e6f1c9ac25844	2	pending	lantern/src/th/environment.c
-bc50007016d60051	2	pending	lantern/src/th/environment.c
-c4b3a9d1a14865c2	2	pending	lantern/src/th/environment.c
-d27e0cf19c918752	2	pending	lantern/src/th/environment.c
-f78cd624183a31cd	2	pending	lantern/src/th/environment.c
 259516fd657e92a1	2	pending	lantern/src/th/scheme.c
 ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 5b768a5a9d0d2a06	2	false-positive	lib/builtin/containers/dict.n:259 public entries_in_key_order and entries_in_value_order wrappers that differ only in the comparator
