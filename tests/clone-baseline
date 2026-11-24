@@ -93,12 +93,6 @@ d58834252143b227	2	pending	lantern/src/scanner/scanner.c
 259516fd657e92a1	2	pending	lantern/src/th/scheme.c
 ef6e9b0b1660d9ba	2	pending	lantern/src/th/scheme.c
 5b768a5a9d0d2a06	2	false-positive	lib/builtin/containers/dict.n:259 public entries_in_key_order and entries_in_value_order wrappers that differ only in the comparator
-0930ae5630d03ea5	2	pending	lib/builtin/string/core.n
-0c3621f7334b7ae2	2	pending	lib/builtin/string/core.n
-19fe294cb6625294	2	pending	lib/builtin/string/core.n
-8fd3c9712070f209	2	pending	lib/builtin/string/core.n
-9dc0b0006dcabd87	2	pending	lib/builtin/string/core.n
-f2ad228dcee91356	2	pending	lib/builtin/string/core.n
 74f03eadbe5247ca	2	pending	lib/langtools/internal/grammar/parse.n
 11a34d9364658946	2	pending	lib/sys/internal/abi.n
 1449ebf73b5a35ae	2	pending	lib/sys/internal/box.n

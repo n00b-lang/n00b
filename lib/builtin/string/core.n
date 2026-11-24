@@ -1112,61 +1112,45 @@ private func continuation(s: string, i: uint) -> bool {
 
 func validate_multibyte(s: string, p: uint, end: uint) -> i32 {
     let b0: u8 = __string_byte(s, p)
+    var length: uint = 0
+    var lo: u8 = 0x80
+    var hi: u8 = 0xbf
     if b0 >= 0xc2 and b0 <= 0xdf {
-        if p + 2 > end {
-            return 0
-        }
-        if !continuation(s, p + 1) {
-            return 0
-        }
-        return 2
+        length = 2
     }
     if b0 >= 0xe0 and b0 <= 0xef {
-        if p + 3 > end {
-            return 0
-        }
-        let b1: u8 = __string_byte(s, p + 1)
-        var lo: u8 = 0x80
-        var hi: u8 = 0xbf
-        if b0 == 0xe0 {
-            lo = 0xa0
-        }
-        if b0 == 0xed {
-            hi = 0x9f
-        }
-        if b1 < lo or b1 > hi {
-            return 0
-        }
-        if !continuation(s, p + 2) {
-            return 0
-        }
-        return 3
+        length = 3
     }
     if b0 >= 0xf0 and b0 <= 0xf4 {
-        if p + 4 > end {
-            return 0
-        }
-        let b1: u8 = __string_byte(s, p + 1)
-        var lo: u8 = 0x80
-        var hi: u8 = 0xbf
-        if b0 == 0xf0 {
-            lo = 0x90
-        }
-        if b0 == 0xf4 {
-            hi = 0x8f
-        }
-        if b1 < lo or b1 > hi {
-            return 0
-        }
-        if !continuation(s, p + 2) {
-            return 0
-        }
-        if !continuation(s, p + 3) {
-            return 0
-        }
-        return 4
+        length = 4
     }
-    return 0
+    if b0 == 0xe0 {
+        lo = 0xa0
+    }
+    if b0 == 0xed {
+        hi = 0x9f
+    }
+    if b0 == 0xf0 {
+        lo = 0x90
+    }
+    if b0 == 0xf4 {
+        hi = 0x8f
+    }
+    if length == 0 or p + length > end {
+        return 0
+    }
+    let b1: u8 = __string_byte(s, p + 1)
+    if b1 < lo or b1 > hi {
+        return 0
+    }
+    var k: uint = 2
+    while k < length {
+        if !continuation(s, p + k) {
+            return 0
+        }
+        k += 1
+    }
+    return cast[i32] length
 }
 
 record Utf8_Step {
