@@ -541,23 +541,23 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         break;
     case IR_OP_EXTRACT:
         pt_read(pt, base, &first);
-        if (named) project(pt, &first, in->operands[1].name, &out);
+        if (named) project(pt, &first, in->operands[1].name, &out, true);
         else spread_operands(pt, in, &out);
         break;
     case IR_OP_EXTRACT_INDEX:
         pt_read(pt, base, &first);
-        project(pt, &first, element_step, &out);
+        project(pt, &first, element_step, &out, true);
         break;
     case IR_OP_VARIANT_PAYLOAD:
         pt_read(pt, base, &first);
-        if (named) variant_arm(pt, &first, in->operands[1].name, &out);
+        if (named) project(pt, &first, in->operands[1].name, &out, false);
         else for (size_t i = 0; i < first.len; i++)
             set_add(pt, &out, first.data[i]);
         break;
     case IR_OP_VARIANT_TAG:
         if (pt->value_flow) {
             pt_read(pt, base, &first);
-            variant_arm(pt, &first, outcome_arms[2], &out);
+            project(pt, &first, outcome_arms[2], &out, false);
         }
         else if (base && pointer_type(pt, base->type))
             spread_operands(pt, in, &out);

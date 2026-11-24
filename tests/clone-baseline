@@ -11,8 +11,6 @@ e78f04a58018234c	2	pending	compiler/lower/places.c
 6c43edce63a6e31f	2	pending	compiler/lower/rewrite.c
 776c32a8361dd7be	2	pending	lantern/src/ir/liveness.c
 fac22ead9f59a047	2	pending	lantern/src/ir/structure.c
-0b5134a85bbd81f0	2	pending	lantern/src/ir/summary/pt.c
-7d83ce568feced8f	2	pending	lantern/src/ir/summary/pt.c
 3e03715886c38487	2	pending	lantern/src/ir/summary_facts.c
 613f3a81b6a7641a	2	pending	lantern/src/ir/summary_facts.c
 06c0d8a65dc08b7b	2	pending	lantern/src/lib/module.c

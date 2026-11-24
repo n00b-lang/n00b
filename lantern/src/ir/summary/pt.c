@@ -166,7 +166,7 @@ define_items(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
 
 static void
 project(const pt_t *pt, const pt_set_t *from, core_string_t step,
-        pt_set_t *into)
+        pt_set_t *into, bool extend)
 {
     for (size_t i = 0; i < from->len; i++) {
         pt_item_t item = from->data[i];
@@ -177,24 +177,10 @@ project(const pt_t *pt, const pt_set_t *from, core_string_t step,
             set_add(pt, into, item);
             continue;
         }
-        if (item.deep) set_add(pt, into, item);
+        if (!extend || item.deep) set_add(pt, into, item);
+        if (!extend) continue;
         item.deep = false;
         loc_push(pt, &item.loc, step);
-        set_add(pt, into, item);
-    }
-}
-
-static void
-variant_arm(const pt_t *pt, const pt_set_t *from, core_string_t arm,
-            pt_set_t *into)
-{
-    for (size_t i = 0; i < from->len; i++) {
-        pt_item_t item = from->data[i];
-        if (item.depth) {
-            if (!core_string_eq(item.steps[0], arm)) continue;
-            item.steps++;
-            item.depth--;
-        }
         set_add(pt, into, item);
     }
 }
@@ -1035,7 +1021,7 @@ pt_elements(pt_t *pt, const ir_value_t *base, pt_set_t *into)
     else
         memory = !inline_sequence(pt->f, type);
     if (memory) address_step(pt, &items, element_step, into);
-    else project(pt, &items, element_step, into);
+    else project(pt, &items, element_step, into, true);
     core_list_free(items);
     return memory;
 }
