@@ -14,10 +14,6 @@ fe1613ed540af8b7	2	pending	compiler/lower/literals.c
 7b1223194b0cc426	2	pending	compiler/lower/members.c
 e78f04a58018234c	2	pending	compiler/lower/places.c
 6c43edce63a6e31f	2	pending	compiler/lower/rewrite.c
-26a90d89116736ab	2	pending	lantern/src/diag/diagnostics.c
-a2572bf0398749b6	2	pending	lantern/src/diag/diagnostics.c
-d2ced9715908fca0	2	pending	lantern/src/diag/diagnostics.c
-e4754220834440b5	2	pending	lantern/src/diag/diagnostics.c
 48d5a438b872046a	2	pending	lantern/src/ir/func.c
 53d34fc55fff5fdd	2	pending	lantern/src/ir/func.c
 e32f8f340586dd80	2	pending	lantern/src/ir/func.c
