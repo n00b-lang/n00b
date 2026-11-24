@@ -661,6 +661,26 @@ n00bb_emit_writebacks(ir_lower_context_t *context,
     return true;
 }
 
+static bool
+dispatch_write(ir_lower_context_t *context, bool ready, core_string_t method,
+               ir_value_t **operands, size_t count,
+               core_list_t(n00bb_element_writeback_t) *writebacks,
+               ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_type *nil = th_name(ir_module_types(context->module),
+                           CORE_STRING_STATIC("nil"));
+    ir_value_t *written = ready
+        ? n00bb_dispatch(context, method, operands, count, nil, span)
+        : nullptr;
+    bool ok = written && ir_annot_set(lower->ir_context, &written->def->annots,
+            (ir_annot_t){.key = N00BB_WRITE_BACK_KEY, .kind = IR_ANNOT_BOOL,
+                         .b = true})
+        && n00bb_emit_writebacks(context, writebacks, span);
+    core_list_free(*writebacks);
+    return ok;
+}
+
 bool
 n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                ir_value_t *value, bool checked, ir_span_t span)
@@ -730,7 +750,6 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
             && read->n_operands == 5
         ? ir_annot_get(&read->annots, N00BB_SLICE_TARGET_KEY) : nullptr;
     if (slice) {
-        th_ctx *types = ir_module_types(context->module);
         ir_value_t *container = ir_operand_value(&read->operands[1]);
         ir_value_t *bounds[] = {ir_operand_value(&read->operands[2]),
                                 ir_operand_value(&read->operands[3]),
@@ -747,18 +766,9 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
             bounds[0], bounds[1], bounds[2], value};
         bool complete = true;
         for (size_t i = 0; i < 5; i++) complete &= operands[i] != nullptr;
-        th_type *nil = th_name(types, CORE_STRING_STATIC("nil"));
-        ir_value_t *stored = complete
-            ? n00bb_dispatch(context, CORE_STRING_STATIC("__write_slice"),
-                             operands, 5, nil, span)
-            : nullptr;
-        bool ok = stored && ir_annot_set(lower->ir_context,
-                &stored->def->annots,
-                (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
-                             .kind = IR_ANNOT_BOOL, .b = true})
-            && n00bb_emit_writebacks(context, &writebacks, span);
-        core_list_free(writebacks);
-        return ok;
+        return dispatch_write(context, complete,
+                              CORE_STRING_STATIC("__write_slice"), operands, 5,
+                              &writebacks, span);
     }
     ir_value_t *container = nullptr, *index = nullptr;
     if (n00bb_accessed_element(target, &container, &index)) {
@@ -780,19 +790,9 @@ n00bb_store_to(ir_lower_context_t *context, ir_value_t *target,
                              th_ind_referent(th_resolve(holder->type)), span)
                        : container,
                 index, value};
-            th_type *nil = th_name(ir_module_types(context->module),
-                                   CORE_STRING_STATIC("nil"));
-            ir_value_t *written = operands[0]
-                ? n00bb_dispatch(context, CORE_STRING_STATIC("__write"),
-                                 operands, 3, nil, span)
-                : nullptr;
-            bool ok = written && ir_annot_set(lower->ir_context,
-                    &written->def->annots,
-                    (ir_annot_t){.key = N00BB_WRITE_BACK_KEY,
-                                 .kind = IR_ANNOT_BOOL, .b = true})
-                && n00bb_emit_writebacks(context, &writebacks, span);
-            core_list_free(writebacks);
-            return ok;
+            return dispatch_write(context, operands[0] != nullptr,
+                                  CORE_STRING_STATIC("__write"), operands, 3,
+                                  &writebacks, span);
         }
     }
     core_list_t(n00bb_element_writeback_t) writebacks =
