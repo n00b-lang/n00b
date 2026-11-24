@@ -58,6 +58,41 @@ static bool
 n00bb_lower_typecase_annotation(ir_lower_context_t *context,
                                 parse_visit_t *visit, bool entering);
 
+static bool
+jump_to_join(ir_lower_context_t *context, parse_tree_t *node,
+             ir_block_t *join, bool *join_reachable, const char *failure)
+{
+    if (!context->reachable) return true;
+    ir_span_t span = lower_span_for_tree(context, node);
+    ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
+    if (!jump || !ir_instr_operand_block(jump, join)) {
+        lower_internal_string(context, span,
+                              core_string_borrow(failure, strlen(failure)));
+        return false;
+    }
+    jump->span = span;
+    *join_reachable = true;
+    return true;
+}
+
+static bool
+store_arm_value(ir_lower_context_t *context, parse_visit_t *visit,
+                ir_local_t *result, const char *failure)
+{
+    parse_tree_t *expression = value_body_expression(visit->grammar,
+                                                     visit->node);
+    ir_value_t *value = expression && result
+        ? ir_lower_node_value(context, expression) : nullptr;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    ir_instr_t *store = value
+        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
+    if (store && ir_instr_set_dest_local(store, result)
+        && ir_instr_operand_value(store, value)) return true;
+    lower_internal_string(context, span,
+                          core_string_borrow(failure, strlen(failure)));
+    return false;
+}
+
 ir_instr_t *
 n00bb_branch_on_outcome(ir_lower_context_t *context, ir_value_t *outcome,
                         ir_block_t *ok_block, ir_block_t *error_block,
@@ -1554,51 +1589,24 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                     return false;
                 }
             }
-            if (context->reachable) {
-                ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
-                if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                    lower_internal(context,
-                        lower_span_for_tree(context, frame->node),
-                        "could not emit branch join");
-                    return false;
-                }
-                jump->span = lower_span_for_tree(context, frame->node);
-                frame->join_reachable = true;
-            }
+            if (!jump_to_join(context, frame->node, frame->join,
+                              &frame->join_reachable,
+                              "could not emit branch join"))
+                return false;
             context->block = arm_index + 1 < frame->arms.len
                 ? frame->arms.data[arm_index + 1].test_block
                 : frame->else_body ? frame->else_block : frame->join;
             context->reachable = true;
         }
         else {
-            if (frame->expression && context->reachable) {
-                parse_tree_t *expression = value_body_expression(
-                    visit->grammar, visit->node);
-                ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
-                ir_instr_t *store = value
-                    ? ir_lower_emit_instruction(context, IR_OP_COPY,
-                        lower_span_for_tree(context, visit->node)) : nullptr;
-                if (!store || !ir_instr_set_dest_local(
-                                  store, frame->result_local)
-                    || !ir_instr_operand_value(store, value)) {
-                    lower_internal(context,
-                        lower_span_for_tree(context, visit->node),
-                        "an if-expression else arm produced no value");
-                    return false;
-                }
-            }
-            if (context->reachable) {
-                ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
-                if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                    lower_internal(context,
-                        lower_span_for_tree(context, frame->node),
-                        "could not emit branch join");
-                    return false;
-                }
-                jump->span = lower_span_for_tree(context, frame->node);
-                frame->join_reachable = true;
-            }
+            if (frame->expression && context->reachable
+                && !store_arm_value(context, visit, frame->result_local,
+                       "an if-expression else arm produced no value"))
+                return false;
+            if (!jump_to_join(context, frame->node, frame->join,
+                              &frame->join_reachable,
+                              "could not emit branch join"))
+                return false;
             context->block = frame->join;
             context->reachable = frame->join_reachable;
         }
@@ -1715,34 +1723,14 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             context->reachable = true;
         }
         else {
-            if (frame->expression && context->reachable) {
-                parse_tree_t *expression = value_body_expression(
-                    visit->grammar, visit->node);
-                ir_value_t *value = expression
-                    ? ir_lower_node_value(context, expression) : nullptr;
-                ir_instr_t *store = value
-                    ? ir_lower_emit_instruction(context, IR_OP_COPY,
-                        lower_span_for_tree(context, visit->node)) : nullptr;
-                if (!store || !ir_instr_set_dest_local(
-                                  store, frame->result_local)
-                    || !ir_instr_operand_value(store, value)) {
-                    lower_internal(context,
-                        lower_span_for_tree(context, visit->node),
-                        "a switch-expression arm produced no value");
-                    return false;
-                }
-            }
-            if (context->reachable) {
-                ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
-                if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                    lower_internal(context,
-                        lower_span_for_tree(context, frame->node),
-                        "could not emit switch join");
-                    return false;
-                }
-                jump->span = lower_span_for_tree(context, frame->node);
-                frame->join_reachable = true;
-            }
+            if (frame->expression && context->reachable
+                && !store_arm_value(context, visit, frame->result_local,
+                       "a switch-expression arm produced no value"))
+                return false;
+            if (!jump_to_join(context, frame->node, frame->join,
+                              &frame->join_reachable,
+                              "could not emit switch join"))
+                return false;
             context->reachable = false;
         }
         return true;
@@ -2342,23 +2330,10 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             }
             return true;
         }
-        if (frame->expression && context->reachable) {
-            parse_tree_t *expression = value_body_expression(
-                visit->grammar, visit->node);
-            ir_value_t *value = expression && frame->result_local
-                ? ir_lower_node_value(context, expression) : nullptr;
-            ir_instr_t *store = value
-                ? ir_lower_emit_instruction(context, IR_OP_COPY,
-                    lower_span_for_tree(context, visit->node)) : nullptr;
-            if (!store || !frame->result_local
-                || !ir_instr_set_dest_local(store, frame->result_local)
-                || !ir_instr_operand_value(store, value)) {
-                lower_internal(context,
-                    lower_span_for_tree(context, visit->node),
-                    "could not store a typecase-expression arm value");
-                return false;
-            }
-        }
+        if (frame->expression && context->reachable
+            && !store_arm_value(context, visit, frame->result_local,
+                   "could not store a typecase-expression arm value"))
+            return false;
         if (!is_else
             && !ir_lower_bindings_restore(context,
                                             frame->binding_checkpoint)) {
@@ -2367,18 +2342,9 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not restore the typecase subject binding");
             return false;
         }
-        if (context->reachable) {
-            ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
-            if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                lower_internal(context,
-                    lower_span_for_tree(context, frame->node),
-                    "could not emit typecase join");
-                return false;
-            }
-            jump->span = lower_span_for_tree(context, frame->node);
-            frame->join_reachable = true;
-        }
-        return true;
+        return jump_to_join(context, frame->node, frame->join,
+                            &frame->join_reachable,
+                            "could not emit typecase join");
     }
     return true;
 }
