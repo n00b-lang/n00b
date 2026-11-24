@@ -743,6 +743,11 @@ plan_pattern(pattern_plan_t *plan, th_type *pattern)
     if (th_is_closed(types, pattern))
         return plan_word(plan, 1, nullptr, false)
             && plan_word(plan, 0, pattern, false);
+    th_type *item = th_option_item(pattern);
+    if (item)
+        return plan_word(plan, 3, nullptr, false)
+            && plan_word(plan, N00B_ABI_TYPE_OPTION, nullptr, false)
+            && plan_pattern(plan, item);
     switch (th_kind_of(pattern)) {
     case TH_VAR: {
         for (uint32_t i = 0; i < plan->slots; i++)

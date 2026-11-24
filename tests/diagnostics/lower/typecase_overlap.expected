@@ -1,0 +1,1 @@
+tests/diagnostics/lower/typecase_overlap.n:9:5: error N00B-S0104: the `case typecase_overlap.Sized_Thing` and `case typecase_overlap.Named_Thing` arms both match a value whose type implements both, and neither is more specific
