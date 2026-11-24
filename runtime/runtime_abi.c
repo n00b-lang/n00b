@@ -126,6 +126,16 @@ typedef struct {
     uint64_t name_bytes;
 } symbol_path_t;
 
+static void
+write_path(const symbol_path_t *path, uint8_t *out)
+{
+    for (size_t byte = 0; byte < path->module_bytes; byte++)
+        out[byte] = path->module[byte];
+    out[path->module_bytes] = '.';
+    for (size_t byte = 0; byte < path->name_bytes; byte++)
+        out[path->module_bytes + 1 + byte] = path->name[byte];
+}
+
 static bool
 same_bytes(const uint8_t *left, const uint8_t *right, uint64_t count)
 {
@@ -235,6 +245,24 @@ invalid_record(n00b_abi_error_v1 *error, uint32_t kind,
 {
     registration_error(error, N00B_ABI_BAD_METADATA, kind, index, offset);
     return false;
+}
+
+static bool
+claim_index(const n00b_abi_snapshot_v1 *snapshot, n00b_abi_range_v1 range,
+            uint32_t i, uint32_t count, const uint8_t *seen, uint32_t *index)
+{
+    *index = 0;
+    return n00b_abi_v1_index_at(snapshot, range, i, index) == 1 && *index
+        && *index < count && !seen[*index];
+}
+
+static bool
+all_claimed(const uint8_t *seen, uint32_t count, uint32_t table,
+            n00b_abi_error_v1 *error)
+{
+    for (uint32_t i = 1; i < count; i++)
+        if (!seen[i]) return invalid_record(error, table, i, 0);
+    return true;
 }
 
 
@@ -1687,9 +1715,8 @@ metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
                            && error->table_kind != N00B_ABI_TABLE_TRACE_ARM))
             invalid_record(error, N00B_ABI_TABLE_TRACE, trace_index, 0);
     }
-    for (uint32_t i = 1; valid && i < trace_count; i++)
-        if (!seen[i]) valid = invalid_record(error, N00B_ABI_TABLE_TRACE,
-                                            i, 0);
+    valid = valid && all_claimed(seen, trace_count, N00B_ABI_TABLE_TRACE,
+                                 error);
     snapshot_free(seen, trace_count);
     return valid;
 }
@@ -1842,21 +1869,24 @@ metadata_call_shapes_valid(const n00b_abi_snapshot_v1 *snapshot,
                                    shape_index, 0);
         else seen[shape_index] = 1;
     }
-    for (uint32_t i = 1; valid && i < shape_count; i++)
-        if (!seen[i]) valid = invalid_record(error,
-            N00B_ABI_TABLE_CALL_SHAPE, i, 0);
+    valid = valid && all_claimed(seen, shape_count,
+                                 N00B_ABI_TABLE_CALL_SHAPE, error);
     if (seen) snapshot_free(seen, shape_count);
     return valid;
 }
 
+typedef bool (*function_row_fn)(const n00b_abi_snapshot_v1 *snapshot,
+                                const n00b_abi_function_v1 *function,
+                                uint32_t function_index, uint32_t row);
+
 static bool
-metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
-                           n00b_abi_error_v1 *error)
+function_rows_valid(const n00b_abi_snapshot_v1 *snapshot,
+                    n00b_abi_error_v1 *error, uint32_t table, bool frames,
+                    function_row_fn row_valid)
 {
-    uint32_t code_count = n00b_abi_v1_table_count(snapshot,
-        N00B_ABI_TABLE_CODE_RANGE);
-    if (code_count <= 1) return true;
-    uint8_t *seen = snapshot_alloc(code_count);
+    uint32_t count = n00b_abi_v1_table_count(snapshot, table);
+    if (count <= 1) return true;
+    uint8_t *seen = snapshot_alloc(count);
     if (!seen) return false;
     bool valid = true;
     uint32_t function_count = n00b_abi_v1_table_count(snapshot,
@@ -1865,93 +1895,72 @@ metadata_code_ranges_valid(const n00b_abi_snapshot_v1 *snapshot,
          && function_index < function_count; function_index++) {
         const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
             function_index);
-        const n00b_abi_symbol_v1 *symbol = function->symbol_index
-            ? n00b_abi_v1_symbol(snapshot, function->symbol_index) : nullptr;
-        for (uint32_t i = 0; valid && i < function->code_ranges.count; i++) {
-            uint32_t code_index = 0;
-            valid = n00b_abi_v1_index_at(snapshot, function->code_ranges,
-                i, &code_index) == 1 && code_index
-                && code_index < code_count
-                && !seen[code_index];
-            const n00b_abi_code_range_v1 *code = valid
-                ? n00b_abi_v1_code_range(snapshot, code_index) : nullptr;
-            valid = valid && code && code->function_index == function_index
-                && code->start && code->byte_length
-                && code->byte_length <= UINTPTR_MAX
-                && (uintptr_t)code->start <= UINTPTR_MAX - code->byte_length
-                && (!function->symbol_index
-                    || (symbol && symbol->kind == N00B_ABI_SYMBOL_FUNCTION));
-            if (valid) seen[code_index] = 1;
-            else invalid_record(error, N00B_ABI_TABLE_CODE_RANGE,
-                                code_index, 0);
+        n00b_abi_range_v1 rows = frames ? function->frame_layouts
+                                        : function->code_ranges;
+        for (uint32_t i = 0; valid && i < rows.count; i++) {
+            uint32_t row = 0;
+            valid = claim_index(snapshot, rows, i, count, seen, &row)
+                && row_valid(snapshot, function, function_index, row);
+            if (valid) seen[row] = 1;
+            else invalid_record(error, table, row, 0);
         }
     }
-    for (uint32_t i = 1; valid && i < code_count; i++)
-        if (!seen[i]) valid = invalid_record(error,
-            N00B_ABI_TABLE_CODE_RANGE, i, 0);
-    snapshot_free(seen, code_count);
+    valid = valid && all_claimed(seen, count, table, error);
+    snapshot_free(seen, count);
     return valid;
 }
 
 static bool
-metadata_frame_layouts_valid(const n00b_abi_snapshot_v1 *snapshot,
-                             n00b_abi_error_v1 *error)
+code_range_valid(const n00b_abi_snapshot_v1 *snapshot,
+                 const n00b_abi_function_v1 *function,
+                 uint32_t function_index, uint32_t row)
 {
-    uint32_t frame_count = n00b_abi_v1_table_count(snapshot,
-        N00B_ABI_TABLE_FRAME_LAYOUT);
-    if (frame_count <= 1) return true;
-    uint8_t *seen = snapshot_alloc(frame_count);
-    if (!seen) return false;
-    bool valid = true;
-    uint32_t function_count = n00b_abi_v1_table_count(snapshot,
-        N00B_ABI_TABLE_FUNCTION);
-    for (uint32_t function_index = 1; valid
-         && function_index < function_count; function_index++) {
-        const n00b_abi_function_v1 *function = n00b_abi_v1_function(snapshot,
-            function_index);
-        for (uint32_t i = 0; valid && i < function->frame_layouts.count; i++) {
-            uint32_t frame_index = 0;
-            valid = n00b_abi_v1_index_at(snapshot, function->frame_layouts,
-                i, &frame_index) == 1 && frame_index
-                && frame_index < frame_count && !seen[frame_index];
-            const n00b_abi_frame_layout_v1 *frame = valid
-                ? n00b_abi_v1_frame_layout(snapshot, frame_index) : nullptr;
-            valid = valid && frame && frame->function_index == function_index
-                && frame->frame_byte_extent >= N00B_ABI_FRAME_ROOT_OFFSET
-                && !(frame->frame_byte_extent % 8);
-            if (valid && frame->shadow_frame_type_index) {
-                const n00b_abi_type_v1 *payload = n00b_abi_v1_type(snapshot,
-                    frame->shadow_frame_type_index);
-                uint64_t payload_bytes = frame->frame_byte_extent
-                    - N00B_ABI_FRAME_ROOT_OFFSET;
-                valid = payload && payload->layout_index
-                    && (payload->size_bits / 8 < payload_bytes
-                        || (payload->size_bits / 8 == payload_bytes
-                            && !(payload->size_bits % 8)))
-                    && !(payload->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE);
-            }
-            if (valid) {
-                uint64_t slots = (frame->frame_byte_extent
-                    - N00B_ABI_FRAME_ROOT_OFFSET) / 8;
-                uint64_t bitmap_bytes = (slots + 7) / 8;
-                const uint8_t *bitmap = nullptr;
-                valid = bitmap_bytes == frame->pointer_bitmap_bytes.count
-                    && n00b_abi_v1_bytes(snapshot, frame->pointer_bitmap_bytes,
-                        &bitmap) >= 0;
-                if (valid && slots % 8) {
-                    uint8_t trailing = (uint8_t)~((1u << (slots % 8)) - 1);
-                    valid = !(bitmap[bitmap_bytes - 1] & trailing);
-                }
-            }
-            if (valid) seen[frame_index] = 1;
-            else invalid_record(error, N00B_ABI_TABLE_FRAME_LAYOUT,
-                                frame_index, 0);
-        }
+    const n00b_abi_symbol_v1 *symbol = function->symbol_index
+        ? n00b_abi_v1_symbol(snapshot, function->symbol_index) : nullptr;
+    const n00b_abi_code_range_v1 *code = n00b_abi_v1_code_range(snapshot,
+                                                                row);
+    return code && code->function_index == function_index
+        && code->start && code->byte_length
+        && code->byte_length <= UINTPTR_MAX
+        && (uintptr_t)code->start <= UINTPTR_MAX - code->byte_length
+        && (!function->symbol_index
+            || (symbol && symbol->kind == N00B_ABI_SYMBOL_FUNCTION));
+}
+
+static bool
+frame_layout_valid(const n00b_abi_snapshot_v1 *snapshot,
+                   const n00b_abi_function_v1 *function,
+                   uint32_t function_index, uint32_t row)
+{
+    (void)function;
+    const n00b_abi_frame_layout_v1 *frame = n00b_abi_v1_frame_layout(
+        snapshot, row);
+    bool valid = frame && frame->function_index == function_index
+        && frame->frame_byte_extent >= N00B_ABI_FRAME_ROOT_OFFSET
+        && !(frame->frame_byte_extent % 8);
+    if (valid && frame->shadow_frame_type_index) {
+        const n00b_abi_type_v1 *payload = n00b_abi_v1_type(snapshot,
+            frame->shadow_frame_type_index);
+        uint64_t payload_bytes = frame->frame_byte_extent
+            - N00B_ABI_FRAME_ROOT_OFFSET;
+        valid = payload && payload->layout_index
+            && (payload->size_bits / 8 < payload_bytes
+                || (payload->size_bits / 8 == payload_bytes
+                    && !(payload->size_bits % 8)))
+            && !(payload->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE);
     }
-    for (uint32_t i = 1; valid && i < frame_count; i++)
-        if (!seen[i]) valid = invalid_record(error,
-            N00B_ABI_TABLE_FRAME_LAYOUT, i, 0);
-    snapshot_free(seen, frame_count);
+    if (!valid) return false;
+    uint64_t slots = (frame->frame_byte_extent
+        - N00B_ABI_FRAME_ROOT_OFFSET) / 8;
+    uint64_t bitmap_bytes = (slots + 7) / 8;
+    const uint8_t *bitmap = nullptr;
+    valid = bitmap_bytes == frame->pointer_bitmap_bytes.count
+        && n00b_abi_v1_bytes(snapshot, frame->pointer_bitmap_bytes,
+            &bitmap) >= 0;
+    if (valid && slots % 8) {
+        uint8_t trailing = (uint8_t)~((1u << (slots % 8)) - 1);
+        valid = !(bitmap[bitmap_bytes - 1] & trailing);
+    }
     return valid;
 }
 
@@ -2005,9 +2014,8 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
             for (uint32_t i = 0; valid && i < ranges[kind].count; i++) {
                 uint32_t storage_index = 0;
                 const n00b_abi_storage_v1 *storage = nullptr;
-                valid = n00b_abi_v1_index_at(snapshot, ranges[kind], i,
-                    &storage_index) == 1 && storage_index
-                    && storage_index < storage_count && !seen[storage_index];
+                valid = claim_index(snapshot, ranges[kind], i, storage_count,
+                                    seen, &storage_index);
                 if (valid) {
                     storage = n00b_abi_v1_storage(snapshot, storage_index);
                     valid = storage && storage->module_index == module_index
@@ -2067,10 +2075,9 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
         for (uint32_t i = 0; valid && i < storage->tls_relocations.count;
              i++) {
             uint32_t relocation_index = 0;
-            valid = n00b_abi_v1_index_at(snapshot, storage->tls_relocations,
-                i, &relocation_index) == 1 && relocation_index
-                && relocation_index < relocation_count
-                && !seen_relocations[relocation_index];
+            valid = claim_index(snapshot, storage->tls_relocations, i,
+                                relocation_count, seen_relocations,
+                                &relocation_index);
             const n00b_abi_tls_relocation_v1 *relocation = valid
                 ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_TLS_RELOCATION,
                                      relocation_index, nullptr) : nullptr;
@@ -2089,10 +2096,8 @@ metadata_storage_valid(const n00b_abi_snapshot_v1 *snapshot,
             else seen_relocations[relocation_index] = 1;
         }
     }
-    for (uint32_t index = 1; valid && index < relocation_count; index++)
-        if (!seen_relocations[index])
-            valid = invalid_record(error, N00B_ABI_TABLE_TLS_RELOCATION,
-                                   index, 0);
+    valid = valid && all_claimed(seen_relocations, relocation_count,
+                                 N00B_ABI_TABLE_TLS_RELOCATION, error);
     snapshot_free(seen, scratch_bytes);
     return valid;
 }
@@ -2145,9 +2150,8 @@ metadata_dispatch_valid(const n00b_abi_snapshot_v1 *snapshot,
         }
         for (uint32_t i = 0; valid && i < dispatch->entries.count; i++) {
             uint32_t entry_index = 0;
-            valid = n00b_abi_v1_index_at(snapshot, dispatch->entries, i,
-                &entry_index) == 1 && entry_index
-                && entry_index < entry_count && !seen_entries[entry_index];
+            valid = claim_index(snapshot, dispatch->entries, i, entry_count,
+                                seen_entries, &entry_index);
             const n00b_abi_dispatch_entry_v1 *entry = valid
                 ? n00b_abi_v1_record(snapshot, N00B_ABI_TABLE_DISPATCH_ENTRY,
                                      entry_index, nullptr) : nullptr;
@@ -2166,10 +2170,8 @@ metadata_dispatch_valid(const n00b_abi_snapshot_v1 *snapshot,
             }
         }
     }
-    for (uint32_t index = 1; valid && index < entry_count; index++)
-        if (!seen_entries[index])
-            valid = invalid_record(error, N00B_ABI_TABLE_DISPATCH_ENTRY,
-                                   index, 0);
+    valid = valid && all_claimed(seen_entries, entry_count,
+                                 N00B_ABI_TABLE_DISPATCH_ENTRY, error);
     snapshot_free(scratch, scratch_bytes);
     return valid;
 }
@@ -2227,11 +2229,7 @@ metadata_name_slots_valid(const n00b_abi_snapshot_v1 *snapshot,
         }
         seen[slot->symbol_index] = 1;
         size_t length = (size_t)(path.module_bytes + 1 + path.name_bytes);
-        for (size_t byte = 0; byte < path.module_bytes; byte++)
-            full_path[byte] = path.module[byte];
-        full_path[path.module_bytes] = '.';
-        for (size_t byte = 0; byte < path.name_bytes; byte++)
-            full_path[path.module_bytes + 1 + byte] = path.name[byte];
+        write_path(&path, full_path);
         uint64_t hash = XXH3_64bits(full_path, length);
         valid = hash == slot->name_hash;
         uint32_t probe = 1 + (uint32_t)(hash % capacity);
@@ -2268,11 +2266,7 @@ metadata_name_slots_valid(const n00b_abi_snapshot_v1 *snapshot,
             valid = invalid_record(error, N00B_ABI_TABLE_SYMBOL, i, 0);
             break;
         }
-        for (size_t byte = 0; byte < path.module_bytes; byte++)
-            full_path[byte] = path.module[byte];
-        full_path[path.module_bytes] = '.';
-        for (size_t byte = 0; byte < path.name_bytes; byte++)
-            full_path[path.module_bytes + 1 + byte] = path.name[byte];
+        write_path(&path, full_path);
         uint64_t hash = XXH3_64bits(full_path, length);
         uint32_t probe = capacity ? 1 + (uint32_t)(hash % capacity) : 0;
         bool matched = false;
@@ -2638,12 +2632,14 @@ snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
         && metadata_packages_valid(candidate, error)
         && metadata_sccs_valid(candidate, error)
         && metadata_traces_valid(candidate, error)
-        && metadata_code_ranges_valid(candidate, error)
+        && function_rows_valid(candidate, error, N00B_ABI_TABLE_CODE_RANGE,
+                               false, code_range_valid)
         && metadata_module_initializers_valid(candidate, error)
         && metadata_functions_valid(candidate, error)
         && metadata_call_signatures_valid(candidate, error)
         && metadata_call_shapes_valid(candidate, error)
-        && metadata_frame_layouts_valid(candidate, error)
+        && function_rows_valid(candidate, error, N00B_ABI_TABLE_FRAME_LAYOUT,
+                               true, frame_layout_valid)
         && metadata_storage_valid(candidate, error)
         && metadata_baked_nodes_valid(candidate, error)
         && metadata_dispatch_valid(candidate, error)
@@ -2818,19 +2814,30 @@ range_data(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind,
     return 1;
 }
 
+static int32_t
+stream_at(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind,
+          n00b_abi_range_v1 range, uint32_t ordinal, size_t width,
+          const uint8_t **slot)
+{
+    const uint8_t *data;
+    int32_t status = range_data(snapshot, kind, range, &data);
+    if (status <= 0) return status;
+    if (ordinal >= range.count) return 0;
+    *slot = data + (size_t)ordinal * width;
+    return 1;
+}
+
 int32_t
 n00b_abi_v1_index_at(const n00b_abi_snapshot_v1 *snapshot,
                      n00b_abi_range_v1 range, uint32_t ordinal,
                      uint32_t *index_out)
 {
-    const uint8_t *data;
-    if (!index_out) return -1;
-    int32_t status = range_data(snapshot, N00B_ABI_TABLE_U32_STREAM,
-                                range, &data);
-    if (status <= 0) return status;
-    if (ordinal >= range.count) return 0;
-    *index_out = ((const uint32_t *)data)[ordinal];
-    return 1;
+    const uint8_t *slot = nullptr;
+    int32_t status = index_out ? stream_at(snapshot,
+        N00B_ABI_TABLE_U32_STREAM, range, ordinal, sizeof(uint32_t), &slot)
+        : -1;
+    if (status == 1) *index_out = *(const uint32_t *)slot;
+    return status;
 }
 
 int32_t
@@ -2838,14 +2845,12 @@ n00b_abi_v1_u64_at(const n00b_abi_snapshot_v1 *snapshot,
                    n00b_abi_range_v1 range, uint32_t ordinal,
                    uint64_t *value_out)
 {
-    const uint8_t *data;
-    if (!value_out) return -1;
-    int32_t status = range_data(snapshot, N00B_ABI_TABLE_U64_STREAM,
-                                range, &data);
-    if (status <= 0) return status;
-    if (ordinal >= range.count) return 0;
-    *value_out = ((const uint64_t *)data)[ordinal];
-    return 1;
+    const uint8_t *slot = nullptr;
+    int32_t status = value_out ? stream_at(snapshot,
+        N00B_ABI_TABLE_U64_STREAM, range, ordinal, sizeof(uint64_t), &slot)
+        : -1;
+    if (status == 1) *value_out = *(const uint64_t *)slot;
+    return status;
 }
 
 int32_t
