@@ -12,21 +12,11 @@ const scan_chunk:     u64  = 512
 const prefetch_ahead: uint = 8
 
 func packet_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Packet]?       = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Packet)
 }
 
 func chunk_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Packet_Chunk]? = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Packet_Chunk)
 }
 
 func pool_lock(heap: Ref[internal.gc.core.Heap]) {
@@ -121,12 +111,8 @@ func mark_ambiguous(marker: Ref[internal.gc.core.Marker], address: uint) {
 }
 
 func barrier_slot_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[byte]?                    = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    let probe: Ref[byte]? = nil
+    return internal.abi.record_of(typeof(probe))
 }
 
 func barrier_flush_locked(mutator: Ref[internal.gc.core.Mutator]) {
@@ -746,43 +732,34 @@ inline func out_has_room(marker: Ref[internal.gc.core.Marker], need: uint) -> bo
     return false
 }
 
-inline func push(marker: Ref[internal.gc.core.Marker], header: Ref[internal.gc.core.Object_Header]) {
+inline func append_entry(marker: Ref[internal.gc.core.Marker],
+                         header: Ref[internal.gc.core.Object_Header]?,
+                         address: Ref[byte], type_index: u32,
+                         start_index: u64) {
     if !out_has_room(marker, 1) {
         reserve_out(marker, 1)
     }
     let output: Ref[internal.gc.core.Packet]? = marker.__value.output
-    if output != nil {
-        let packet: Ref[internal.gc.core.Packet]       = output
-        let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.__value.entries[packet.__value.n]
-        entry.__value.header = header
-        entry.__value.value_address = internal.gc.core.payload_of(header)
-        entry.__value.type_index = header.__value.type_index
-        entry.__value.start_index = 0
-        packet.__value.n += 1
-        return
-    }
-    require false
+    require output != nil
+    let packet: Ref[internal.gc.core.Packet]       = output
+    let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.__value.entries[packet.__value.n]
+    entry.__value.header = header
+    entry.__value.value_address = address
+    entry.__value.type_index = type_index
+    entry.__value.start_index = start_index
+    packet.__value.n += 1
+}
+
+inline func push(marker: Ref[internal.gc.core.Marker], header: Ref[internal.gc.core.Object_Header]) {
+    append_entry(marker, header, internal.gc.core.payload_of(header),
+                 header.__value.type_index, 0)
 }
 
 func push_continuation(marker: Ref[internal.gc.core.Marker],
                        header: Ref[internal.gc.core.Object_Header]?, address: Ref[byte],
                        type_index: u32, start_index: u64) {
     require start_index != 0
-    if !out_has_room(marker, 1) {
-        reserve_out(marker, 1)
-    }
-    let output: Ref[internal.gc.core.Packet]? = marker.__value.output
-    if output != nil {
-        let packet: Ref[internal.gc.core.Packet]       = output
-        let entry:  Ref[internal.gc.core.Packet_Entry] = ref packet.__value.entries[packet.__value.n]
-        entry.__value.header = header
-        entry.__value.value_address = address
-        entry.__value.type_index = type_index
-        entry.__value.start_index = start_index
-        packet.__value.n += 1
-        return
-    }
-    require false
+    append_entry(marker, header, address, type_index, start_index)
 }
 
 func marker_flush(marker: Ref[internal.gc.core.Marker]) {

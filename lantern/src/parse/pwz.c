@@ -374,6 +374,43 @@ build_seq_children(parse_pwz_parser_t *p,
 }
 
 static void
+add_rule_seqs(parse_pwz_parser_t *p, parse_grammar_t *g, parse_nonterm_t *nt,
+              int64_t nt_id, pwz_exp_t *target)
+{
+    for (size_t i = 0; i < core_list_len(nt->rule_ids); i++) {
+        parse_rule_t *rule = parse_get_rule(g, nt->rule_ids.data[i]);
+
+        if (rule->penalty_rule) {
+            continue;
+        }
+
+        pwz_exp_ptr_t *children;
+        int32_t        nchildren;
+
+        build_seq_children(p, rule, &children, &nchildren);
+        alt_add(target, make_seq_exp(p, nt->name, nt_id, (int32_t)i,
+                                     children, nchildren));
+    }
+}
+
+static void
+add_repeat_seqs(parse_pwz_parser_t *p, parse_nonterm_t *nt, int64_t nt_id,
+                pwz_exp_t *alt, pwz_exp_t *body_alt)
+{
+    for (size_t i = 0; i < core_list_len(body_alt->alt.alts); i++) {
+        pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
+        int32_t    nc       = body_seq->nchildren;
+
+        pwz_exp_ptr_t *new_children = core_alloc_array(pwz_exp_ptr_t, nc + 1);
+        new_children[0] = alt;
+        memcpy(new_children + 1, body_seq->seq.children,
+               (size_t)nc * sizeof(pwz_exp_ptr_t));
+        alt_add(alt, make_seq_exp(p, nt->name, nt_id, body_seq->rule_ix,
+                                  new_children, nc + 1));
+    }
+}
+
+static void
 expand_group_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t nt_id)
 {
     parse_nonterm_t *nt  = parse_get_nonterm(g, nt_id);
@@ -403,46 +440,12 @@ expand_group_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t nt_id)
     }
 
     if (!grp) {
-        for (size_t i = 0; i < core_list_len(nt->rule_ids); i++) {
-            int32_t            rule_ix = nt->rule_ids.data[i];
-            parse_rule_t *rule    = parse_get_rule(g, rule_ix);
-
-            if (rule->penalty_rule) {
-                continue;
-            }
-
-            pwz_exp_ptr_t *children;
-            int32_t        nchildren;
-
-            build_seq_children(p, rule, &children, &nchildren);
-
-            pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)i,
-                                          children, nchildren);
-            alt_add(alt, seq);
-        }
-
+        add_rule_seqs(p, g, nt, nt_id, alt);
         return;
     }
 
     pwz_exp_t *body_alt = make_alt_exp(p, nt_id);
-
-    for (size_t i = 0; i < core_list_len(nt->rule_ids); i++) {
-        int32_t            rule_ix = nt->rule_ids.data[i];
-        parse_rule_t *rule    = parse_get_rule(g, rule_ix);
-
-        if (rule->penalty_rule) {
-            continue;
-        }
-
-        pwz_exp_ptr_t *children;
-        int32_t        nchildren;
-
-        build_seq_children(p, rule, &children, &nchildren);
-
-        pwz_exp_t *seq = make_seq_exp(p, nt->name, nt_id, (int32_t)i,
-                                      children, nchildren);
-        alt_add(body_alt, seq);
-    }
+    add_rule_seqs(p, g, nt, nt_id, body_alt);
 
     pwz_exp_t *empty_seq = make_seq_exp(p, nt->name, nt_id, -1, nullptr, 0);
 
@@ -456,40 +459,11 @@ expand_group_nt(parse_pwz_parser_t *p, parse_grammar_t *g, int64_t nt_id)
         alt_add(alt, empty_seq);
     }
     else if (grp->min == 0 && grp->max == 0) {
-        for (size_t i = 0; i < body_nalts; i++) {
-            pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
-            int32_t    nc       = body_seq->nchildren;
-            int32_t    new_nc   = nc + 1;
-
-            pwz_exp_ptr_t *new_children = core_alloc_array(pwz_exp_ptr_t, new_nc);
-            new_children[0] = alt;
-            memcpy(new_children + 1, body_seq->seq.children,
-                   (size_t)nc * sizeof(pwz_exp_ptr_t));
-
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name, nt_id,
-                                              body_seq->rule_ix,
-                                              new_children, new_nc);
-            alt_add(alt, rep_seq);
-        }
-
+        add_repeat_seqs(p, nt, nt_id, alt, body_alt);
         alt_add(alt, empty_seq);
     }
     else if (grp->min == 1 && grp->max == 0) {
-        for (size_t i = 0; i < body_nalts; i++) {
-            pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
-            int32_t    nc       = body_seq->nchildren;
-            int32_t    new_nc   = nc + 1;
-
-            pwz_exp_ptr_t *new_children = core_alloc_array(pwz_exp_ptr_t, new_nc);
-            new_children[0] = alt;
-            memcpy(new_children + 1, body_seq->seq.children,
-                   (size_t)nc * sizeof(pwz_exp_ptr_t));
-
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name, nt_id,
-                                              body_seq->rule_ix,
-                                              new_children, new_nc);
-            alt_add(alt, rep_seq);
-        }
+        add_repeat_seqs(p, nt, nt_id, alt, body_alt);
 
         for (size_t i = 0; i < body_nalts; i++) {
             alt_add(alt, body_alt->alt.alts.data[i]);
@@ -988,41 +962,29 @@ run_dup(parse_pwz_parser_t *p, int32_t pos, pwz_res_t *result, pwz_cxt_t *cxt)
         break;
 
     case PWZ_CXT_SEQ: {
+        int32_t        total    = cxt->nleft + 1;
+        pwz_res_ptr_t *new_left = core_arena_alloc(
+            &p->parse_arena, (size_t)total * sizeof(pwz_res_ptr_t));
+
+        for (int32_t i = 0; i < cxt->nleft; i++) {
+            new_left[i] = cxt->seq.left[i];
+        }
+
+        new_left[cxt->nleft] = result;
+
         if (cxt->seq.nright == 0) {
-            int32_t total = cxt->nleft + 1;
-
-            pwz_res_ptr_t *children = core_arena_alloc(
-                &p->parse_arena, (size_t)total * sizeof(pwz_res_ptr_t));
-
-            for (int32_t i = 0; i < cxt->nleft; i++) {
-                children[i] = cxt->seq.left[i];
-            }
-
-            children[cxt->nleft] = result;
-
             pwz_res_t *seq_result = alloc_result(p);
 
             seq_result->kind      = PWZ_SEQ;
             seq_result->list_role = cxt->list_role;
             seq_result->nt_id     = cxt->nt_id;
             seq_result->rule_ix   = cxt->rule_ix;
-            seq_result->children  = children;
+            seq_result->children  = new_left;
             seq_result->nchildren = total;
 
             step_du(p, pos, seq_result, cxt->seq.mem);
         }
         else {
-            int32_t new_nleft = cxt->nleft + 1;
-
-            pwz_res_ptr_t *new_left = core_arena_alloc(
-                &p->parse_arena, (size_t)new_nleft * sizeof(pwz_res_ptr_t));
-
-            for (int32_t i = 0; i < cxt->nleft; i++) {
-                new_left[i] = cxt->seq.left[i];
-            }
-
-            new_left[cxt->nleft] = result;
-
             pwz_cxt_t *new_seq_cxt = alloc_cxt(p);
 
             new_seq_cxt->kind        = PWZ_CXT_SEQ;
@@ -1031,7 +993,7 @@ run_dup(parse_pwz_parser_t *p, int32_t pos, pwz_res_t *result, pwz_cxt_t *cxt)
             new_seq_cxt->nt_id   = cxt->nt_id;
             new_seq_cxt->rule_ix = cxt->rule_ix;
             new_seq_cxt->seq.left    = new_left;
-            new_seq_cxt->nleft   = new_nleft;
+            new_seq_cxt->nleft   = total;
             new_seq_cxt->seq.right   = cxt->seq.right + 1;
             new_seq_cxt->seq.nright  = cxt->seq.nright - 1;
 
@@ -2351,6 +2313,21 @@ parse_pwz_new_for_start(parse_grammar_t *g, parse_nt_id_t start)
     return p;
 }
 
+static void
+free_result_trees(parse_pwz_parser_t *p)
+{
+    if (p->result_trees.data) {
+        for (size_t i = 0; i < p->result_trees.len; i++) {
+            if (p->result_trees.data[i] == p->result_tree) {
+                p->result_tree = nullptr;
+            }
+            parse_tree_free(p->result_trees.data[i]);
+        }
+        core_array_free(p->result_trees);
+    }
+    parse_tree_free(p->result_tree);
+}
+
 void
 parse_pwz_free(parse_pwz_parser_t *p)
 {
@@ -2396,18 +2373,7 @@ parse_pwz_free(parse_pwz_parser_t *p)
     core_list_free(p->tops);
     core_list_free(p->steps);
     score_cache_free(p);
-
-    if (p->result_trees.data) {
-        for (size_t i = 0; i < p->result_trees.len; i++) {
-            if (p->result_trees.data[i] == p->result_tree) {
-                p->result_tree = nullptr;
-            }
-            parse_tree_free(p->result_trees.data[i]);
-        }
-        core_array_free(p->result_trees);
-    }
-    parse_tree_free(p->result_tree);
-
+    free_result_trees(p);
     core_free(p);
 }
 
@@ -2441,16 +2407,7 @@ parse_pwz_reset(parse_pwz_parser_t *p)
     if (!p) {
         return;
     }
-    if (p->result_trees.data) {
-        for (size_t i = 0; i < p->result_trees.len; i++) {
-            if (p->result_trees.data[i] == p->result_tree) {
-                p->result_tree = nullptr;
-            }
-            parse_tree_free(p->result_trees.data[i]);
-        }
-        core_array_free(p->result_trees);
-    }
-    parse_tree_free(p->result_tree);
+    free_result_trees(p);
 
     reset_memos(p);
     free_ambiguities(p);

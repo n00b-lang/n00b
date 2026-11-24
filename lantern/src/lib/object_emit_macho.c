@@ -88,13 +88,9 @@ bool core_object_emit_macho(const core_target_desc_t *target,
     if (!core_object_size_add(data_base, vm_size, &offset)) goto done;
     for (size_t i = 0; i < section_count; i++) {
         if (!rel_counts[i]) continue;
-        size_t bytes;
-        if (!core_object_size_mul(rel_counts[i], MACH_RELOCATION_BYTES,
-                                  &bytes) ||
-            !core_object_size_align(offset, 4, &offset) ||
-            offset > UINT32_MAX) goto done;
-        rel_offsets[i] = offset;
-        if (!core_object_size_add(offset, bytes, &offset)) goto done;
+        if (!core_object_place_table(&offset, rel_counts[i],
+                                     MACH_RELOCATION_BYTES, &rel_offsets[i]))
+            goto done;
     }
     if (!core_object_size_align(offset, 8, &offset) ||
         offset > UINT32_MAX) goto done;

@@ -610,13 +610,26 @@ private func format_substitution(fd: int, r: Style_Record) -> uint fail: int {
     return out
 }
 
-private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
-    -> uint fail: int {
+private func level_match(r: Style_Record, pos: u64, closing: bool) -> bool {
+    if closing {
+        return closes_here(r, pos)
+    }
+    return opens_here(r, pos) and r.end_ix != nil
+}
+
+private func level_key(r: Style_Record, closing: bool) -> u64 {
+    if closing {
+        return cast[u64] r.start_ix.get_or_else(0)
+    }
+    return cast[u64] r.end_ix.get_or_else(0)
+}
+
+private func level_tags(fd: int, body: Ref[Rich_Body], pos: u64,
+                        closing: bool) -> uint fail: int {
     let nrec: int = cast[int] body.__value.style_info.len()
     var out: uint = 0
-    let i: u64 = pos
-    var open_first: bool = true
-    var open_mark: u64 = 0
+    var first: bool = true
+    var mark: u64 = 0
     while true {
         var found: bool = false
         var best: u64 = 0
@@ -624,15 +637,15 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
         while j < nrec {
             let r: Style_Record = body.__value.style_info[j]
             j += 1
-            if !opens_here(r, i) or r.end_ix == nil {
+            if !level_match(r, pos, closing) {
                 continue
             }
-            let e: u64 = cast[u64] r.end_ix
-            if !open_first and e >= open_mark {
+            let key: u64 = level_key(r, closing)
+            if !first and key >= mark {
                 continue
             }
-            if !found or e > best {
-                best = e
+            if !found or key > best {
+                best = key
                 found = true
             }
         }
@@ -643,68 +656,25 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
         while j < nrec {
             let r: Style_Record = body.__value.style_info[j]
             j += 1
-            if !opens_here(r, i) or r.end_ix == nil or
-                cast[u64](r.end_ix) != best {
-                continue
+            if level_match(r, pos, closing) and level_key(r, closing) == best {
+                out += format_style_tag(fd, r.style_tag.get_or_else(""),
+                                        closing)!
             }
-            out += format_style_tag(fd, r.style_tag.get_or_else(""), false)!
         }
-        open_mark = best
-        open_first = false
+        mark = best
+        first = false
+    }
+    if closing {
+        return out
     }
     var k: int = 0
     while k < nrec {
         let r: Style_Record = body.__value.style_info[k]
         k += 1
-        if r.start_ix != nil and cast[u64](r.start_ix) == i and
+        if r.start_ix != nil and cast[u64](r.start_ix) == pos and
             sub_arm(r.substitution) != sub_arm_none {
             out += format_substitution(fd, r)!
         }
-    }
-    return out
-}
-
-private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
-    -> uint fail: int {
-    let nrec: int = cast[int] body.__value.style_info.len()
-    var out: uint = 0
-    let i: u64 = pos
-    var close_first: bool = true
-    var close_mark: u64 = 0
-    while true {
-        var found: bool = false
-        var best: u64 = 0
-        var j: int = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if !closes_here(r, i) {
-                continue
-            }
-            let s: u64 = cast[u64] r.start_ix.get_or_else(0)
-            if !close_first and s >= close_mark {
-                continue
-            }
-            if !found or s > best {
-                best = s
-                found = true
-            }
-        }
-        if !found {
-            break
-        }
-        j = 0
-        while j < nrec {
-            let r: Style_Record = body.__value.style_info[j]
-            j += 1
-            if closes_here(r, i) and
-                cast[u64](r.start_ix.get_or_else(0)) == best {
-                out += format_style_tag(fd, r.style_tag.get_or_else(""),
-                                        true)!
-            }
-        }
-        close_mark = best
-        close_first = false
     }
     return out
 }
@@ -716,7 +686,7 @@ private func opens_outward_in(fd: int, cur: string, pos: u64)
         return out
     }
     let body: Ref[Rich_Body] = rich_body(cur)
-    out += level_opens(fd, body, pos)!
+    out += level_tags(fd, body, pos, false)!
     out += opens_outward_in(fd, body.__value.s, pos)!
     return out
 }
@@ -729,7 +699,7 @@ private func closes_inward_out(fd: int, cur: string, pos: u64)
     }
     let body: Ref[Rich_Body] = rich_body(cur)
     out += closes_inward_out(fd, body.__value.s, pos)!
-    out += level_closes(fd, body, pos)!
+    out += level_tags(fd, body, pos, true)!
     return out
 }
 
@@ -1278,11 +1248,7 @@ private func parse_rich_markup(raw: string,
             continue
         }
         if c == 0xc2 and i + 1 < n and string.core.byte_at(raw, i + 1) == 0xab {
-            var j: uint = i + 2
-            while j + 1 < n and !(string.core.byte_at(raw, j) == 0xc2 and
-                                  string.core.byte_at(raw, j + 1) == 0xbb) {
-                j += 1
-            }
+            let j: uint = pair_end(raw, i + 2, 0xc2, 0xbb)
             if j + 1 < n {
                 classify_tag(segments, numbering,
                     string.core.byte_slice(raw, cast[int] (i + 2),
@@ -1298,11 +1264,7 @@ private func parse_rich_markup(raw: string,
             continue
         }
         if c == 0x5b and i + 1 < n and string.core.byte_at(raw, i + 1) == 0x3a {
-            var j: uint = i + 2
-            while j + 1 < n and !(string.core.byte_at(raw, j) == 0x3a and
-                                  string.core.byte_at(raw, j + 1) == 0x5d) {
-                j += 1
-            }
+            let j: uint = pair_end(raw, i + 2, 0x3a, 0x5d)
             if j + 1 >= n {
                 fail "rich string contains an unclosed ASCII tag"
             }
@@ -1316,6 +1278,17 @@ private func parse_rich_markup(raw: string,
         i += 1
     }
     return containers.buffer.to_string(text)
+}
+
+private func pair_end(raw: string, from: uint, first: u8, second: u8)
+    -> uint {
+    let n: uint = string.core.byte_len(raw)
+    var j: uint = from
+    while j + 1 < n and !(string.core.byte_at(raw, j) == first and
+                          string.core.byte_at(raw, j + 1) == second) {
+        j += 1
+    }
+    return j
 }
 
 private func span_record(pending: Pending_Style, end: u32?) -> Style_Record {

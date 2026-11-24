@@ -97,26 +97,15 @@ func utf32_to_string(src: List[char]) -> string fail: String_Error {
     let count: uint = src.len()
     var data: Array[u8] = new[Array[u8]](cast[int] (count * 4 + 1))
     var pos: uint = 0
-    var ok: bool = true
 
     var i: int = 0
     while i < cast[int] count {
-        var n: i32 = 0
-        if ok {
-            n = utf8_encode(src[i], data, pos)
+        let n: i32 = utf8_encode(src[i], data, pos)
+        if n == 0 {
+            fail String_Error.bad_encoding
         }
-
-        if n != 0 {
-            pos += cast[uint] n
-        }
-        else {
-            ok = false
-        }
+        pos += cast[uint] n
         i += 1
-    }
-
-    if !ok {
-        fail String_Error.bad_encoding
     }
 
     data[pos] = 0
@@ -131,15 +120,9 @@ func utf16_to_string(src: List[u16]) -> string fail: String_Error {
     let count: uint = src.len()
     var data: Array[u8] = new[Array[u8]](cast[int] (count * 4 + 1))
     var pos: uint = 0
-    var ok: bool = true
 
     var i: int = 0
     while i < cast[int] count {
-        if !ok {
-            i += 1
-            continue
-        }
-
         var cp: u32 = cast[u32] src[i]
 
         if cp >= 0xd800 and cp <= 0xdbff and i + 1 < cast[int](count) and
@@ -150,18 +133,11 @@ func utf16_to_string(src: List[u16]) -> string fail: String_Error {
         }
 
         let n: i32 = utf8_encode(cast[char] cp, data, pos)
-
-        if n != 0 {
-            pos += cast[uint] n
+        if n == 0 {
+            fail String_Error.bad_encoding
         }
-        else {
-            ok = false
-        }
+        pos += cast[uint] n
         i += 1
-    }
-
-    if !ok {
-        fail String_Error.bad_encoding
     }
 
     data[pos] = 0

@@ -7,7 +7,7 @@
 #include "lib/alloc.h"
 
 #define IR_ARCHIVE_MAGIC   UINT32_C(0x4e30494c)
-#define IR_ARCHIVE_VERSION UINT32_C(6)
+#define IR_ARCHIVE_VERSION UINT32_C(7)
 
 enum {
     REF_NONE,
@@ -266,8 +266,6 @@ w_shape(writer_t *w, const ir_shape_t *shape)
 static void
 w_value_details(writer_t *w, const ir_value_t *value)
 {
-    w_u8(w, value->is_keyword);
-    w_u8(w, value->is_rest);
     w_u8(w, value->is_optional);
     w_shape(w, value->shape);
     w_annots(w, &value->annots);
@@ -399,7 +397,6 @@ w_operand(writer_t *w, const ir_operand_t *operand)
     w_u8(w, (uint8_t)operand->kind);
     switch (operand->kind) {
     case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
     case IR_OPD_FRESH:
         w_value(w, operand->value);
         break;
@@ -928,8 +925,6 @@ r_shape(reader_t *r)
 static void
 r_value_details(reader_t *r, ir_value_t *value)
 {
-    value->is_keyword = r_u8(r) != 0;
-    value->is_rest = r_u8(r) != 0;
     value->is_optional = r_u8(r) != 0;
     value->shape = r_shape(r);
     r_annots(r, &value->annots);
@@ -1138,7 +1133,6 @@ r_operand(reader_t *r, ir_func_t *function, ir_operand_t *operand)
     operand->kind = (ir_opdkind_t)r_u8(r);
     switch (operand->kind) {
     case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
     case IR_OPD_FRESH:
         operand->value = r_value(r);
         break;

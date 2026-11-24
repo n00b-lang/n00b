@@ -477,10 +477,10 @@ doc_comment(pr_t *p, parse_trivia_t *item)
 }
 
 static void
-put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
-                   parse_trivia_t *trivia)
+put_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts, parse_trivia_t *trivia,
+           bool trailing)
 {
-    gap_t before = GAP_NONE;
+    gap_t before = trailing ? GAP_SPACE : GAP_NONE;
 
     for (parse_trivia_t *item = trivia; item; item = item->next) {
         if (item->kind == PARSE_TRIVIA_SPACE) {
@@ -494,43 +494,17 @@ put_leading_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
         }
 
         doc_t *comment = doc_comment(p, item);
-        if (before != GAP_NONE || comment->standalone)
+        if (trailing || before != GAP_NONE || comment->standalone)
             core_list_push(*parts, doc_gap(p,
                 comment->standalone ? gap_max(before, GAP_HARD) : before));
         core_list_push(*parts, comment);
         before = GAP_HARD;
     }
 
+    if (trailing) before = GAP_HARD;
     if (before != GAP_NONE) {
         core_list_push(*parts, doc_gap(p, before));
     }
-}
-
-static void
-put_trailing_trivia(pr_t *p, core_list_t(doc_ptr_t) *parts,
-                    parse_trivia_t *trivia)
-{
-    gap_t before = GAP_SPACE;
-
-    for (parse_trivia_t *item = trivia; item; item = item->next) {
-        if (item->kind == PARSE_TRIVIA_SPACE) {
-            before = trivia_gap(item->text);
-            continue;
-        }
-
-        if (item->kind != PARSE_TRIVIA_COMMENT || !item->text.data
-            || !item->text.u8_bytes) {
-            continue;
-        }
-
-        doc_t *comment = doc_comment(p, item);
-        core_list_push(*parts, doc_gap(p,
-            comment->standalone ? gap_max(before, GAP_HARD) : before));
-        core_list_push(*parts, comment);
-        before = GAP_HARD;
-    }
-
-    core_list_push(*parts, doc_gap(p, GAP_HARD));
 }
 
 static void *reduce_leaf(parse_reduce_t *r)
@@ -573,13 +547,13 @@ static void *reduce_leaf(parse_reduce_t *r)
     core_list_t(doc_ptr_t) parts = core_list_new(doc_ptr_t);
 
     if (leading_comments) {
-        put_leading_trivia(p, &parts, parse_token_leading_trivia(t));
+        put_trivia(p, &parts, parse_token_leading_trivia(t), false);
     }
 
     core_list_push(parts, doc_text(p, s));
 
     if (trailing_comments) {
-        put_trailing_trivia(p, &parts, parse_token_trailing_trivia(t));
+        put_trivia(p, &parts, parse_token_trailing_trivia(t), true);
     }
 
     doc_t *d = doc_seq(p, D_SEQ, parts.data, parts.len);

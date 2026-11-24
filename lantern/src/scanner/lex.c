@@ -1987,8 +1987,7 @@ static void emit_layout_newline(parse_scanner_t *s, scan_lex_session_t *run) {
   }
 }
 
-static bool finish_embedded_layout(parse_scanner_t *s,
-                                   scan_lex_session_t *run) {
+static bool end_layout_line(parse_scanner_t *s, scan_lex_session_t *run) {
   const scan_lex_t *lex = run->program;
 
   if (lex->tid_terminator != PARSE_TOK_IGNORED && run->line_has_token &&
@@ -2003,6 +2002,17 @@ static bool finish_embedded_layout(parse_scanner_t *s,
       newlines_visible(lex, run)) {
     run->line_has_token = false;
     emit_layout_newline(s, run);
+    return true;
+  }
+
+  return false;
+}
+
+static bool finish_embedded_layout(parse_scanner_t *s,
+                                   scan_lex_session_t *run) {
+  const scan_lex_t *lex = run->program;
+
+  if (end_layout_line(s, run)) {
     return true;
   }
 
@@ -3941,20 +3951,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
       return false;
     }
 
-    if (lex->tid_terminator != PARSE_TOK_IGNORED && run->line_has_token &&
-        run->bracket_depth == 0 && ends_a_statement(lex, s)) {
-      run->line_has_token = false;
-      scan_mark(s);
-      scan_emit_marked(s, lex->tid_terminator);
-
-      return true;
-    }
-
-    if (lex->tid_newline != PARSE_TOK_IGNORED && run->line_has_token &&
-        newlines_visible(lex, run)) {
-      run->line_has_token = false;
-      emit_layout_newline(s, run);
-
+    if (end_layout_line(s, run)) {
       return true;
     }
 

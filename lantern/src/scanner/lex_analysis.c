@@ -290,23 +290,29 @@ set_declaration_error(core_string_t *error, core_string_t prefix,
     *error = core_buffer_take_string(buf);
 }
 
+static size_t
+terminal_codepoints(parse_grammar_t *grammar, int32_t *out)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < grammar->rules.len; i++) {
+        const parse_rule_t *rule = &grammar->rules.data[i];
+        for (size_t j = 0; j < rule->contents.len; j++) {
+            const parse_match_t *match = &rule->contents.data[j];
+            if (match->kind != PARSE_MATCH_TERMINAL || match->terminal_id <= 0
+                || match->terminal_id >= PARSE_TOK_START_ID) continue;
+            if (out) out[count] = (int32_t)match->terminal_id;
+            count++;
+        }
+    }
+    return count;
+}
+
 static bool
 analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
                  lex_decl_origin_t *origins, size_t origin_count,
                  core_string_t *error)
 {
-    size_t codepoint_count = 0;
-    for (size_t i = 0; i < grammar->rules.len; i++) {
-        const parse_rule_t *rule = &grammar->rules.data[i];
-        for (size_t j = 0; j < rule->contents.len; j++) {
-            const parse_match_t *match = &rule->contents.data[j];
-            if (match->kind == PARSE_MATCH_TERMINAL
-                && match->terminal_id > 0
-                && match->terminal_id < PARSE_TOK_START_ID) {
-                codepoint_count++;
-            }
-        }
-    }
+    size_t codepoint_count = terminal_codepoints(grammar, nullptr);
     size_t capacity = grammar->named_terms.len + codepoint_count;
 #define COUNT(field, type, member)                                             \
     capacity += recipe_count(spec->field, sizeof(type), offsetof(type, member))
@@ -328,18 +334,7 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     int32_t *codepoints = core_alloc_array(int32_t,
                                             codepoint_count
                                                 ? codepoint_count : 1);
-    size_t codepoint_at = 0;
-    for (size_t i = 0; i < grammar->rules.len; i++) {
-        const parse_rule_t *rule = &grammar->rules.data[i];
-        for (size_t j = 0; j < rule->contents.len; j++) {
-            const parse_match_t *match = &rule->contents.data[j];
-            if (match->kind == PARSE_MATCH_TERMINAL
-                && match->terminal_id > 0
-                && match->terminal_id < PARSE_TOK_START_ID) {
-                codepoints[codepoint_at++] = (int32_t)match->terminal_id;
-            }
-        }
-    }
+    size_t codepoint_at = terminal_codepoints(grammar, codepoints);
     qsort(codepoints, codepoint_at, sizeof(*codepoints), int32_compare);
     char *codepoint_spellings = core_alloc_size(
         codepoint_at ? codepoint_at : 1, 4);

@@ -408,6 +408,19 @@ decode_interface_enum_storage(const uint8_t *data, size_t size,
 }
 
 static bool
+named_entry(const uint8_t *data, size_t size, size_t *offset, size_t body,
+            core_string_t *name)
+{
+    if (*offset > size || size - *offset < 4) return false;
+    uint32_t name_size = read_u32_le(data + *offset);
+    *offset += 4;
+    if (name_size > size - *offset) return false;
+    *name = core_string_borrow((const char *)data + *offset, name_size);
+    *offset += name_size;
+    return *offset <= size && size - *offset >= body;
+}
+
+static bool
 decode_interface_enum_value(const uint8_t *data, size_t size,
                             core_string_t member_name,
                             n00bb_enum_value_t *value)
@@ -419,21 +432,15 @@ decode_interface_enum_value(const uint8_t *data, size_t size,
     offset += 4;
     bool found = false;
     for (uint32_t i = 0; i < count; i++) {
-        if (offset > size || size - offset < 4) return false;
-        uint32_t name_size = read_u32_le(data + offset);
-        offset += 4;
-        if (name_size > size - offset) return false;
-        const uint8_t *name = data + offset;
-        offset += name_size;
-        if (offset > size || size - offset < 17) return false;
+        core_string_t name;
+        if (!named_entry(data, size, &offset, 17, &name)) return false;
         ir_uint_t decoded = read_u64_le(data + offset);
         offset += 8;
         decoded |= (ir_uint_t)read_u64_le(data + offset) << 64;
         offset += 8;
         uint8_t negative = data[offset++];
         if (negative > 1 || (negative && !decoded)) return false;
-        if (core_string_eq(core_string_borrow((const char *)name, name_size),
-                           member_name)) {
+        if (core_string_eq(name, member_name)) {
             if (found) return false;
             found = true;
             if (value) *value = (n00bb_enum_value_t){decoded, negative != 0};
@@ -461,13 +468,8 @@ decode_interface_flagset_value(const uint8_t *data, size_t size,
     if (decoded_info.atomic_count > 128) return false;
     bool found = false;
     for (uint32_t i = 0; i < count; i++) {
-        if (offset > size || size - offset < 4) return false;
-        uint32_t name_size = read_u32_le(data + offset);
-        offset += 4;
-        if (name_size > size - offset) return false;
-        const uint8_t *name = data + offset;
-        offset += name_size;
-        if (offset > size || size - offset < 21) return false;
+        core_string_t name;
+        if (!named_entry(data, size, &offset, 21, &name)) return false;
         n00bb_flagset_value_t decoded = {
             .mask = read_u128_le(data + offset),
         };
@@ -475,8 +477,7 @@ decode_interface_flagset_value(const uint8_t *data, size_t size,
         decoded.declaration_order = read_u32_le(data + offset);
         offset += 4;
         decoded.atomic = data[offset++] != 0;
-        if (core_string_eq(core_string_borrow((const char *)name, name_size),
-                           member_name)) {
+        if (core_string_eq(name, member_name)) {
             if (found) return false;
             found = true;
             if (value) *value = decoded;
@@ -501,13 +502,8 @@ decode_interface_member_metadata(const uint8_t *data, size_t size,
     offset += 4;
     if (type_visibility > 2) return false;
     for (uint32_t i = 0; i < count; i++) {
-        if (offset > size || size - offset < 4) return false;
-        uint32_t name_size = read_u32_le(data + offset);
-        offset += 4;
-        if (name_size > size - offset) return false;
-        const uint8_t *name = data + offset;
-        offset += name_size;
-        if (offset > size || size - offset < 24) return false;
+        core_string_t name;
+        if (!named_entry(data, size, &offset, 24, &name)) return false;
         uint32_t member_visibility = read_u32_le(data + offset);
         offset += 4;
         uint32_t member_flags = read_u32_le(data + offset);
@@ -517,8 +513,7 @@ decode_interface_member_metadata(const uint8_t *data, size_t size,
         uint64_t member_width = read_u64_le(data + offset);
         offset += 8;
         if (member_visibility > 2 || member_flags > 3) return false;
-        if (core_string_eq(core_string_borrow((const char *)name, name_size),
-                           member_name)) {
+        if (core_string_eq(name, member_name)) {
             if (position) *position = i;
             if (visibility) *visibility = member_visibility;
             if (flags) *flags = member_flags;
@@ -1180,6 +1175,16 @@ read_manifest_text(n00bb_tu_state_t *state, const uint8_t *data, size_t size,
     return !length || out->data;
 }
 
+static bool
+environment_metadata(const th_env *environment, size_t m, core_string_t key,
+                     th_env_metadata_view_t *metadata)
+{
+    *metadata = (th_env_metadata_view_t){0};
+    return th_env_metadata_at(environment, m, metadata)
+        && metadata->owner_kind == TH_ENV_METADATA_ENVIRONMENT
+        && core_string_eq(metadata->key, key);
+}
+
 bool
 interface_restore_package_declarations(
     const n00bb_interface_context_t *context, core_translation_unit_t *unit)
@@ -1189,11 +1194,10 @@ interface_restore_package_declarations(
     for (size_t i = 0; i < context->linked_interface_count; i++) {
         const th_env *environment = context->linked_interfaces[i];
         for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
-            th_env_metadata_view_t metadata = {0};
-            if (!th_env_metadata_at(environment, m, &metadata)
-                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
-                || !core_string_eq(metadata.key,
-                       CORE_STRING_STATIC("n00b.package-manifest"))
+            th_env_metadata_view_t metadata;
+            if (!environment_metadata(environment, m,
+                                      CORE_STRING_STATIC("n00b.package-manifest"),
+                                      &metadata)
                 || metadata.version != 1) continue;
             const uint8_t *data = metadata.data;
             size_t size = metadata.size, at = 0;
@@ -1724,11 +1728,10 @@ interface_root_package(n00bb_interface_context_t *loader,
     for (size_t e = 0; e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];
         for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
-            th_env_metadata_view_t metadata = {0};
-            if (!th_env_metadata_at(environment, m, &metadata)
-                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
-                || !core_string_eq(metadata.key,
-                       CORE_STRING_STATIC("n00b.package-manifest"))
+            th_env_metadata_view_t metadata;
+            if (!environment_metadata(environment, m,
+                                      CORE_STRING_STATIC("n00b.package-manifest"),
+                                      &metadata)
                 || !core_string_eq(metadata.owner_name, root)
                 || metadata.size < 4) continue;
             uint32_t length = read_u32_le(metadata.data);
@@ -1798,11 +1801,10 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
     for (size_t e = 0; e < loader->linked_interface_count; e++) {
         const th_env *environment = loader->linked_interfaces[e];
         for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
-            th_env_metadata_view_t metadata = {0};
-            if (!th_env_metadata_at(environment, m, &metadata)
-                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
-                || !core_string_eq(metadata.key,
-                       CORE_STRING_STATIC("n00b.package-interface"))
+            th_env_metadata_view_t metadata;
+            if (!environment_metadata(environment, m,
+                                      CORE_STRING_STATIC("n00b.package-interface"),
+                                      &metadata)
                 || metadata.version != 1)
                 continue;
             core_string_t package = metadata.owner_name;

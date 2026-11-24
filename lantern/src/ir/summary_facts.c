@@ -792,9 +792,14 @@ record_step(core_datalog_relation_id_t relation,
         step.name   = core_datalog_symbol_name(facts->engine, tuple[2]);
         if (index >= 0 && (size_t)index < facts->places.len)
             step.place = facts->places.data[index];
-    } else if (relation == facts->ids[REL_ESCAPE]) {
+    } else if (relation == facts->ids[REL_ESCAPE]
+               || relation == facts->ids[REL_RETURN_ALIAS]
+               || relation == facts->ids[REL_DEPENDENCE]) {
         step.callee = function_at(facts, tuple[0]);
-        step.kind   = IR_SUMMARY_STEP_ESCAPE;
+        step.kind   = relation == facts->ids[REL_ESCAPE]
+            ? IR_SUMMARY_STEP_ESCAPE
+            : relation == facts->ids[REL_RETURN_ALIAS] ? IR_SUMMARY_STEP_RETURNS
+                                                        : IR_SUMMARY_STEP_DEPENDS;
         step.param  = (uint32_t)symbol_index(facts, tuple[1]);
     } else if (relation == facts->ids[REL_ADDRESSABLE_ARGUMENT]) {
         step.kind  = IR_SUMMARY_STEP_ADDRESSABLE;
@@ -804,14 +809,6 @@ record_step(core_datalog_relation_id_t relation,
         step.kind = IR_SUMMARY_STEP_PLACE;
         if (index >= 0 && (size_t)index < facts->places.len)
             step.place = facts->places.data[index];
-    } else if (relation == facts->ids[REL_RETURN_ALIAS]) {
-        step.callee = function_at(facts, tuple[0]);
-        step.kind   = IR_SUMMARY_STEP_RETURNS;
-        step.param  = (uint32_t)symbol_index(facts, tuple[1]);
-    } else if (relation == facts->ids[REL_DEPENDENCE]) {
-        step.callee = function_at(facts, tuple[0]);
-        step.kind   = IR_SUMMARY_STEP_DEPENDS;
-        step.param  = (uint32_t)symbol_index(facts, tuple[1]);
     } else
         step.kind = IR_SUMMARY_STEP_RULE;
     step.relation = core_datalog_relation_name(facts->engine, relation);

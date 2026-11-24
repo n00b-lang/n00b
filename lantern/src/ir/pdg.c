@@ -856,36 +856,14 @@ static void collect_exits(ir_group_pdg_t *g)
     g->exit_off[g->n_functions] = total;
 }
 
-static ir_value_t *rest_value(const ir_func_t *f)
-{
-    for (uint32_t p = 0; p < f->n_params; p++) {
-        if (f->params[p]->is_rest) {
-            return f->params[p];
-        }
-    }
-
-    return nullptr;
-}
-
 ir_value_t *ir_call_param(ir_func_t *target, const ir_operand_t *o,
                           uint32_t *position, uint32_t *type_index)
 {
     *type_index = UINT32_MAX;
-    if (o->kind == IR_OPD_NAMED_ARG) {
-        for (uint32_t p = 0; p < target->n_params; p++) {
-            if (target->params[p]->is_keyword
-                && core_string_eq(target->params[p]->name, o->named.name)) {
-                return o->named.value ? target->params[p] : nullptr;
-            }
-        }
+    if ((o->kind != IR_OPD_VALUE && o->kind != IR_OPD_ARG
+         && o->kind != IR_OPD_FRESH && o->kind != IR_OPD_MISSING)
+        || *position >= th_func_nparams(target->type)) {
         return nullptr;
-    }
-    if (o->kind != IR_OPD_VALUE && o->kind != IR_OPD_ARG
-        && o->kind != IR_OPD_SPREAD && o->kind != IR_OPD_FRESH && o->kind != IR_OPD_MISSING) {
-        return nullptr;
-    }
-    if (*position >= th_func_nparams(target->type)) {
-        return o->kind == IR_OPD_MISSING ? nullptr : rest_value(target);
     }
 
     uint32_t index = (*position)++;

@@ -138,16 +138,22 @@ private func cell_shape(align: internal.string.Align) -> Box_Props {
             valignment = Valign.top)
 }
 
-func table_style_default() -> Table_Style {
-    let frame: Box_Props = (
-        border_theme = ref internal.border.border_rounded,
-        border_style = palette_style(
+private func table_frame(theme: View[internal.border.Border_Theme],
+                         border: Text_Style?,
+                         borders: internal.border.Border_Set) -> Box_Props {
+    return (border_theme = theme, border_style = border, fill_style = nil,
+            text_style = nil, borders = borders, pad_top = 0, pad_bottom = 0,
+            pad_left = 0, pad_right = 0,
+            alignment = internal.string.Align.left, valignment = Valign.top)
+}
+
+private func shaded_style(theme: View[internal.border.Border_Theme])
+    -> Table_Style {
+    let frame: Box_Props = table_frame(theme,
+        palette_style(
             cast[i8] internal.theme.Palette_Ix.border_light,
             cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none),
-        fill_style = nil, text_style = nil,
-        borders = internal.border.Border_Set.all, pad_top = 0,
-        pad_bottom = 0, pad_left = 0, pad_right = 0,
-        alignment = internal.string.Align.left, valignment = Valign.top)
+        internal.border.Border_Set.all)
     var cell: Box_Props = cell_shape(internal.string.Align.left)
     cell.text_style = palette_style(
         cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
@@ -161,9 +167,7 @@ func table_style_default() -> Table_Style {
     head.fill_style = palette_style(
         -1, cast[i8] internal.theme.Palette_Ix.primary, false, Text_Case.none)
     var alt: Box_Props = cell_shape(internal.string.Align.left)
-    alt.text_style = palette_style(
-        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
-        Text_Case.none)
+    alt.text_style = cell.text_style
     alt.fill_style = palette_style(
         -1, cast[i8] internal.theme.Palette_Ix.surface_dark, false,
         Text_Case.none)
@@ -173,18 +177,30 @@ func table_style_default() -> Table_Style {
             alt_cell_props = box_props_new(alt))
 }
 
+private func bare_style(frame: Box_Props) -> Table_Style {
+    var head: Box_Props = cell_shape(internal.string.Align.center)
+    head.text_style = palette_style(-1, -1, true, Text_Case.none)
+    return (table_props = box_props_new(frame),
+            cell_props =
+                box_props_new(cell_shape(internal.string.Align.left)),
+            header_props = box_props_new(head),
+            alt_cell_props = nil)
+}
+
+private func border_tone() -> Text_Style {
+    return palette_style(cast[i8] internal.theme.Palette_Ix.border, -1, false,
+                         Text_Case.none)
+}
+
+func table_style_default() -> Table_Style {
+    return shaded_style(ref internal.border.border_rounded)
+}
+
 func table_style_simple() -> Table_Style {
-    let frame: Box_Props = (
-        border_theme = ref internal.border.border_plain,
-        border_style = palette_style(
-            cast[i8] internal.theme.Palette_Ix.border, -1, false,
-            Text_Case.none),
-        fill_style = nil, text_style = nil,
-        borders = internal.border.Border_Set.top +
-            internal.border.Border_Set.bottom +
-            internal.border.Border_Set.interior_h,
-        pad_top = 0, pad_bottom = 0, pad_left = 0, pad_right = 0,
-        alignment = internal.string.Align.left, valignment = Valign.top)
+    let frame: Box_Props = table_frame(ref internal.border.border_plain,
+        border_tone(),
+        internal.border.Border_Set.top + internal.border.Border_Set.bottom +
+            internal.border.Border_Set.interior_h)
     var cell: Box_Props = cell_shape(internal.string.Align.left)
     cell.text_style = palette_style(
         cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
@@ -199,73 +215,18 @@ func table_style_simple() -> Table_Style {
 }
 
 func table_style_ornate() -> Table_Style {
-    let frame: Box_Props = (
-        border_theme = ref internal.border.border_double,
-        border_style = palette_style(
-            cast[i8] internal.theme.Palette_Ix.border_light,
-            cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none),
-        fill_style = nil, text_style = nil,
-        borders = internal.border.Border_Set.all, pad_top = 0,
-        pad_bottom = 0, pad_left = 0, pad_right = 0,
-        alignment = internal.string.Align.left, valignment = Valign.top)
-    var cell: Box_Props = cell_shape(internal.string.Align.left)
-    cell.text_style = palette_style(
-        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
-        Text_Case.none)
-    cell.fill_style = palette_style(
-        -1, cast[i8] internal.theme.Palette_Ix.surface, false, Text_Case.none)
-    var head: Box_Props = cell_shape(internal.string.Align.center)
-    head.text_style = palette_style(
-        cast[i8] internal.theme.Palette_Ix.text_inverse, -1, true,
-        Text_Case.upper)
-    head.fill_style = palette_style(
-        -1, cast[i8] internal.theme.Palette_Ix.primary, false, Text_Case.none)
-    var alt: Box_Props = cell_shape(internal.string.Align.left)
-    alt.text_style = palette_style(
-        cast[i8] internal.theme.Palette_Ix.text_primary, -1, false,
-        Text_Case.none)
-    alt.fill_style = palette_style(
-        -1, cast[i8] internal.theme.Palette_Ix.surface_dark, false,
-        Text_Case.none)
-    return (table_props = box_props_new(frame),
-            cell_props = box_props_new(cell),
-            header_props = box_props_new(head),
-            alt_cell_props = box_props_new(alt))
+    return shaded_style(ref internal.border.border_double)
 }
 
 func table_style_minimal() -> Table_Style {
-    let frame: Box_Props = (
-        border_theme = ref internal.border.border_plain, border_style = nil,
-        fill_style = nil, text_style = nil,
-        borders = internal.border.Border_Set.none, pad_top = 0,
-        pad_bottom = 0, pad_left = 0, pad_right = 0,
-        alignment = internal.string.Align.left, valignment = Valign.top)
-    var head: Box_Props = cell_shape(internal.string.Align.center)
-    head.text_style = palette_style(-1, -1, true, Text_Case.none)
-    return (table_props = box_props_new(frame),
-            cell_props =
-                box_props_new(cell_shape(internal.string.Align.left)),
-            header_props = box_props_new(head),
-            alt_cell_props = nil)
+    return bare_style(table_frame(ref internal.border.border_plain, nil,
+                                  internal.border.Border_Set.none))
 }
 
 func table_style_ascii() -> Table_Style {
-    let frame: Box_Props = (
-        border_theme = ref internal.border.border_ascii,
-        border_style = palette_style(
-            cast[i8] internal.theme.Palette_Ix.border, -1, false,
-            Text_Case.none),
-        fill_style = nil, text_style = nil,
-        borders = internal.border.Border_Set.all, pad_top = 0,
-        pad_bottom = 0, pad_left = 0, pad_right = 0,
-        alignment = internal.string.Align.left, valignment = Valign.top)
-    var head: Box_Props = cell_shape(internal.string.Align.center)
-    head.text_style = palette_style(-1, -1, true, Text_Case.none)
-    return (table_props = box_props_new(frame),
-            cell_props =
-                box_props_new(cell_shape(internal.string.Align.left)),
-            header_props = box_props_new(head),
-            alt_cell_props = nil)
+    return bare_style(table_frame(ref internal.border.border_ascii,
+                                  border_tone(),
+                                  internal.border.Border_Set.all))
 }
 
 private func add_col_spec(modify table: Table, spec: Table_Col_Spec) -> uint {

@@ -184,15 +184,21 @@ func new_array(type_index: u32, count: u64, rank: u32, flat_rank: u32,
                     storage)
 }
 
-func copy_array(source: Ref[Any], slot: Ref[Any]) {
+private func boxed_array(source: Ref[Any], type_index: Ref[u32])
+    -> Ref[internal.abi.Array_Value] {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(source)
-    let type_index: u32 = view.__value.type_field & 0x7fffffff
-    require internal.box.type_row(type_index).__value.kind
+    type_index.__value = view.__value.type_field & 0x7fffffff
+    require internal.box.type_row(type_index.__value).__value.kind
         == cast[u32](internal.abi.Type_Kind.array_type)
     let storage: Ref[byte]? = view.__value.payload
     require storage != nil
+    return unsafe_cast[Ref[internal.abi.Array_Value]] storage
+}
+
+func copy_array(source: Ref[Any], slot: Ref[Any]) {
+    var type_index: u32 = 0
     let array: Ref[internal.abi.Array_Value] =
-        unsafe_cast[Ref[internal.abi.Array_Value]] storage
+        boxed_array(source, ref type_index)
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.__value.descriptor
     require header != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header
@@ -225,14 +231,9 @@ func copy_array(source: Ref[Any], slot: Ref[Any]) {
 }
 
 func array_prefix(source: Ref[Any], count: u64, slot: Ref[Any]) {
-    let view: Ref[internal.abi.Box_Value] = internal.box.box_view(source)
-    let type_index: u32 = view.__value.type_field & 0x7fffffff
-    require internal.box.type_row(type_index).__value.kind
-        == cast[u32](internal.abi.Type_Kind.array_type)
-    let storage: Ref[byte]? = view.__value.payload
-    require storage != nil
+    var type_index: u32 = 0
     let value: Ref[internal.abi.Array_Value] =
-        unsafe_cast[Ref[internal.abi.Array_Value]] storage
+        boxed_array(source, ref type_index)
     let header: Ref[internal.abi.Array_Descriptor_Header]? = value.__value.descriptor
     require header != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header

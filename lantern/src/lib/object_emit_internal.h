@@ -63,3 +63,14 @@ static inline bool core_object_size_align(size_t value, size_t alignment,
     *out = (value + alignment - 1) & ~(alignment - 1);
     return true;
 }
+
+static inline bool core_object_place_table(size_t *offset, size_t count,
+                                           size_t width, size_t *at)
+{
+    size_t bytes;
+    if (!core_object_size_mul(count, width, &bytes) ||
+        !core_object_size_align(*offset, 4, offset) ||
+        *offset > UINT32_MAX) return false;
+    *at = *offset;
+    return core_object_size_add(*offset, bytes, offset);
+}

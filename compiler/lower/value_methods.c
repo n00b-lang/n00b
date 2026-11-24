@@ -135,18 +135,52 @@ n00bb_equal_branch(ir_lower_context_t *context, n00bb_tu_state_t *state,
     return n00bb_branch_on(current, test, next, mismatch);
 }
 
+typedef struct {
+    n00bb_lower_context_t *lower;
+    th_ctx *types;
+    n00bb_tu_state_t *state;
+    ir_func_t *function;
+    th_type *shape;
+} value_method_t;
+
+static bool
+value_method_start(ir_lower_context_t *context, th_type *record,
+                   value_method_t *m)
+{
+    if (!context) return false;
+    m->lower = context->user;
+    m->types = ir_module_types(context->module);
+    m->state = m->lower ? tu_state(m->lower->unit) : nullptr;
+    m->function = context->function;
+    m->shape = record ? ir_type_definition(context->module, record) : nullptr;
+    return m->lower && m->types && m->state && m->function
+        && !m->function->n_blocks
+        && (!record || (m->shape && th_kind_of(th_resolve(m->shape)) == TH_RECORD));
+}
+
+static th_type *
+scalar_integer_type(value_method_t *m, th_type *receiver, bool *flagset)
+{
+    *flagset = n00bb_flagset_type(m->lower->unit, m->state, receiver, nullptr);
+    parse_sym_entry_t *enum_symbol = *flagset ? nullptr
+        : n00bb_enum_type_symbol(m->state->link_analysis, receiver);
+    const n00bb_enum_range_t *range = enum_symbol
+        ? parse_sym_binding(enum_symbol,
+            CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
+    if (!*flagset && !range) return nullptr;
+    return th_name(m->types, range && range->storage_signed
+        ? CORE_STRING_STATIC("i128") : CORE_STRING_STATIC("u128"));
+}
+
 static ir_func_t *
 n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
 {
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
-    th_ctx *types = context ? ir_module_types(context->module) : nullptr;
-    th_type *shape = receiver && context
-        ? ir_type_definition(context->module, receiver) : nullptr;
-    if (!state || !types || !shape || th_kind_of(th_resolve(shape)) != TH_RECORD)
-        return nullptr;
-    ir_func_t *function = context->function;
-    if (!function || function->n_blocks) return nullptr;
+    value_method_t m;
+    if (!value_method_start(context, receiver, &m)) return nullptr;
+    ir_func_t *function = m.function;
+    th_ctx *types = m.types;
+    th_type *shape = m.shape;
+    n00bb_tu_state_t *state = m.state;
     th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
     ir_value_t *left = ir_param_add(function, CORE_STRING_STATIC("left"), receiver);
     ir_value_t *right = ir_param_add(function, CORE_STRING_STATIC("right"), receiver);
@@ -210,23 +244,19 @@ n00bb_record_equal_function(ir_lower_context_t *context, th_type *receiver)
 static ir_func_t *
 n00bb_record_hash_function(ir_lower_context_t *context, th_type *receiver)
 {
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
-    th_ctx *types = context ? ir_module_types(context->module) : nullptr;
-    th_type *shape = receiver && context
-        ? ir_type_definition(context->module, receiver) : nullptr;
-    if (!state || !types || !shape || th_kind_of(th_resolve(shape)) != TH_RECORD)
-        return nullptr;
-    ir_func_t *function = context->function;
-    if (!function || function->n_blocks) return nullptr;
-    th_type *hash_type = th_name(types, CORE_STRING_STATIC("u128"));
+    value_method_t m;
+    if (!value_method_start(context, receiver, &m)) return nullptr;
+    ir_func_t *function = m.function;
+    th_type *shape = m.shape;
+    n00bb_tu_state_t *state = m.state;
+    th_type *hash_type = th_name(m.types, CORE_STRING_STATIC("u128"));
     ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"), receiver);
     ir_block_t *block = ir_block_add(function, CORE_STRING_STATIC("entry"));
     ir_instr_t *zero = block ? ir_instr_add(block, IR_OP_CONST) : nullptr;
     if (!self || !zero || !ir_instr_set_dest(zero, CORE_STRING_STATIC("hash_zero"), hash_type)
         || !ir_instr_operand_int(zero, 0)) return nullptr;
     ir_value_t *accumulator = zero->dest;
-    th_type *count_type = th_name(types, CORE_STRING_STATIC("u8"));
+    th_type *count_type = th_name(m.types, CORE_STRING_STATIC("u8"));
     ir_instr_t *one = ir_instr_add(block, IR_OP_CONST);
     ir_instr_t *last = ir_instr_add(block, IR_OP_CONST);
     if (!one || !last || !ir_instr_set_dest(one, CORE_STRING_STATIC("rotate_one"), count_type)
@@ -291,24 +321,16 @@ n00bb_record_hash_function(ir_lower_context_t *context, th_type *receiver)
 static ir_func_t *
 n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
 {
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    th_ctx *types = context ? ir_module_types(context->module) : nullptr;
-    ir_func_t *function = context ? context->function : nullptr;
-    if (!lower || !lower->ir_context || !types || !function
-        || function->n_blocks) return nullptr;
-    n00bb_tu_state_t *state = tu_state(lower->unit);
-    th_type *hash_type = th_name(types, CORE_STRING_STATIC("u128"));
-    bool flagset = n00bb_flagset_type(lower->unit, state, receiver, nullptr);
-    parse_sym_entry_t *enum_symbol = flagset ? nullptr
-        : n00bb_enum_type_symbol(state->link_analysis, receiver);
-    const n00bb_enum_range_t *range = enum_symbol
-        ? parse_sym_binding(enum_symbol,
-            CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
-    if (!flagset && !range) return nullptr;
-    th_type *integer_type = th_name(types,
-        range && range->storage_signed ? CORE_STRING_STATIC("i128") :CORE_STRING_STATIC("u128"));
+    value_method_t m;
+    bool flagset = false;
+    th_type *integer_type = value_method_start(context, nullptr, &m)
+        && m.lower->ir_context ? scalar_integer_type(&m, receiver, &flagset)
+                               : nullptr;
+    if (!integer_type) return nullptr;
+    ir_func_t *function = m.function;
+    th_type *hash_type = th_name(m.types, CORE_STRING_STATIC("u128"));
     th_env_method_t selected = {0};
-    if (th_env_method_resolve(state->types, integer_type,
+    if (th_env_method_resolve(m.state->types, integer_type,
             CORE_STRING_STATIC("builtin.hashing.Hash"), CORE_STRING_STATIC("hash"), &selected) != TH_ENV_METHOD_FOUND)
         return nullptr;
     ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"), receiver);
@@ -326,46 +348,42 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
 }
 
 static ir_func_t *
-n00bb_scalar_equal_function(ir_lower_context_t *context, th_type *receiver)
+convert_and_compare(ir_func_t *function, th_ctx *types, th_type *receiver,
+                    ir_op_t op, th_type *converted, bool trap)
 {
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    th_ctx *types = context ? ir_module_types(context->module) : nullptr;
-    ir_func_t *function = context ? context->function : nullptr;
-    if (!lower || !types || !function || function->n_blocks) return nullptr;
-    n00bb_tu_state_t *state = tu_state(lower->unit);
-    bool flagset = n00bb_flagset_type(lower->unit, state, receiver, nullptr);
-    parse_sym_entry_t *enum_symbol = flagset ? nullptr
-        : n00bb_enum_type_symbol(state->link_analysis, receiver);
-    const n00bb_enum_range_t *range = enum_symbol
-        ? parse_sym_binding(enum_symbol,
-            CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
-    if (!flagset && !range) return nullptr;
-    th_type *integer_type = th_name(types,
-        range && range->storage_signed ? CORE_STRING_STATIC("i128")
-                                       : CORE_STRING_STATIC("u128"));
     ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"),
                                     receiver);
     ir_value_t *other = ir_param_add(function, CORE_STRING_STATIC("other"),
                                      receiver);
     ir_block_t *block = ir_block_add(function, CORE_STRING_STATIC("entry"));
-    ir_op_t op = flagset ? IR_OP_BITSET_VALUE : IR_OP_ENUM_VALUE;
     ir_instr_t *left = block ? ir_instr_add(block, op) : nullptr;
     ir_instr_t *right = block ? ir_instr_add(block, op) : nullptr;
     ir_instr_t *same = block ? ir_instr_add(block, IR_OP_EQ) : nullptr;
     if (!self || !other || !left || !right || !same
-        || !ir_instr_set_dest(left, CORE_STRING_STATIC("left"), integer_type)
+        || !ir_instr_set_dest(left, CORE_STRING_STATIC("left"), converted)
         || !ir_instr_operand_value(left, self)
-        || (flagset && !ir_instr_add_mod(left, CORE_STRING_STATIC("trap")))
-        || !ir_instr_set_dest(right, CORE_STRING_STATIC("right"),
-                              integer_type)
+        || (trap && !ir_instr_add_mod(left, CORE_STRING_STATIC("trap")))
+        || !ir_instr_set_dest(right, CORE_STRING_STATIC("right"), converted)
         || !ir_instr_operand_value(right, other)
-        || (flagset && !ir_instr_add_mod(right, CORE_STRING_STATIC("trap")))
+        || (trap && !ir_instr_add_mod(right, CORE_STRING_STATIC("trap")))
         || !ir_instr_set_dest(same, CORE_STRING_STATIC("same"),
                               th_name(types, CORE_STRING_STATIC("bool")))
         || !ir_instr_operand_value(same, left->dest)
         || !ir_instr_operand_value(same, right->dest)) return nullptr;
     ir_instr_t *ret = ir_instr_add(block, IR_OP_RETURN);
     return ret && ir_instr_operand_value(ret, same->dest) ? function : nullptr;
+}
+
+static ir_func_t *
+n00bb_scalar_equal_function(ir_lower_context_t *context, th_type *receiver)
+{
+    value_method_t m;
+    bool flagset = false;
+    th_type *integer_type = value_method_start(context, nullptr, &m)
+        ? scalar_integer_type(&m, receiver, &flagset) : nullptr;
+    return !integer_type ? nullptr : convert_and_compare(m.function, m.types, receiver,
+        flagset ? IR_OP_BITSET_VALUE : IR_OP_ENUM_VALUE, integer_type,
+        flagset);
 }
 
 static ir_func_t *
@@ -376,41 +394,21 @@ n00bb_object_equal_function(ir_lower_context_t *context, th_type *receiver)
     if (!types || !function || function->n_blocks) return nullptr;
     th_type *reference = n00bb_reference_definition(types, receiver);
     if (!reference) return nullptr;
-    ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"),
-                                    receiver);
-    ir_value_t *other = ir_param_add(function, CORE_STRING_STATIC("other"),
-                                     receiver);
-    ir_block_t *block = ir_block_add(function, CORE_STRING_STATIC("entry"));
-    ir_instr_t *left = block ? ir_instr_add(block, IR_OP_NOMINAL_CAST)
-                             : nullptr;
-    ir_instr_t *right = block ? ir_instr_add(block, IR_OP_NOMINAL_CAST)
-                              : nullptr;
-    ir_instr_t *same = block ? ir_instr_add(block, IR_OP_EQ) : nullptr;
-    if (!self || !other || !left || !right || !same
-        || !ir_instr_set_dest(left, CORE_STRING_STATIC("left"), reference)
-        || !ir_instr_operand_value(left, self)
-        || !ir_instr_set_dest(right, CORE_STRING_STATIC("right"), reference)
-        || !ir_instr_operand_value(right, other)
-        || !ir_instr_set_dest(same, CORE_STRING_STATIC("same"),
-                              th_name(types, CORE_STRING_STATIC("bool")))
-        || !ir_instr_operand_value(same, left->dest)
-        || !ir_instr_operand_value(same, right->dest)) return nullptr;
-    ir_instr_t *ret = ir_instr_add(block, IR_OP_RETURN);
-    return ret && ir_instr_operand_value(ret, same->dest) ? function : nullptr;
+    return convert_and_compare(function, types, receiver, IR_OP_NOMINAL_CAST,
+                               reference, false);
 }
 
 static ir_func_t *
 n00bb_object_hash_function(ir_lower_context_t *context, th_type *receiver)
 {
-    n00bb_lower_context_t *lower = context ? context->user : nullptr;
-    th_ctx *types = context ? ir_module_types(context->module) : nullptr;
-    ir_func_t *function = context ? context->function : nullptr;
-    if (!lower || !types || !function || function->n_blocks) return nullptr;
-    n00bb_tu_state_t *state = tu_state(lower->unit);
+    value_method_t m;
+    if (!value_method_start(context, nullptr, &m)) return nullptr;
+    ir_func_t *function = m.function;
+    th_ctx *types = m.types;
     th_type *reference = n00bb_reference_definition(types, receiver);
     th_env_method_t selected = {0};
     if (!reference
-        || th_env_method_resolve(state->types, reference,
+        || th_env_method_resolve(m.state->types, reference,
                CORE_STRING_STATIC("builtin.hashing.Hash"),
                CORE_STRING_STATIC("hash"), &selected)
             != TH_ENV_METHOD_FOUND) return nullptr;
@@ -429,80 +427,98 @@ n00bb_object_hash_function(ir_lower_context_t *context, th_type *receiver)
     return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
 }
 
-bool
-n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
+typedef struct {
+    core_translation_unit_t *unit;
+    parse_sym_entry_t *symbol;
+} generated_symbol_t;
+core_list_decl(generated_symbol_t);
+
+static core_list_t(generated_symbol_t)
+generated_symbols(n00bb_link_analysis_t *analysis)
 {
+    core_list_t(generated_symbol_t) found =
+        core_list_new(generated_symbol_t);
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
         if (state->interface_module) continue;
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
-        for (size_t s = 0; s < scopes.len; s++) {
+        for (size_t s = 0; s < scopes.len; s++)
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope) {
-                th_type *receiver = parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.generated-value-method"));
-                if (!receiver || parse_sym_binding(symbol,
-                        CORE_STRING_STATIC("n00bb.dispatch-adapter")))
-                    continue;
-                bool record_hash = symbol->name.data
-                    && core_string_starts_with(symbol->name,
-                        CORE_STRING_STATIC("__n00bb_record_hash_"));
-                bool scalar_hash = symbol->name.data
-                    && core_string_starts_with(symbol->name,
-                        CORE_STRING_STATIC("__n00bb_scalar_hash_"));
-                bool object_hash = symbol->name.data
-                    && core_string_starts_with(symbol->name,
-                        CORE_STRING_STATIC("__n00bb_object_hash_"));
-                bool object_equal = symbol->name.data
-                    && core_string_starts_with(symbol->name,
-                        CORE_STRING_STATIC("__n00bb_object_equal_"));
-                bool scalar_equal = symbol->name.data
-                    && core_string_starts_with(symbol->name,
-                        CORE_STRING_STATIC("__n00bb_scalar_equal_"));
-                ir_func_t *function = link_ir_function_for_symbol(analysis, symbol);
-                ir_module_t *module = unit_module(state);
-                n00bb_lower_context_t lower = {
-                    .unit = unit,
-                    .ir_context = analysis->ir_context,
-                };
-                ir_lower_context_t context = {
-                    .module = module,
-                    .function = function,
-                    .user = &lower,
-                };
-                bool generated = function && module
-                    && (object_hash
-                        ? n00bb_object_hash_function(&context, receiver)
-                        : object_equal
-                        ? n00bb_object_equal_function(&context, receiver)
-                        : scalar_hash
-                        ? n00bb_scalar_hash_function(&context, receiver)
-                        : scalar_equal
-                        ? n00bb_scalar_equal_function(&context, receiver)
-                        : record_hash
-                        ? n00bb_record_hash_function(&context, receiver)
-                        : n00bb_record_equal_function(&context, receiver))
-                    && ir_annot_set(analysis->ir_context, &function->annots,
-                        (ir_annot_t){
-                            .key = CORE_STRING_STATIC(
-                                "n00bb.generated-value-method"),
-                            .kind = IR_ANNOT_BOOL, .b = true});
-                if (!generated) {
-                    n00bb_internal_error(
-                        core_translation_unit_diagnostics(unit), unit,
-                        link_source_location(symbol->decl_node),
-                        "generating value methods",
-                        "could not generate value method `%.*s`",
-                        (int)symbol->name.u8_bytes, symbol->name.data);
-                    core_list_free(scopes);
-                    return false;
-                }
-            }
-        }
+                 symbol; symbol = symbol->next_in_scope)
+                if (parse_sym_binding(symbol,
+                        CORE_STRING_STATIC("n00bb.generated-value-method")))
+                    core_list_push(found, ((generated_symbol_t){unit,
+                                                                symbol}));
         core_list_free(scopes);
     }
-    return true;
+    return found;
+}
+
+bool
+n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
+{
+    core_list_t(generated_symbol_t) symbols = generated_symbols(analysis);
+    bool ok = true;
+    for (size_t i = 0; ok && i < symbols.len; i++) {
+        core_translation_unit_t *unit = symbols.data[i].unit;
+        parse_sym_entry_t *symbol = symbols.data[i].symbol;
+        if (parse_sym_binding(symbol,
+                CORE_STRING_STATIC("n00bb.dispatch-adapter")))
+            continue;
+        th_type *receiver = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-value-method"));
+        bool record_hash = symbol->name.data
+            && core_string_starts_with(symbol->name,
+                CORE_STRING_STATIC("__n00bb_record_hash_"));
+        bool scalar_hash = symbol->name.data
+            && core_string_starts_with(symbol->name,
+                CORE_STRING_STATIC("__n00bb_scalar_hash_"));
+        bool object_hash = symbol->name.data
+            && core_string_starts_with(symbol->name,
+                CORE_STRING_STATIC("__n00bb_object_hash_"));
+        bool object_equal = symbol->name.data
+            && core_string_starts_with(symbol->name,
+                CORE_STRING_STATIC("__n00bb_object_equal_"));
+        bool scalar_equal = symbol->name.data
+            && core_string_starts_with(symbol->name,
+                CORE_STRING_STATIC("__n00bb_scalar_equal_"));
+        ir_func_t *function = link_ir_function_for_symbol(analysis, symbol);
+        ir_module_t *module = unit_module(tu_state(unit));
+        n00bb_lower_context_t lower = {
+            .unit = unit,
+            .ir_context = analysis->ir_context,
+        };
+        ir_lower_context_t context = {
+            .module = module,
+            .function = function,
+            .user = &lower,
+        };
+        ok = function && module
+            && (object_hash
+                ? n00bb_object_hash_function(&context, receiver)
+                : object_equal
+                ? n00bb_object_equal_function(&context, receiver)
+                : scalar_hash
+                ? n00bb_scalar_hash_function(&context, receiver)
+                : scalar_equal
+                ? n00bb_scalar_equal_function(&context, receiver)
+                : record_hash
+                ? n00bb_record_hash_function(&context, receiver)
+                : n00bb_record_equal_function(&context, receiver))
+            && ir_annot_set(analysis->ir_context, &function->annots,
+                (ir_annot_t){
+                    .key = CORE_STRING_STATIC("n00bb.generated-value-method"),
+                    .kind = IR_ANNOT_BOOL, .b = true});
+        if (!ok)
+            n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+                link_source_location(symbol->decl_node),
+                "generating value methods",
+                "could not generate value method `%.*s`",
+                (int)symbol->name.u8_bytes, symbol->name.data);
+    }
+    core_list_free(symbols);
+    return ok;
 }
 
 typedef struct {
@@ -677,58 +693,48 @@ n00bb_dispatch_adapter_body(core_translation_unit_t *unit,
 bool
 n00bb_generate_dispatch_adapters(n00bb_link_analysis_t *analysis)
 {
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        core_translation_unit_t *unit = analysis->units.data[u];
-        n00bb_tu_state_t *state = tu_state(unit);
-        if (state->interface_module) continue;
-        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
-        for (size_t s = 0; s < scopes.len; s++) {
-            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope) {
-                parse_sym_entry_t *implementation = parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.dispatch-adapter"));
-                th_type *receiver = implementation ? parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.generated-value-method"))
-                    : nullptr;
-                if (!receiver) continue;
-                ir_func_t *adapter = link_ir_function_for_symbol(analysis,
-                                                                 symbol);
-                ir_func_t *target = link_ir_function_for_symbol(analysis,
-                                                                implementation);
-                th_type *adapter_type = adapter && adapter->type
-                    ? th_resolve(adapter->type) : nullptr;
-                th_type *target_type = target && target->type
-                    ? th_resolve(target->type) : nullptr;
-                th_type *adapter_failure = adapter_type
-                        && th_kind_of(adapter_type) == TH_FUNCTION
-                        && th_func_error(adapter_type)
-                    ? th_resolve(th_func_error(adapter_type)) : nullptr;
-                if (adapter_failure && th_kind_of(adapter_failure) == TH_VAR
-                    && !th_var_ref(adapter_failure) && target_type
-                    && th_kind_of(target_type) == TH_FUNCTION
-                    && th_func_error(target_type))
-                    th_var_bind(adapter_failure,
-                                th_resolve(th_func_error(target_type)));
-                if (target && target->n_blocks
-                    && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
-                                                   adapter, target, receiver)
-                    && ir_annot_set(analysis->ir_context, &adapter->annots,
-                        (ir_annot_t){
-                            .key = CORE_STRING_STATIC(
-                                "n00bb.generated-value-method"),
-                            .kind = IR_ANNOT_BOOL, .b = true}))
-                    continue;
-                n00bb_internal_error(core_translation_unit_diagnostics(unit),
-                    unit, link_source_location(implementation->decl_node),
-                    "generating dispatch adapters",
-                    "could not generate the dispatch adapter for `%.*s`",
-                    (int)implementation->name.u8_bytes,
-                    implementation->name.data);
-                core_list_free(scopes);
-                return false;
-            }
-        }
-        core_list_free(scopes);
+    core_list_t(generated_symbol_t) symbols = generated_symbols(analysis);
+    bool ok = true;
+    for (size_t i = 0; ok && i < symbols.len; i++) {
+        core_translation_unit_t *unit = symbols.data[i].unit;
+        parse_sym_entry_t *symbol = symbols.data[i].symbol;
+        parse_sym_entry_t *implementation = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.dispatch-adapter"));
+        if (!implementation) continue;
+        th_type *receiver = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-value-method"));
+        ir_func_t *adapter = link_ir_function_for_symbol(analysis, symbol);
+        ir_func_t *target = link_ir_function_for_symbol(analysis,
+                                                        implementation);
+        th_type *adapter_type = adapter && adapter->type
+            ? th_resolve(adapter->type) : nullptr;
+        th_type *target_type = target && target->type
+            ? th_resolve(target->type) : nullptr;
+        th_type *adapter_failure = adapter_type
+                && th_kind_of(adapter_type) == TH_FUNCTION
+                && th_func_error(adapter_type)
+            ? th_resolve(th_func_error(adapter_type)) : nullptr;
+        if (adapter_failure && th_kind_of(adapter_failure) == TH_VAR
+            && !th_var_ref(adapter_failure) && target_type
+            && th_kind_of(target_type) == TH_FUNCTION
+            && th_func_error(target_type))
+            th_var_bind(adapter_failure,
+                        th_resolve(th_func_error(target_type)));
+        ok = target && target->n_blocks
+            && n00bb_dispatch_adapter_body(unit, analysis->ir_context,
+                                           adapter, target, receiver)
+            && ir_annot_set(analysis->ir_context, &adapter->annots,
+                (ir_annot_t){
+                    .key = CORE_STRING_STATIC("n00bb.generated-value-method"),
+                    .kind = IR_ANNOT_BOOL, .b = true});
+        if (!ok)
+            n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                unit, link_source_location(implementation->decl_node),
+                "generating dispatch adapters",
+                "could not generate the dispatch adapter for `%.*s`",
+                (int)implementation->name.u8_bytes,
+                implementation->name.data);
     }
-    return true;
+    core_list_free(symbols);
+    return ok;
 }

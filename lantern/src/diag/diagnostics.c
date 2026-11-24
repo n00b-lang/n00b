@@ -23,21 +23,6 @@ struct core_diagnostics_t {
     bool has_open;
 };
 
-static void
-free_item(core_diagnostic_t *item)
-{
-    core_free(item->code.data);
-    core_free(item->message.data);
-    core_free(item->label.data);
-    core_free(item->module.data);
-    core_free(item->path.data);
-    for (size_t i = 0; i < item->parts.len; i++) {
-        core_free(item->parts.data[i].text.data);
-        core_free(item->parts.data[i].path.data);
-    }
-    core_list_free(item->parts);
-}
-
 core_diagnostics_t *
 core_diagnostics_new(void)
 {
@@ -50,7 +35,7 @@ void
 core_diagnostics_free(core_diagnostics_t *d)
 {
     if (!d) return;
-    for (size_t i = 0; i < d->items.len; i++) free_item(&d->items.data[i]);
+    for (size_t i = 0; i < d->items.len; i++) core_diagnostic_release(&d->items.data[i]);
     core_list_free(d->items);
     core_free(d);
 }

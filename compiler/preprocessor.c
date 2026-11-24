@@ -508,24 +508,29 @@ pp_internal(pp_context_t *ctx, parse_tree_t *at, const char *what)
     ctx->failed = true;
 }
 
+static size_t
+integer_prefix(core_string_t text, unsigned *base)
+{
+    if (!text.data || !text.u8_bytes) return SIZE_MAX;
+    size_t i = text.data[0] == '+' || text.data[0] == '-';
+    if (i == text.u8_bytes) return SIZE_MAX;
+    *base = 10;
+    if (i + 2 <= text.u8_bytes && text.data[i] == '0') {
+        char prefix = text.data[i + 1];
+        if (prefix == 'x' || prefix == 'X') *base = 16, i += 2;
+        else if (prefix == 'b' || prefix == 'B') *base = 2, i += 2;
+        else if (prefix == 'o' || prefix == 'O') *base = 8, i += 2;
+    }
+    return i;
+}
+
 static bool
 parse_integer(core_string_t text, __int128 *out)
 {
-    if (!text.data || !text.u8_bytes) return false;
-    size_t i = 0;
-    bool negative = false;
-    if (text.data[i] == '+' || text.data[i] == '-') {
-        negative = text.data[i++] == '-';
-        if (i == text.u8_bytes) return false;
-    }
     unsigned base = 10;
-    if (i + 2 <= text.u8_bytes && text.data[i] == '0') {
-        char prefix = text.data[i + 1];
-        if (prefix == 'x' || prefix == 'X') base = 16, i += 2;
-        else if (prefix == 'b' || prefix == 'B') base = 2, i += 2;
-        else if (prefix == 'o' || prefix == 'O') base = 8, i += 2;
-    }
-    if (i == text.u8_bytes) return false;
+    size_t i = integer_prefix(text, &base);
+    if (i >= text.u8_bytes) return false;
+    bool negative = text.data[0] == '-';
     unsigned __int128 value = 0;
     unsigned __int128 limit = ((unsigned __int128)1 << 127)
         - (negative ? 0 : 1);
@@ -540,17 +545,9 @@ parse_integer(core_string_t text, __int128 *out)
 static bool
 integer_syntax(core_string_t text)
 {
-    if (!text.data || !text.u8_bytes) return false;
-    size_t i = 0;
-    if (text.data[i] == '+' || text.data[i] == '-') i++;
-    if (i == text.u8_bytes) return false;
     unsigned base = 10;
-    if (i + 2 <= text.u8_bytes && text.data[i] == '0') {
-        char prefix = text.data[i + 1];
-        if (prefix == 'x' || prefix == 'X') base = 16, i += 2;
-        else if (prefix == 'b' || prefix == 'B') base = 2, i += 2;
-        else if (prefix == 'o' || prefix == 'O') base = 8, i += 2;
-    }
+    size_t i = integer_prefix(text, &base);
+    if (i == SIZE_MAX) return false;
     bool digit_seen = false;
     for (; i < text.u8_bytes; i++) {
         unsigned char c = (unsigned char)text.data[i];
@@ -560,6 +557,22 @@ integer_syntax(core_string_t text)
         digit_seen = true;
     }
     return digit_seen;
+}
+
+static bool
+comparison_result(core_string_t op, bool less, bool equal, bool greater,
+                  pp_value_t *out)
+{
+    bool result;
+    if (core_string_eq(op, CORE_STRING_STATIC("=="))) result = equal;
+    else if (core_string_eq(op, CORE_STRING_STATIC("!="))) result = !equal;
+    else if (core_string_eq(op, CORE_STRING_STATIC("<"))) result = less;
+    else if (core_string_eq(op, CORE_STRING_STATIC("<="))) result = less || equal;
+    else if (core_string_eq(op, CORE_STRING_STATIC(">"))) result = greater;
+    else if (core_string_eq(op, CORE_STRING_STATIC(">="))) result = greater || equal;
+    else return false;
+    *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = result};
+    return true;
 }
 
 static __int128
@@ -1713,12 +1726,7 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         }
         if (left.kind == PP_FLOAT && right.kind == PP_FLOAT) {
             double a = left.as.real, b = right.as.real;
-            if (core_string_eq(op, CORE_STRING_STATIC("=="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a==b};
-            else if (core_string_eq(op, CORE_STRING_STATIC("!="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a!=b};
-            else if (core_string_eq(op, CORE_STRING_STATIC("<"))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a<b};
-            else if (core_string_eq(op, CORE_STRING_STATIC("<="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a<=b};
-            else if (core_string_eq(op, CORE_STRING_STATIC(">"))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a>b};
-            else if (core_string_eq(op, CORE_STRING_STATIC(">="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a>=b};
+            if (comparison_result(op, a < b, a == b, a > b, out)) {}
             else if (core_string_eq(op, CORE_STRING_STATIC("+"))) *out = (pp_value_t){.kind=PP_FLOAT,.as.real=a+b};
             else if (core_string_eq(op, CORE_STRING_STATIC("-"))) *out = (pp_value_t){.kind=PP_FLOAT,.as.real=a-b};
             else if (core_string_eq(op, CORE_STRING_STATIC("*"))) *out = (pp_value_t){.kind=PP_FLOAT,.as.real=a*b};
@@ -1729,13 +1737,7 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         if (left.kind == PP_INT && right.kind == PP_INT) {
             __int128 a = left.as.integer, b = right.as.integer, result = 0;
             bool overflow = false;
-            if (core_string_eq(op, CORE_STRING_STATIC("=="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a==b};
-            else if (core_string_eq(op, CORE_STRING_STATIC("!="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a!=b};
-            else if (core_string_eq(op, CORE_STRING_STATIC("<"))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a<b};
-            else if (core_string_eq(op, CORE_STRING_STATIC("<="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a<=b};
-            else if (core_string_eq(op, CORE_STRING_STATIC(">"))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a>b};
-            else if (core_string_eq(op, CORE_STRING_STATIC(">="))) *out = (pp_value_t){.kind=PP_BOOL,.as.boolean=a>=b};
-            else {
+            if (!comparison_result(op, a < b, a == b, a > b, out)) {
                 if (core_string_eq(op, CORE_STRING_STATIC("+"))) overflow = __builtin_add_overflow(a,b,&result);
                 else if (core_string_eq(op, CORE_STRING_STATIC("-"))) overflow = __builtin_sub_overflow(a,b,&result);
                 else if (core_string_eq(op, CORE_STRING_STATIC("*"))) overflow = __builtin_mul_overflow(a,b,&result);

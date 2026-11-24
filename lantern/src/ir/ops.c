@@ -58,8 +58,6 @@ core_string_t ir_opdkind_name(ir_opdkind_t k)
     switch (k) {
     case IR_OPD_VALUE:
         return CORE_STRING_STATIC("value");
-    case IR_OPD_SPREAD:
-        return CORE_STRING_STATIC("spread argument");
     case IR_OPD_TYPE:
         return CORE_STRING_STATIC("type");
     case IR_OPD_NAME:

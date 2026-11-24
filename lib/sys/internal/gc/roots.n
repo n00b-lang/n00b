@@ -14,12 +14,7 @@ record TLS_Root_Entry layout(c) {
 }
 
 func tls_root_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[TLS_Root_Entry]?          = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(TLS_Root_Entry)
 }
 
 func tls_root_entry_at(base: Ref[byte], index: uint) -> Ref[TLS_Root_Entry] {
@@ -99,12 +94,7 @@ func free_tls(mutator: Ref[internal.gc.core.Mutator]) {
 }
 
 func root_entry_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[Root_Entry]?              = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(Root_Entry)
 }
 
 func root_entry_at(base: Ref[byte], index: uint, stride: uint) -> Ref[Root_Entry] {
@@ -164,12 +154,8 @@ func free(mutator: Ref[internal.gc.core.Mutator]) {
 }
 
 func global_pointer_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[Ref[byte]?]?              = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.type_for(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    let probe: Ref[Ref[byte]?]? = nil
+    return internal.abi.record_of(typeof(probe))
 }
 
 func global_pointer_at(heap: Ref[internal.gc.core.Heap], index: uint) -> Ref[Ref[Ref[byte]?]] {

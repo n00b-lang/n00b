@@ -104,12 +104,7 @@ func note_block(heap: Ref[internal.gc.core.Heap],
 }
 
 func final_entry_record() -> Ref[internal.abi.Type_Record] {
-    let probe: Ref[internal.gc.core.Final_Entry]?  = nil
-    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
-    if row != nil {
-        return row
-    }
-    require false
+    return internal.abi.record_of(internal.gc.core.Final_Entry)
 }
 
 func final_entry_at(base: Ref[byte], index: uint) -> Ref[internal.gc.core.Final_Entry] {

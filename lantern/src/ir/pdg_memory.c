@@ -794,6 +794,69 @@ emit_sources(ir_pdg_memory_t *m, const ir_access_t *load,
     return ok;
 }
 
+typedef enum { DEF_STOP, DEF_PREV, DEF_FOUND } def_step_t;
+
+typedef struct {
+    const ir_access_t *load;
+    const ir_instr_t *store;
+    uint32_t place;
+    core_list_t(uint32_t) *ids;
+} def_walk_t;
+
+typedef def_step_t (*def_step_fn)(ir_pdg_memory_t *, uint32_t,
+                                  const memdef_node_t *, def_walk_t *);
+
+static bool
+walk_defs(ir_pdg_memory_t *m, uint32_t start, bool *seen, def_step_fn step,
+          def_walk_t *walk)
+{
+    core_list_t(uint32_t) pending = core_list_new(uint32_t);
+    bool found = false;
+    core_list_push(pending, start);
+    while (!found && pending.len) {
+        uint32_t id = pending.data[--pending.len];
+        if (id >= m->defs.len || seen[id]) continue;
+        seen[id] = true;
+        const memdef_node_t *node = &m->defs.data[id];
+        if (node->def.kind == IR_MEMDEF_PHI)
+            for (uint32_t i = 0; i < node->incoming_count; i++)
+                core_list_push(pending,
+                               m->incoming.data[node->first_incoming + i]);
+        if (node->def.kind != IR_MEMDEF_CALL
+            && node->def.kind != IR_MEMDEF_STORE) continue;
+        def_step_t next = step(m, id, node, walk);
+        found = next == DEF_FOUND;
+        if (next == DEF_PREV) core_list_push(pending, node->prev);
+    }
+    core_list_free(pending);
+    return found;
+}
+
+static def_step_t
+load_step(ir_pdg_memory_t *m, uint32_t id, const memdef_node_t *node,
+          def_walk_t *walk)
+{
+    if (node->def.kind == IR_MEMDEF_CALL) {
+        if (call_clobbers(m, node->def.instr, walk->load))
+            core_list_push(*walk->ids, id);
+        return DEF_PREV;
+    }
+    if (!places_overlap(m->places, node->def.access, walk->load))
+        return DEF_PREV;
+    core_list_push(*walk->ids, id);
+    return covers(m, node->def.access, walk->load) ? DEF_STOP : DEF_PREV;
+}
+
+static def_step_t
+call_step(ir_pdg_memory_t *m, uint32_t id, const memdef_node_t *node,
+          def_walk_t *walk)
+{
+    if (node->def.kind == IR_MEMDEF_CALL
+        || !all_private(m->places, node->def.access))
+        core_list_push(*walk->ids, id);
+    return DEF_PREV;
+}
+
 bool
 ir_pdg_memory_load_sources(ir_pdg_memory_t *m, uint32_t load_access,
                            ir_pdg_memory_edge_fn emit, void *context)
@@ -810,39 +873,10 @@ ir_pdg_memory_load_sources(ir_pdg_memory_t *m, uint32_t load_access,
             core_list_push(ids, m->links.data[m->link_first[load_access] + l]);
     }
     else {
-        core_list_t(uint32_t) pending = core_list_new(uint32_t);
+        def_walk_t walk = {.load = load, .ids = &ids};
         bool *seen = core_alloc_array(bool, m->defs.len);
-        core_list_push(pending, m->use_def[load_access]);
-        while (pending.len) {
-            uint32_t id = pending.data[--pending.len];
-            if (id == UINT32_MAX || seen[id]) continue;
-            seen[id] = true;
-            const memdef_node_t *node = &m->defs.data[id];
-            switch (node->def.kind) {
-            case IR_MEMDEF_ENTRY:
-            case IR_MEMDEF_ELEMENT_PHI:
-                break;
-            case IR_MEMDEF_PHI:
-                for (uint32_t i = 0; i < node->incoming_count; i++)
-                    core_list_push(pending,
-                                   m->incoming.data[node->first_incoming + i]);
-                break;
-            case IR_MEMDEF_CALL:
-                if (call_clobbers(m, node->def.instr, load))
-                    core_list_push(ids, id);
-                core_list_push(pending, node->prev);
-                break;
-            case IR_MEMDEF_STORE:
-                if (places_overlap(m->places, node->def.access, load)) {
-                    core_list_push(ids, id);
-                    if (covers(m, node->def.access, load)) break;
-                }
-                core_list_push(pending, node->prev);
-                break;
-            }
-        }
+        walk_defs(m, m->use_def[load_access], seen, load_step, &walk);
         core_free(seen);
-        core_list_free(pending);
     }
     bool ok = emit_sources(m, load, load_access, &ids, emit, context);
     core_list_free(ids);
@@ -932,37 +966,11 @@ ir_pdg_memory_call_sources(ir_pdg_memory_t *m, const ir_instr_t *call,
 {
     uint32_t start = m ? ir_pdg_memory_def_before(m, call) : UINT32_MAX;
     if (start == UINT32_MAX) return true;
-    core_list_t(uint32_t) pending = core_list_new(uint32_t);
     core_list_t(uint32_t) ids = core_list_new(uint32_t);
+    def_walk_t walk = {.ids = &ids};
     bool *seen = core_alloc_array(bool, m->defs.len);
-    core_list_push(pending, start);
-    while (pending.len) {
-        uint32_t id = pending.data[--pending.len];
-        if (id == UINT32_MAX || seen[id]) continue;
-        seen[id] = true;
-        const memdef_node_t *node = &m->defs.data[id];
-        switch (node->def.kind) {
-        case IR_MEMDEF_ENTRY:
-        case IR_MEMDEF_ELEMENT_PHI:
-            break;
-        case IR_MEMDEF_PHI:
-            for (uint32_t i = 0; i < node->incoming_count; i++)
-                core_list_push(pending,
-                               m->incoming.data[node->first_incoming + i]);
-            break;
-        case IR_MEMDEF_CALL:
-            core_list_push(ids, id);
-            core_list_push(pending, node->prev);
-            break;
-        case IR_MEMDEF_STORE:
-            if (!all_private(m->places, node->def.access))
-                core_list_push(ids, id);
-            core_list_push(pending, node->prev);
-            break;
-        }
-    }
+    walk_defs(m, start, seen, call_step, &walk);
     core_free(seen);
-    core_list_free(pending);
     bool ok = emit_sources(m, nullptr, UINT32_MAX, &ids, emit, context);
     core_list_free(ids);
     return ok;
@@ -984,39 +992,24 @@ overwrites(ir_places_t *places, const ir_access_t *access, uint32_t place)
                             place);
 }
 
+static def_step_t
+store_step(ir_pdg_memory_t *m, uint32_t id, const memdef_node_t *node,
+           def_walk_t *walk)
+{
+    (void)id;
+    if (node->def.kind == IR_MEMDEF_CALL) return DEF_PREV;
+    if (node->def.instr == walk->store) return DEF_FOUND;
+    return overwrites(m->places, node->def.access, walk->place) ? DEF_STOP
+                                                                : DEF_PREV;
+}
+
 static bool
 store_reaches(ir_pdg_memory_t *m, const ir_instr_t *from,
               const ir_instr_t *store, uint32_t place, bool *seen)
 {
-    core_list_t(uint32_t) pending = core_list_new(uint32_t);
-    bool found = false;
-    core_list_push(pending, ir_pdg_memory_def_before(m, from));
-    while (!found && pending.len) {
-        uint32_t id = pending.data[--pending.len];
-        if (id >= m->defs.len || seen[id]) continue;
-        seen[id] = true;
-        const memdef_node_t *node = &m->defs.data[id];
-        switch (node->def.kind) {
-        case IR_MEMDEF_ENTRY:
-        case IR_MEMDEF_ELEMENT_PHI:
-            break;
-        case IR_MEMDEF_PHI:
-            for (uint32_t i = 0; i < node->incoming_count; i++)
-                core_list_push(pending,
-                               m->incoming.data[node->first_incoming + i]);
-            break;
-        case IR_MEMDEF_CALL:
-            core_list_push(pending, node->prev);
-            break;
-        case IR_MEMDEF_STORE:
-            if (node->def.instr == store) found = true;
-            else if (!overwrites(m->places, node->def.access, place))
-                core_list_push(pending, node->prev);
-            break;
-        }
-    }
-    core_list_free(pending);
-    return found;
+    def_walk_t walk = {.store = store, .place = place};
+    return walk_defs(m, ir_pdg_memory_def_before(m, from), seen, store_step,
+                     &walk);
 }
 
 bool

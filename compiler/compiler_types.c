@@ -647,7 +647,8 @@ static core_diag_location_t return_type_location(core_translation_unit_t *unit,
     return (core_diag_location_t){0};
 }
 
-static bool literal_is_initializer(const ir_instr_t *literal)
+static const ir_instr_t *literal_user(const ir_instr_t *literal,
+                                      uint32_t         *operand)
 {
     const ir_func_t *function = literal->block ? literal->block->owner
                                                : nullptr;
@@ -657,16 +658,15 @@ static bool literal_is_initializer(const ir_instr_t *literal)
             const ir_instr_t *in = function->blocks[b]->instrs[i];
 
             for (uint32_t o = 0; o < in->n_operands; o++) {
-                if (ir_operand_value(&in->operands[o]) != literal->dest) {
-                    continue;
+                if (ir_operand_value(&in->operands[o]) == literal->dest) {
+                    *operand = o;
+                    return in;
                 }
-
-                return in->op == IR_OP_AGGREGATE || returned_storage(in);
             }
         }
     }
 
-    return false;
+    return nullptr;
 }
 
 static bool report_literal(th_ctx *types, core_translation_unit_t *unit,
@@ -686,7 +686,10 @@ static bool report_literal(th_ctx *types, core_translation_unit_t *unit,
 
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     core_string_t       text        = span_text(unit, literal->span);
-    bool                initializer = literal_is_initializer(literal);
+    uint32_t            use         = 0;
+    const ir_instr_t   *first_use   = literal_user(literal, &use);
+    bool                initializer = first_use
+        && (first_use->op == IR_OP_AGGREGATE || returned_storage(first_use));
 
     n00bb_report(diagnostics, unit, N00B_DIAG_STRING_NOT_BUFFER,
                  n00bb_span_location(literal->span),
@@ -3838,6 +3841,15 @@ static bool report_overload_site(th_ctx *types,
     return true;
 }
 
+static void failed_sites(ty_solver_t *solver, core_dict_t *failed)
+{
+    core_dict_init(failed, nullptr, nullptr);
+    for (size_t i = 0; i < ty_failure_count(solver); i++) {
+        core_dict_put(failed, (void *)ty_failure_at(solver, i)->why.at,
+                      (void *)1);
+    }
+}
+
 static bool check_overload_sites(th_ctx *types,
                                  const n00bb_dispatch_index_t *index,
                                  core_translation_unit_t *const *units,
@@ -3846,11 +3858,7 @@ static bool check_overload_sites(th_ctx *types,
     core_dict_t failed;
     bool        ok = true;
 
-    core_dict_init(&failed, nullptr, nullptr);
-    for (size_t i = 0; i < ty_failure_count(solver); i++) {
-        core_dict_put(&failed, (void *)ty_failure_at(solver, i)->why.at,
-                      (void *)1);
-    }
+    failed_sites(solver, &failed);
     for (size_t u = 0; u < count; u++) {
         core_dict_foreach(&tu_state(units[u])->overload_sites, item) {
             n00bb_overload_site_t *site = item->value;
@@ -4360,33 +4368,6 @@ static core_string_t literal_phrase(core_string_t kind)
     }
 
     return n00bb_text(N00B_TEXT_QUOTED, N00BB_ARGS(ARG_TEXT(kind)));
-}
-
-static const ir_instr_t *literal_user(const ir_instr_t *literal,
-                                      uint32_t         *operand)
-{
-    const ir_func_t *function = literal->block ? literal->block->owner
-                                               : nullptr;
-
-    for (uint32_t b = 0; function && b < function->n_blocks; b++) {
-        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
-            const ir_instr_t *in = function->blocks[b]->instrs[i];
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                const ir_operand_t *slot  = &in->operands[o];
-                const ir_value_t   *value = slot->kind == IR_OPD_NAMED_ARG
-                                              ? slot->named.value
-                                              : ir_operand_value(slot);
-
-                if (value == literal->dest) {
-                    *operand = o;
-                    return in;
-                }
-            }
-        }
-    }
-
-    return nullptr;
 }
 
 static size_t visible_initializers(const n00bb_dispatch_index_t *index,
@@ -5501,11 +5482,7 @@ static bool check_dispatch_arities(th_ctx *types,
     core_dict_t failed;
     bool        ok = true;
 
-    core_dict_init(&failed, nullptr, nullptr);
-    for (size_t i = 0; i < ty_failure_count(solver); i++) {
-        core_dict_put(&failed, (void *)ty_failure_at(solver, i)->why.at,
-                      (void *)1);
-    }
+    failed_sites(solver, &failed);
     for (size_t u = 0; u < count; u++) {
         core_dict_foreach(&tu_state(units[u])->dispatch_calls, item) {
             const ir_instr_t *at = item->key;

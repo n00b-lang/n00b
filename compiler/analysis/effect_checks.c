@@ -2562,6 +2562,28 @@ check_trait_candidate(n00bb_link_analysis_t *analysis, ir_func_t *function,
     }
 }
 
+static core_list_t(n00bb_ir_func_ptr_t)
+checked_bodies(n00bb_link_analysis_t *analysis)
+{
+    core_list_t(n00bb_ir_func_ptr_t) bodies =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (!state || !state->ir_module || state->interface_module) continue;
+        th_ctx *types = ir_module_types(state->ir_module);
+        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
+            ir_func_t *function = n00bb_cached_body(
+                ir_func_at(state->ir_module, f));
+            if (function && th_is_closed(types, function->type))
+                core_list_push(bodies, function);
+        }
+    }
+    for (size_t f = 0; f < analysis->reachable_functions.len; f++)
+        core_list_push(bodies,
+            n00bb_cached_body(analysis->reachable_functions.data[f]));
+    return bodies;
+}
+
 bool
 check_trait_implementations(n00bb_link_analysis_t *analysis)
 {
@@ -2571,22 +2593,11 @@ check_trait_implementations(n00bb_link_analysis_t *analysis)
     core_dict_t violators, seen;
     core_dict_init(&violators, nullptr, nullptr);
     core_dict_init(&seen, nullptr, nullptr);
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        th_ctx *types = ir_module_types(state->ir_module);
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
-            ir_func_t *function = n00bb_cached_body(
-                ir_func_at(state->ir_module, f));
-            if (function && th_is_closed(types, function->type))
-                check_trait_candidate(analysis, function, &seen, &violations,
-                                      &violators);
-        }
-    }
-    for (size_t f = 0; f < analysis->reachable_functions.len; f++)
-        check_trait_candidate(analysis,
-            n00bb_cached_body(analysis->reachable_functions.data[f]), &seen,
-            &violations, &violators);
+    core_list_t(n00bb_ir_func_ptr_t) bodies = checked_bodies(analysis);
+    for (size_t f = 0; f < bodies.len; f++)
+        check_trait_candidate(analysis, bodies.data[f], &seen, &violations,
+                              &violators);
+    core_list_free(bodies);
     core_dict_free(&seen);
     for (size_t v = 0; v < violations.len; v++) {
         const trait_violation_t *violation = &violations.data[v];
@@ -2635,22 +2646,11 @@ check_callback_bounds(n00bb_link_analysis_t *analysis)
     bool holds = true;
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        if (!state || !state->ir_module || state->interface_module) continue;
-        th_ctx *types = ir_module_types(state->ir_module);
-        for (size_t f = 0; f < ir_func_count(state->ir_module); f++) {
-            ir_func_t *caller = n00bb_cached_body(
-                ir_func_at(state->ir_module, f));
-            if (caller && th_is_closed(types, caller->type))
-                holds = check_callback_caller(analysis, caller, &seen)
-                    && holds;
-        }
-    }
-    for (size_t f = 0; f < analysis->reachable_functions.len; f++)
-        holds = check_callback_caller(analysis,
-            n00bb_cached_body(analysis->reachable_functions.data[f]), &seen)
+    core_list_t(n00bb_ir_func_ptr_t) bodies = checked_bodies(analysis);
+    for (size_t f = 0; f < bodies.len; f++)
+        holds = check_callback_caller(analysis, bodies.data[f], &seen)
             && holds;
+    core_list_free(bodies);
     core_dict_free(&seen);
     return holds;
 }

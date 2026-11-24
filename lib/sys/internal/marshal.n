@@ -491,15 +491,10 @@ func visit_foreign(graph: Ref[Graph], source: u32, parent: Ref[byte],
     }
 }
 
-func visit_record_arm(graph: Ref[Graph], source: u32, address: Ref[byte],
-                      trace: Ref[internal.abi.Trace_Record]) {
-    let found: Ref[internal.abi.Tag_Extractor_Record]? = internal.abi.tag_extractor_at(
-        trace.__value.tag_extractor_index)
-    require found != nil
-    let tag: Ref[internal.abi.Tag_Extractor_Record] = found
-    let active: u64 = (internal.gc.mark.trace_unit(
-        __gc_byte_offset(address, tag.__value.unit_byte_offset), tag.__value.unit_width_bits)
-        >> tag.__value.lsb_position) & tag.__value.mask
+private func visit_active_arm(graph: Ref[Graph], source: u32,
+                              address: Ref[byte],
+                              trace: Ref[internal.abi.Trace_Record],
+                              active: u64, required: bool) {
     var ordinal: u32 = 0
     while ordinal < trace.__value.arms.count {
         let index: i64 = internal.abi.range_index(trace.__value.arms, ordinal)
@@ -513,6 +508,19 @@ func visit_record_arm(graph: Ref[Graph], source: u32, address: Ref[byte],
         }
         ordinal += 1
     }
+    require !required
+}
+
+func visit_record_arm(graph: Ref[Graph], source: u32, address: Ref[byte],
+                      trace: Ref[internal.abi.Trace_Record]) {
+    let found: Ref[internal.abi.Tag_Extractor_Record]? = internal.abi.tag_extractor_at(
+        trace.__value.tag_extractor_index)
+    require found != nil
+    let tag: Ref[internal.abi.Tag_Extractor_Record] = found
+    let active: u64 = (internal.gc.mark.trace_unit(
+        __gc_byte_offset(address, tag.__value.unit_byte_offset), tag.__value.unit_width_bits)
+        >> tag.__value.lsb_position) & tag.__value.mask
+    visit_active_arm(graph, source, address, trace, active, false)
 }
 
 func visit_pointer(graph: Ref[Graph], source: u32, slot: Ref[byte],
@@ -680,20 +688,7 @@ func visit_variant(graph: Ref[Graph], source: u32, address: Ref[byte],
     if active == 0 {
         return
     }
-    var ordinal: u32 = 0
-    while ordinal < trace.__value.arms.count {
-        let index: i64 = internal.abi.range_index(trace.__value.arms, ordinal)
-        require index > 0
-        let arm: Ref[internal.abi.Trace_Arm_Record]? = internal.abi.trace_arm_at(
-            cast[u32]index)
-        require arm != nil
-        if cast[u64](arm.__value.tag_value) == active {
-            visit_children(graph, source, address, arm.__value.children)
-            return
-        }
-        ordinal += 1
-    }
-    require false
+    visit_active_arm(graph, source, address, trace, active, true)
 }
 
 func visit_value(graph: Ref[Graph], source: u32, address: Ref[byte],

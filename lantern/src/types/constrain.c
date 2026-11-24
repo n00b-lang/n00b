@@ -174,13 +174,10 @@ static th_type *call_result(gen_t *g, ir_instr_t *call)
         }
 
         uint32_t        index  = UINT32_MAX;
-        ir_value_t     *param  = ir_call_param(target, operand, &position,
-                                               &index);
+        (void)ir_call_param(target, operand, &position, &index);
         const th_param *formal = index != UINT32_MAX
                                    ? th_func_param(type, index)
-                                   : param && param->is_rest
-                                       ? th_func_rest(type)
-                                       : nullptr;
+                                   : nullptr;
 
         if (operand->kind == IR_OPD_FRESH
             || (formal && th_mode_by_reference(formal->mode)

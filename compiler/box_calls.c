@@ -208,29 +208,50 @@ ordinal_constant(ir_func_t *caller, ir_instr_t *before, uint32_t ordinal)
 }
 
 static bool
-rewrite_extract(box_calls_t *calls, ir_func_t *caller,
-                ir_instr_t *instruction)
+reads_one_value(const ir_instr_t *instruction)
 {
-    ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 2
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || instruction->operands[1].kind != IR_OPD_NAME
-        || !instruction->operands[1].name.data
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest)
-        return true;
-    ir_value_t *record = instruction->operands[0].value;
-    th_type *record_type = record ? th_resolve(record->type) : nullptr;
-    if (!record_type || th_is_closed(ir_module_types(module), record_type)
-        || !n00bb_boxed_signature_position(module, record_type)) return true;
-    uint32_t ordinal = member_ordinal(module, record_type,
+    return instruction->n_operands == 1
+        && instruction->operands[0].kind == IR_OPD_VALUE
+        && instruction->operands[0].value
+        && instruction->dest_kind == IR_DEST_VALUE && instruction->dest;
+}
+
+static bool
+reads_named_member(const ir_instr_t *instruction)
+{
+    return instruction->n_operands == 2
+        && instruction->operands[0].kind == IR_OPD_VALUE
+        && instruction->operands[1].kind == IR_OPD_NAME
+        && instruction->operands[1].name.data
+        && instruction->dest_kind == IR_DEST_VALUE && instruction->dest;
+}
+
+static bool
+field_get_call(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
+               ir_value_t *value, th_type *type)
+{
+    uint32_t ordinal = member_ordinal(caller->owner, type,
                                       instruction->operands[1].name);
     ir_func_t *target = runtime_function(calls,
                                          CORE_STRING_STATIC("field_get"));
     if (ordinal == UINT32_MAX || !target) return true;
     ir_value_t *constant = ordinal_constant(caller, instruction, ordinal);
-    ir_value_t *arguments[] = {record, constant};
+    ir_value_t *arguments[] = {value, constant};
     return constant && two_variable_call(calls, caller, instruction, target,
-        record_type, instruction->dest->type, arguments, 2);
+        type, instruction->dest->type, arguments, 2);
+}
+
+static bool
+rewrite_extract(box_calls_t *calls, ir_func_t *caller,
+                ir_instr_t *instruction)
+{
+    ir_module_t *module = caller->owner;
+    if (!reads_named_member(instruction)) return true;
+    ir_value_t *record = instruction->operands[0].value;
+    th_type *record_type = record ? th_resolve(record->type) : nullptr;
+    if (!record_type || th_is_closed(ir_module_types(module), record_type)
+        || !n00bb_boxed_signature_position(module, record_type)) return true;
+    return field_get_call(calls, caller, instruction, record, record_type);
 }
 
 static bool
@@ -238,11 +259,7 @@ rewrite_sequence_length(box_calls_t *calls, ir_func_t *caller,
                         ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 1
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || !instruction->operands[0].value
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest)
-        return true;
+    if (!reads_one_value(instruction)) return true;
     ir_value_t *items = instruction->operands[0].value;
     th_type *sequence = th_resolve(items->type);
     th_type *count = th_name(ir_module_types(module),
@@ -334,12 +351,7 @@ static bool
 rewrite_field(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 2
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || instruction->operands[1].kind != IR_OPD_NAME
-        || !instruction->operands[1].name.data
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest)
-        return true;
+    if (!reads_named_member(instruction)) return true;
     ir_value_t *address = instruction->operands[0].value;
     th_type *base = address ? th_resolve(address->type) : nullptr;
     if (!base || th_kind_of(base) != TH_INDIRECTION) return true;
@@ -384,10 +396,7 @@ rewrite_variant_tag(box_calls_t *calls, ir_func_t *caller,
                     ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 1
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest)
-        return true;
+    if (!reads_one_value(instruction)) return true;
     ir_value_t *variant = instruction->operands[0].value;
     th_type *type = boxed_variant(module, variant);
     th_type *tag = ir_profile_scalar(module, IR_CLASS_UINT, 64);
@@ -403,24 +412,12 @@ rewrite_variant_payload(box_calls_t *calls, ir_func_t *caller,
                         ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 2
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || instruction->operands[1].kind != IR_OPD_NAME
-        || !instruction->operands[1].name.data
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest
+    if (!reads_named_member(instruction)
         || ir_machine_of(module, instruction->dest->type).class
             == IR_CLASS_VOID) return true;
     ir_value_t *variant = instruction->operands[0].value;
     th_type *type = boxed_variant(module, variant);
-    uint32_t ordinal = type ? member_ordinal(module, type,
-        instruction->operands[1].name) : UINT32_MAX;
-    ir_func_t *target = runtime_function(calls,
-                                         CORE_STRING_STATIC("field_get"));
-    if (ordinal == UINT32_MAX || !target) return true;
-    ir_value_t *constant = ordinal_constant(caller, instruction, ordinal);
-    ir_value_t *arguments[] = {variant, constant};
-    return constant && two_variable_call(calls, caller, instruction, target,
-        type, instruction->dest->type, arguments, 2);
+    return !type || field_get_call(calls, caller, instruction, variant, type);
 }
 
 static bool
@@ -966,11 +963,7 @@ rewrite_type_of(box_calls_t *calls, ir_func_t *caller,
                 ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 1
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || !instruction->operands[0].value
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest)
-        return true;
+    if (!reads_one_value(instruction)) return true;
     ir_value_t *value = instruction->operands[0].value;
     th_type *source = th_resolve(value->type);
     if (!(n00bb_boxed_signature_position(module, source)
@@ -1043,11 +1036,7 @@ rewrite_nominal_cast(box_calls_t *calls, ir_func_t *caller,
                      ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    if (instruction->n_operands != 1
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || !instruction->operands[0].value
-        || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest)
-        return true;
+    if (!reads_one_value(instruction)) return true;
     ir_value_t *source = instruction->operands[0].value;
     th_type *type = th_resolve(instruction->dest->type);
     th_type *target_shape = ir_type_definition(module, type);
@@ -1089,6 +1078,40 @@ rewrite_nominal_cast(box_calls_t *calls, ir_func_t *caller,
     return true;
 }
 
+static ir_value_t **
+operand_values(const ir_instr_t *instruction)
+{
+    ir_value_t **values = core_alloc_array(ir_value_t *,
+                                           instruction->n_operands + 1);
+    for (uint32_t i = 0; values && i < instruction->n_operands; i++)
+        values[i] = instruction->operands[i].value;
+    return values;
+}
+
+static bool
+put_each(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
+         ir_func_t *put, ir_value_t **values, uint32_t count, th_type *type,
+         core_string_t index_type, bool fields)
+{
+    ir_block_t *block = instruction->block;
+    uint32_t at = instruction->index + 1;
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < count; i++) {
+        ir_value_t *index = typed_constant(caller, block, at,
+            instruction->span, i, index_type);
+        ir_instr_t *store = index ? ir_instr_generated(block, IR_OP_CALL,
+            instruction->span, CORE_STRING_STATIC("box_calls"), at + 1)
+            : nullptr;
+        ir_value_t *arguments[] = {instruction->dest, index, values[i]};
+        ok = store && (fields
+            ? two_variable_call(calls, caller, store, put, type,
+                                values[i]->type, arguments, 3)
+            : retarget(calls, caller, store, put, &type, 1, arguments, 3));
+        at += 2;
+    }
+    return ok;
+}
+
 static bool
 rewrite_record_literal(box_calls_t *calls, ir_func_t *caller,
                        ir_instr_t *instruction)
@@ -1114,25 +1137,12 @@ rewrite_record_literal(box_calls_t *calls, ir_func_t *caller,
                                        CORE_STRING_STATIC("record_new"));
     ir_func_t *put = store_function(calls, CORE_STRING_STATIC("field_put"));
     if (!create || !put) return true;
-    ir_value_t **fields = core_alloc_array(ir_value_t *, count + 1);
+    ir_value_t **fields = operand_values(instruction);
     if (!fields) return false;
-    for (uint32_t i = 0; i < count; i++)
-        fields[i] = instruction->operands[i].value;
     bool ok = retarget(calls, caller, instruction, create, &type, 1,
-                       nullptr, 0);
-    ir_block_t *block = instruction->block;
-    uint32_t at = instruction->index + 1;
-    for (uint32_t i = 0; ok && i < count; i++) {
-        ir_value_t *ordinal = typed_constant(caller, block, at,
-            instruction->span, i, CORE_STRING_STATIC("u32"));
-        ir_instr_t *store = ordinal ? ir_instr_generated(block, IR_OP_CALL,
-            instruction->span, CORE_STRING_STATIC("box_calls"), at + 1)
-            : nullptr;
-        ir_value_t *arguments[] = {instruction->dest, ordinal, fields[i]};
-        ok = store && two_variable_call(calls, caller, store, put, type,
-                                        fields[i]->type, arguments, 3);
-        at += 2;
-    }
+                       nullptr, 0)
+        && put_each(calls, caller, instruction, put, fields, count, type,
+                    CORE_STRING_STATIC("u32"), true);
     core_free(fields);
     return ok;
 }
@@ -1163,28 +1173,15 @@ rewrite_array_literal(box_calls_t *calls, ir_func_t *caller,
         CORE_STRING_STATIC("array_with_length"));
     ir_func_t *put = store_function(calls, CORE_STRING_STATIC("array_put"));
     if (!create || !put) return true;
-    ir_value_t **elements = core_alloc_array(ir_value_t *, count + 1);
+    ir_value_t **elements = operand_values(instruction);
     if (!elements) return false;
-    for (uint32_t i = 0; i < count; i++)
-        elements[i] = instruction->operands[i].value;
     ir_value_t *length = typed_constant(caller, instruction->block,
         instruction->index, instruction->span, count,
         CORE_STRING_STATIC("uint"));
     bool ok = length && retarget(calls, caller, instruction, create,
-                                 &element, 1, &length, 1);
-    ir_block_t *block = instruction->block;
-    uint32_t at = instruction->index + 1;
-    for (uint32_t i = 0; ok && i < count; i++) {
-        ir_value_t *index = typed_constant(caller, block, at,
-            instruction->span, i, CORE_STRING_STATIC("int"));
-        ir_instr_t *store = index ? ir_instr_generated(block, IR_OP_CALL,
-            instruction->span, CORE_STRING_STATIC("box_calls"), at + 1)
-            : nullptr;
-        ir_value_t *arguments[] = {instruction->dest, index, elements[i]};
-        ok = store && retarget(calls, caller, store, put, &element, 1,
-                               arguments, 3);
-        at += 2;
-    }
+                                 &element, 1, &length, 1)
+        && put_each(calls, caller, instruction, put, elements, count,
+                    element, CORE_STRING_STATIC("int"), false);
     core_free(elements);
     return ok;
 }
@@ -1430,6 +1427,16 @@ open_reference(ir_func_t *caller, ir_value_t *address)
         && boxed_address(caller, address);
 }
 
+static int
+array_base(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
+           ir_value_t **base)
+{
+    if (open_reference(caller, *base)) return 1;
+    if (address_storage(caller, *base, 0) != ADDRESS_RAW) return 0;
+    *base = slot_reference(calls, caller, instruction, *base);
+    return *base ? 1 : -1;
+}
+
 static bool
 rewrite_store(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction)
 {
@@ -1473,13 +1480,8 @@ rewrite_sequence_reference(box_calls_t *calls, ir_func_t *caller,
     if (!entry || !target
         || !ir_type_eq(module, element, th_ind_referent(reference)))
         return true;
-    if (!open_reference(caller, arguments[0])) {
-        if (address_storage(caller, arguments[0], 0) != ADDRESS_RAW)
-            return true;
-        arguments[0] = slot_reference(calls, caller, instruction,
-                                      arguments[0]);
-        if (!arguments[0]) return false;
-    }
+    int addressed = array_base(calls, caller, instruction, &arguments[0]);
+    if (addressed <= 0) return addressed == 0;
     return widen_index(caller, instruction, &arguments[1], entry)
         && retarget(calls, caller, instruction, target, &element, 1,
                     arguments, 2);
@@ -1559,13 +1561,9 @@ rewrite_sequence_set(box_calls_t *calls, ir_func_t *caller,
     if (!target || (!payload && !rows
                     && !n00bb_boxed_signature_position(module, element)))
         return true;
-    if (open && !open_reference(caller, arguments[0])) {
-        if (address_storage(caller, arguments[0], 0) != ADDRESS_RAW)
-            return true;
-        arguments[0] = slot_reference(calls, caller, instruction,
-                                      arguments[0]);
-        if (!arguments[0]) return false;
-    }
+    int addressed = open
+        ? array_base(calls, caller, instruction, &arguments[0]) : 1;
+    if (addressed <= 0) return addressed == 0;
     return widen_index(caller, instruction, &arguments[1], entry)
         && retarget(calls, caller, instruction, target, &actual, 1,
                     arguments, 3);

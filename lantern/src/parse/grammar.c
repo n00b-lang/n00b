@@ -757,6 +757,25 @@ done:
 }
 
 static void
+wait_edges(parse_grammar_t *g, size_t n_nts, int32_t *cursor,
+           int32_t *wait_list)
+{
+    for (size_t a = 0; a < n_nts; a++) {
+        parse_nonterm_t *nt = parse_get_nonterm(g, (int64_t)a);
+
+        for (size_t j = 0; j < nt->rule_ids.len; j++) {
+            parse_rule_t *r = parse_get_rule(g, nt->rule_ids.data[j]);
+
+            for (size_t k = 0; k < r->contents.len; k++) {
+                if (r->contents.data[k].kind != PARSE_MATCH_NT) continue;
+                int32_t at = cursor[r->contents.data[k].nt_id]++;
+                if (wait_list) wait_list[at] = (int32_t)a;
+            }
+        }
+    }
+}
+
+static void
 compute_first_nullable(parse_grammar_t *g, bool *first_nullable)
 {
     size_t n_nts = g->nt_list.len;
@@ -768,19 +787,7 @@ compute_first_nullable(parse_grammar_t *g, bool *first_nullable)
     int32_t *wait_start = core_alloc_array(int32_t, n_nts + 1);
     int32_t *cursor     = core_alloc_array(int32_t, n_nts);
 
-    for (size_t a = 0; a < n_nts; a++) {
-        parse_nonterm_t *nt = parse_get_nonterm(g, (int64_t)a);
-
-        for (size_t j = 0; j < nt->rule_ids.len; j++) {
-            parse_rule_t *r = parse_get_rule(g, nt->rule_ids.data[j]);
-
-            for (size_t k = 0; k < r->contents.len; k++) {
-                if (r->contents.data[k].kind == PARSE_MATCH_NT) {
-                    cursor[r->contents.data[k].nt_id]++;
-                }
-            }
-        }
-    }
+    wait_edges(g, n_nts, cursor, nullptr);
 
     int32_t total = 0;
 
@@ -794,19 +801,7 @@ compute_first_nullable(parse_grammar_t *g, bool *first_nullable)
 
     int32_t *wait_list = core_alloc_array(int32_t, total ? total : 1);
 
-    for (size_t a = 0; a < n_nts; a++) {
-        parse_nonterm_t *nt = parse_get_nonterm(g, (int64_t)a);
-
-        for (size_t j = 0; j < nt->rule_ids.len; j++) {
-            parse_rule_t *r = parse_get_rule(g, nt->rule_ids.data[j]);
-
-            for (size_t k = 0; k < r->contents.len; k++) {
-                if (r->contents.data[k].kind == PARSE_MATCH_NT) {
-                    wait_list[cursor[r->contents.data[k].nt_id]++] = (int32_t)a;
-                }
-            }
-        }
-    }
+    wait_edges(g, n_nts, cursor, wait_list);
 
     core_list_t(int32_t) work = core_list_new_cap(int32_t, n_nts);
 

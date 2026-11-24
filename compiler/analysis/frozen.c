@@ -622,6 +622,19 @@ store_target(ir_places_t *places, const ir_value_t *address)
     return out;
 }
 
+static const ir_value_t *
+address_parent(const ir_value_t *address)
+{
+    const ir_instr_t *def = address->kind == IR_VAL_INSTR ? address->def
+                                                          : nullptr;
+    bool step = def && def->n_operands
+        && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
+            || def->op == IR_OP_OFFSET || def->op == IR_OP_COPY
+            || def->op == IR_OP_CAST || def->op == IR_OP_BITCAST
+            || def->op == IR_OP_NOMINAL_CAST);
+    return step ? ir_operand_value(&def->operands[0]) : nullptr;
+}
+
 static bool
 in_reference_parameter(const ir_value_t *address)
 {
@@ -630,14 +643,7 @@ in_reference_parameter(const ir_value_t *address)
             const th_param *formal = formal_of(address);
             return formal && th_mode_by_reference(formal->mode);
         }
-        const ir_instr_t *def = address->kind == IR_VAL_INSTR ? address->def
-                                                              : nullptr;
-        bool step = def && def->n_operands
-            && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
-                || def->op == IR_OP_OFFSET || def->op == IR_OP_COPY
-                || def->op == IR_OP_CAST || def->op == IR_OP_BITCAST
-                || def->op == IR_OP_NOMINAL_CAST);
-        address = step ? ir_operand_value(&def->operands[0]) : nullptr;
+        address = address_parent(address);
     }
     return false;
 }
@@ -659,12 +665,7 @@ reference_place_outlives(ir_places_t *places, const ir_value_t *address)
                 return false;
             break;
         }
-        bool step = def && def->n_operands
-            && (def->op == IR_OP_FIELD || def->op == IR_OP_INDEX
-                || def->op == IR_OP_OFFSET || def->op == IR_OP_COPY
-                || def->op == IR_OP_CAST || def->op == IR_OP_BITCAST
-                || def->op == IR_OP_NOMINAL_CAST);
-        base = step ? ir_operand_value(&def->operands[0]) : nullptr;
+        base = address_parent(base);
     }
     return store_target(places, address).outlives;
 }
