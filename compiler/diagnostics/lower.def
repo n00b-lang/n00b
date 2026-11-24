@@ -592,6 +592,13 @@ N00B_DIAG(TYPECASE_NOT_EXHAUSTIVE, "N00B-S0102", ERROR,
     "subject can hold: both the item type and `nil` for an option, and\n"
     "each member of a union. A subject that can hold any type, such as an\n"
     "`Any`, a trait or a type parameter, needs an `else`.")
+N00B_DIAG(TYPECASE_ARMS_OVERLAP, "N00B-S0104", ERROR,
+    "two `typecase` arms match the same value equally well",
+    "A `typecase` runs the arm whose type matches the subject most\n"
+    "specifically, by the same rules a call uses to pick an overload. Two\n"
+    "trait arms where neither trait is more specific than the other can\n"
+    "both match one value, so the choice would be ambiguous. Add an arm for\n"
+    "the types that implement both, or merge the arms.")
 N00B_DIAG(PROPAGATE_OPTION_NIL, "N00B-S0100", ERROR,
     "`!` on an option needs a function that can fail with `nil`",
     "A trailing `!` on an option gives its value when it holds one, and\n"
