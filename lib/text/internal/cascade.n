@@ -131,33 +131,36 @@ private func level_next_boundary(body: Ref[Rich_Body], pos: u32, len: u32,
 func __cleanup(consume self: Cascade) {
 }
 
+private func plain_style() -> Text_Style {
+    return (bold = nil, italic = nil, underline = nil, double_underline = nil,
+            strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+            text_case = Text_Case.none, font_hint = Font_Hint.default,
+            font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+            fg_rgb = nil, bg_rgb = nil, font_size = nil)
+}
+
+private func level_base(body: Ref[Rich_Body], acc: Text_Style) -> Text_Style {
+    var out: Text_Style = acc
+    if body.__value.opaque {
+        out = plain_style()
+    }
+    let base: Text_Style? = body.__value.base_style
+    if base != nil {
+        out = merge(out, base)
+    }
+    return out
+}
+
 func __next(modify self: Cascade) -> Style_Run? {
     if self.pos >= self.len {
         return nil
     }
-    var acc: Text_Style = (
-        bold = nil, italic = nil, underline = nil, double_underline = nil,
-        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
-        text_case = Text_Case.none, font_hint = Font_Hint.default,
-        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
-        fg_rgb = nil, bg_rgb = nil, font_size = nil)
+    var acc: Text_Style = plain_style()
     var next: u32 = self.len
     var cur: string = self.s
     while cast[u64](tag(cur)) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)
-        if body.__value.opaque {
-            acc = (
-                bold = nil, italic = nil, underline = nil,
-                double_underline = nil, strikethrough = nil, reverse = nil,
-                dim = nil, blink = nil, text_case = Text_Case.none,
-                font_hint = Font_Hint.default, font_index = nil,
-                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
-                bg_rgb = nil, font_size = nil)
-        }
-        let base: Text_Style? = body.__value.base_style
-        if base != nil {
-            acc = merge(acc, base)
-        }
+        acc = level_base(body, acc)
         acc = level_style_index(body, self.pos, self.len, acc, false)
         next = level_next_boundary(body, self.pos, self.len, next)
         cur = body.__value.s
@@ -169,29 +172,12 @@ func __next(modify self: Cascade) -> Style_Run? {
 
 func cascade_style_index(s: string, pos: u32, inclusive: bool = false)
     -> Text_Style {
-    var acc: Text_Style = (
-        bold = nil, italic = nil, underline = nil, double_underline = nil,
-        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
-        text_case = Text_Case.none, font_hint = Font_Hint.default,
-        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
-        fg_rgb = nil, bg_rgb = nil, font_size = nil)
+    var acc: Text_Style = plain_style()
     let len: u32 = unsafe_cast[u32] byte_len(s)
     var cur: string = s
     while cast[u64](tag(cur)) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)
-        if body.__value.opaque {
-            acc = (
-                bold = nil, italic = nil, underline = nil,
-                double_underline = nil, strikethrough = nil, reverse = nil,
-                dim = nil, blink = nil, text_case = Text_Case.none,
-                font_hint = Font_Hint.default, font_index = nil,
-                fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
-                bg_rgb = nil, font_size = nil)
-        }
-        let base: Text_Style? = body.__value.base_style
-        if base != nil {
-            acc = merge(acc, base)
-        }
+        acc = level_base(body, acc)
         acc = level_style_index(body, pos, len, acc, inclusive)
         cur = body.__value.s
     }

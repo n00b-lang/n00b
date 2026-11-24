@@ -54,8 +54,6 @@ f1a9eb37eca7b2c9	2	pending	lib/sys/internal/gc/mark.n
 46458ddf7a0681e9	2	pending	lib/sys/internal/os/read.n
 475b27724abc7772	2	pending	lib/sys/internal/os/read.n
 8556737d7f40d0ac	2	pending	lib/sys/internal/os/read.n
-40b5ec2bac89c124	2	pending	lib/text/internal/cascade.n
-eb59cdf01e10d68a	2	pending	lib/text/internal/cascade.n
 315174d1f4686d9d	2	pending	lib/text/internal/table_layout.n
 46f20504700180b4	2	pending	lib/text/internal/table_layout.n
 d9825fba6750c4ec	2	pending	lib/text/internal/table_layout.n
